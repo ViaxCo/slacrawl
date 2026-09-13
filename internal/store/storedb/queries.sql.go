@@ -142,11 +142,17 @@ where source_name = 'api-user'
   and entity_id like ?1
   and not exists (
     select 1 from sync_state where source_name = 'api-user' and entity_type = 'thread_pending_v1'
+      and json_extract(entity_id, '$[0]') = ?2
   )
 `
 
-func (q *Queries) DeleteAPIThreadSkipsIfNoPending(ctx context.Context, entityIDLike string) error {
-	_, err := q.db.ExecContext(ctx, deleteAPIThreadSkipsIfNoPending, entityIDLike)
+type DeleteAPIThreadSkipsIfNoPendingParams struct {
+	EntityIDLike string `json:"entity_id_like"`
+	WorkspaceID  string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteAPIThreadSkipsIfNoPending(ctx context.Context, arg DeleteAPIThreadSkipsIfNoPendingParams) error {
+	_, err := q.db.ExecContext(ctx, deleteAPIThreadSkipsIfNoPending, arg.EntityIDLike, arg.WorkspaceID)
 	return err
 }
 

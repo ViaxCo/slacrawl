@@ -29,10 +29,13 @@ func (s *Store) DeleteSyncState(ctx context.Context, source, entityType, entityI
 	})
 }
 
-func (s *Store) DeleteAPIThreadSkipsIfNoPending(ctx context.Context, entityIDPrefix string) error {
-	// Full sync cannot erase a newer attempt's skip while its work is pending.
-	// The SQL condition and deletion share one snapshot.
-	return s.q.DeleteAPIThreadSkipsIfNoPending(ctx, entityIDPrefix+"%")
+func (s *Store) DeleteAPIThreadSkipsIfNoPending(ctx context.Context, workspaceID string) error {
+	// Full sync must preserve this workspace's newer pending attempt without
+	// letting unrelated workspaces prevent cleanup. The SQL uses one snapshot.
+	return s.q.DeleteAPIThreadSkipsIfNoPending(ctx, storedb.DeleteAPIThreadSkipsIfNoPendingParams{
+		EntityIDLike: workspaceID + "|%",
+		WorkspaceID:  workspaceID,
+	})
 }
 
 func (s *Store) HasSyncStateType(ctx context.Context, source, entityType string) (bool, error) {

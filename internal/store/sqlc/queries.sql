@@ -240,6 +240,7 @@ where source_name = 'api-user'
   and entity_id like sqlc.arg(entity_id_like)
   and not exists (
     select 1 from sync_state where source_name = 'api-user' and entity_type = 'thread_pending_v1'
+      and json_extract(entity_id, '$[0]') = sqlc.arg(workspace_id)
   );
 
 -- name: CountSyncStateByType :one

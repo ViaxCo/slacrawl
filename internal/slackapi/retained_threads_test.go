@@ -369,6 +369,74 @@ func TestRetainedThreadCachedSkipCannotReplaceNewerWork(t *testing.T) {
 	require.Len(t, pending, 2)
 }
 
+func TestFullThreadSkipCleanupStaysWithinWorkspace(t *testing.T) {
+	ctx := context.Background()
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+	const rootTS = "1710000001.000000"
+	now := time.Unix(1710000000, 0).UTC()
+	for _, id := range []string{"T1", "T2"} {
+		require.NoError(t, st.UpsertWorkspace(ctx, store.Workspace{ID: id, Name: "Fixture", RawJSON: "{}", UpdatedAt: now}))
+		require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: id + "C", WorkspaceID: id, Name: "fixture", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
+	}
+	require.NoError(t, st.UpsertMessage(ctx, store.Message{ChannelID: "T2C", WorkspaceID: "T2", TS: rootTS, ThreadTS: rootTS, ReplyCount: 1, Text: "retained root", SourceName: SourceBot, SourceRank: 2, RawJSON: "{}", UpdatedAt: now}, nil))
+	_, err := st.ApplyWriteBatch(ctx, store.WriteBatch{PendingThreads: []store.ThreadWork{{SourceName: SourceUser, WorkspaceID: "T2", ChannelID: "T2C", TS: rootTS}}})
+	require.NoError(t, err)
+	require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T1|legacy", "obsolete skip"))
+	require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T2|T2C|"+rootTS, "pending skip"))
+	const t2StateQuery = `select * from sync_state where source_name = 'api-user'
+and entity_id in ('["T2","T2C","1710000001.000000"]', 'T2|T2C|1710000001.000000')
+order by entity_type, entity_id`
+	before, err := st.QueryReadOnly(ctx, t2StateQuery)
+	require.NoError(t, err)
+	require.Len(t, before, 2)
+	replyCalls := map[string]int{}
+	clientFor := func(workspaceID string) *Client {
+		return primaryOwnerClient(t, config.Tokens{User: "fixture-user-" + workspaceID}, func(r *http.Request, form url.Values) (any, error) {
+			switch r.URL.Path {
+			case "/auth.test":
+				return map[string]any{"ok": true, "team_id": workspaceID, "team": "Fixture"}, nil
+			case "/conversations.list":
+				return map[string]any{"ok": true, "channels": []any{map[string]any{"id": workspaceID + "C", "name": "fixture", "is_channel": true}}}, nil
+			case "/conversations.history":
+				require.Equal(t, workspaceID+"C", form.Get("channel"))
+				return primaryOwnerResponse(r.URL.Path), nil
+			case "/conversations.replies":
+				replyCalls[workspaceID]++
+				require.Equal(t, "T2", workspaceID)
+				require.Equal(t, "T2C", form.Get("channel"))
+				require.Equal(t, rootTS, form.Get("ts"))
+				return map[string]any{"ok": true, "messages": []any{
+					map[string]any{"ts": rootTS, "thread_ts": rootTS, "text": "reply echo"},
+					map[string]any{"ts": "1710000003.000000", "thread_ts": rootTS, "text": "reply child"},
+				}}, nil
+			default:
+				return primaryOwnerResponse(r.URL.Path), nil
+			}
+		})
+	}
+	require.NoError(t, clientFor("T1").Sync(ctx, st, SyncOptions{WorkspaceID: "T1", Full: true}))
+	t1Skips, err := st.QueryReadOnly(ctx, "select * from sync_state where source_name='api-user' and entity_type='thread_skip' and entity_id like 'T1|%'")
+	require.NoError(t, err)
+	require.Empty(t, t1Skips)
+	after, err := st.QueryReadOnly(ctx, t2StateQuery)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "other workspace generations, skips and updated_at must remain unchanged")
+	status, err := st.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "partial", status.ThreadState)
+	require.Empty(t, replyCalls)
+
+	require.NoError(t, clientFor("T2").Sync(ctx, st, SyncOptions{WorkspaceID: "T2"}))
+	require.Equal(t, map[string]int{"T2": 1}, replyCalls)
+	after, err = st.QueryReadOnly(ctx, t2StateQuery)
+	require.NoError(t, err)
+	require.Empty(t, after)
+	status, err = st.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "full", status.ThreadState)
+}
+
 func retainedOwnerSeed(t *testing.T, st *store.Store, ts string) {
 	t.Helper()
 	now := time.Unix(1710000000, 0).UTC()

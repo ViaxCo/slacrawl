@@ -299,9 +299,8 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 
 	threadCoverage := "partial"
 	if userRepliesAvailable && !threadRepliesSkipped.Skipped() {
-		threadSkipPrefix := workspaceID + "|"
 		if opts.Full && len(opts.Channels) == 0 {
-			if err := st.DeleteAPIThreadSkipsIfNoPending(ctx, threadSkipPrefix); err != nil {
+			if err := st.DeleteAPIThreadSkipsIfNoPending(ctx, workspaceID); err != nil {
 				return err
 			}
 		}

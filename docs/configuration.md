@@ -621,7 +621,8 @@ that replies work without borrowing the bot's history checkpoint.
 Successful replies retire only the generation that was processed. Retained
 requests and writes recheck that generation and the parent's live ownership;
 deletion or renewal during a request discards its stale response. Full cleanup
-keeps thread-skip records while API replies work is still pending. Remaining
+keeps thread-skip records while API replies work in that workspace is still
+pending; another workspace's pending work does not block cleanup. Remaining
 retained work runs after complete history traversal and before the completed history
 horizon is saved. A replies failure can therefore stop later channel or media
 work while preserving committed messages and the pending history interval.
