@@ -1224,7 +1224,12 @@ type RenameChannelParams struct {
 }
 
 func (q *Queries) RenameChannel(ctx context.Context, arg RenameChannelParams) error {
-	_, err := q.db.ExecContext(ctx, renameChannel, arg.Name, arg.UpdatedAt, arg.ID, arg.WorkspaceID)
+	_, err := q.db.ExecContext(ctx, renameChannel,
+		arg.Name,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.WorkspaceID,
+	)
 	return err
 }
 
@@ -1242,7 +1247,12 @@ type SetChannelArchivedParams struct {
 }
 
 func (q *Queries) SetChannelArchived(ctx context.Context, arg SetChannelArchivedParams) error {
-	_, err := q.db.ExecContext(ctx, setChannelArchived, arg.IsArchived, arg.UpdatedAt, arg.ID, arg.WorkspaceID)
+	_, err := q.db.ExecContext(ctx, setChannelArchived,
+		arg.IsArchived,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.WorkspaceID,
+	)
 	return err
 }
 
