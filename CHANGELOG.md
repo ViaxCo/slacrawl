@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject legacy Git share imports when `sync.include_dms = false`, before acquisition or snapshot/media writes. Subscribe rejects before saving its importing configuration; automatic paths check archive staleness first. Set `share.auto_update = false` to continue local/API work. Existing rows and unfiltered publishing remain unchanged.
+
 - Honor explicit `sync.include_dms = false` before MCP writes using fresh native conversation evidence, including explicit IDs. Text adapters stop before data calls under this policy; native adapters report excluded DMs and leave freshness untouched when nothing is eligible. Apply channel exclusions to every returned alias of a selected ID, and reject selected catalog and retained message/context/thread identity conflicts under every policy while preserving existing payload projections and previously archived rows.
 
 - Keep MCP server response bodies, error text, parser snippets, returned identifiers, and opaque cursors out of ordinary failure diagnostics. Preserve operation/status details, cancellation detection, credential-origin restrictions, and successful intake.

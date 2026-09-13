@@ -77,7 +77,8 @@ full_history = true
 # require conversations.info read access and fail without ACK when lookup fails.
 # Desktop requires selected public/private metadata and reports omitted records.
 # MCP requires native catalog evidence, including for explicit IDs; text adapters stop before data calls.
-# Provider/import intake and previously archived rows are unchanged.
+# Legacy Git share imports reject false; share.auto_update=false permits local/API work.
+# Provider/Slack-export intake and previously archived rows are unchanged.
 # auto_join = true # auto-join public channels during sync (default: true; set false to only sync already-joined channels)
 # exclude_channels = [] # channel names to skip during sync, case-insensitive (default: empty)
 
@@ -88,5 +89,6 @@ default_mode = "auto"
 remote = ""
 repo_path = "~/.slacrawl/share"
 branch = "main"
+# Set false to query/sync locally when sync.include_dms=false blocks legacy share imports.
 auto_update = true
 stale_after = "15m"

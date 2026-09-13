@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/share"
 	"github.com/openclaw/slacrawl/internal/store"
@@ -86,10 +87,15 @@ func (a *App) autoUpdateShare(ctx context.Context, cfg config.Config, st *store.
 	if !share.NeedsImport(ctx, st, staleAfter) {
 		return nil
 	}
+	policy := admission.FromConfig(cfg.Sync.IncludeDMs)
+	if err := share.ValidateImportPolicy(policy); err != nil {
+		return err
+	}
 	opts, err := shareOptions(cfg.Share.RepoPath, cfg.Share.Remote, cfg.Share.Branch, cfg.CacheDir, cfg.ShareMediaEnabled())
 	if err != nil {
 		return err
 	}
+	opts.DMPolicy = policy
 	if err := share.Pull(ctx, opts); err != nil {
 		return err
 	}

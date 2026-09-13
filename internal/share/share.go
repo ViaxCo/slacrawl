@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/openclaw/crawlkit/mirror"
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/media"
 	"github.com/openclaw/slacrawl/internal/store"
 )
@@ -52,6 +53,7 @@ type Options struct {
 	Tag          string
 	CacheDir     string
 	IncludeMedia bool
+	DMPolicy     admission.DMPolicy
 }
 
 type Manifest struct {
@@ -85,6 +87,15 @@ type TableManifest struct {
 type SyncState struct {
 	LastImportAt            time.Time `json:"last_import_at"`
 	LastManifestGeneratedAt time.Time `json:"last_manifest_generated_at"`
+}
+
+// ValidateImportPolicy runs before acquisition because legacy snapshots carry
+// no admission evidence for all archived content and derived state.
+func ValidateImportPolicy(policy admission.DMPolicy) error {
+	if policy == admission.Exclude {
+		return errors.New("legacy Git share imports cannot enforce sync.include_dms=false; set share.auto_update=false to continue local queries or source sync without importing snapshots")
+	}
+	return nil
 }
 
 func EnsureRepo(ctx context.Context, opts Options) error {
@@ -212,6 +223,9 @@ func Restore(ctx context.Context, s *store.Store, opts Options) (Manifest, error
 }
 
 func importWithMode(ctx context.Context, s *store.Store, opts Options, restore bool) (Manifest, error) {
+	if err := ValidateImportPolicy(opts.DMPolicy); err != nil {
+		return Manifest{}, err
+	}
 	if opts.IncludeMedia && strings.TrimSpace(opts.CacheDir) != "" {
 		var manifest Manifest
 		err := media.WithCacheLock(ctx, opts.CacheDir, func() error {
@@ -420,6 +434,9 @@ func validateManifest(ctx context.Context, db *sql.DB, repoPath string, manifest
 }
 
 func ImportIfChanged(ctx context.Context, s *store.Store, opts Options) (Manifest, bool, error) {
+	if err := ValidateImportPolicy(opts.DMPolicy); err != nil {
+		return Manifest{}, false, err
+	}
 	manifest, err := ReadManifest(opts.RepoPath)
 	if err != nil {
 		return Manifest{}, false, err
@@ -540,6 +557,9 @@ func parseManifest(data []byte) (Manifest, error) {
 
 // RestoreAt exactly restores a snapshot from a Git ref without changing the share checkout.
 func RestoreAt(ctx context.Context, s *store.Store, opts Options, ref string) (Manifest, error) {
+	if err := ValidateImportPolicy(opts.DMPolicy); err != nil {
+		return Manifest{}, err
+	}
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return Restore(ctx, s, opts)
