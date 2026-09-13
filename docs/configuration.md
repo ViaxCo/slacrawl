@@ -614,13 +614,74 @@ must agree with the envelope, including nested edited/deleted/root messages.
 Slack Connect event/author workspace IDs and differing event/message timestamps
 are not conversation identity conflicts.
 
-This controls future API/tail/desktop/MCP intake and rejects legacy Git share
-imports. It does not purge archived DMs or change provider or Slack-export
-import intake. Desktop uses the policy as described below; MCP uses the native
+This controls future API/tail/desktop/MCP and Slack-export intake and rejects
+legacy Git share imports. It does not purge archived DMs or change provider
+intake. Desktop uses the policy as described below; MCP uses the native
 evidence requirements above. It does not certify the archive or a Git share as safe to publish:
 admitted messages can contain sensitive text
 and file metadata, and a current channel type does not establish that its
 history lacks messages from a converted group DM.
+
+## Slack Export Admission
+
+`[sync].include_dms = false` applies to import, including `--dry-run` and `--force`.
+Omitted/true preserve DM inclusion. Strict admission supports a declared Slack
+workspace JSON export with `channels.json`, `groups.json`, `dms.json` and/or
+`mpims.json` reference catalogs. A present empty array is valid; null catalogs are invalid. Unrelated
+directories/ZIPs without those catalogs are unsupported. Single-user/TXT and
+other layouts need separate qualification.
+
+DM catalogs or positive native `is_im`/`is_mpim` observations exclude every
+occurrence of the same conversation ID. Their message bodies are not decoded.
+For non-DM catalogs, if all four discriminator keys (`is_channel`, `is_group`,
+`is_im`, `is_mpim`) are absent, the catalog supplies public/private type and any
+supplied `is_private` must agree. If any discriminator is present, sparse
+fallback is disabled: positive native channel flags must establish a public or
+private channel. Catalog privacy fills only an absent `is_private`; explicit
+native privacy wins. Negative-only, all-false, contradictory, null or malformed
+flags cannot establish admission. Recognized native flag names are matched
+case-insensitively for classification and the DM veto. Names and ID prefixes
+never establish type.
+
+Strict catalogs and admitted message JSON reject repeated decoded object keys
+before projection, including nested objects and escaped duplicate keys. Catalog
+ID/name and native type/privacy keys also reject case-insensitive duplicates.
+Omitted/true keep
+the existing JSON decoder behavior.
+
+All catalog IDs and name/ID candidates remain reserved, including excluded and
+unused fallback candidates. Directory imports compare device/inode identity on
+Linux and macOS; strict directory admission on other platforms requires a ZIP
+instead. Contained aliases are allowed only for the same conversation. ZIPs
+retain original entries and frozen local-header metadata and reject ambiguous
+logical names or cross-conversation payload reuse. Payloads still use the
+standard ZIP checksum/decompression path.
+
+Retained raw conversation IDs and `context_team_id` must match their prepared
+channel/workspace before projection or timestamp/priority skips. This includes
+every case-insensitive occurrence of recognized identity fields and message,
+previous_message, root, previous and catalog-only latest objects. External author teams, mentions and file-sharing references are not
+enclosing conversation identity. Missing channel identity inherits the catalog.
+
+The first body scan fixes the name-first/ID-fallback choice and records each
+file's identity and digest. Any raw row, even one without a timestamp, selects
+the name branch; only zero rows permit ID fallback. The write pass verifies and
+decodes the same opened-file buffer. New files/catalog edits wait for a new
+preparation; missing, replaced or changed planned files stop execution.
+Earlier 500-message commits survive a later failure; the pending remainder
+does not commit.
+
+Strict all-excluded imports do not initialize the archive/runtime directories
+or write workspace/users. Dry-run opens an existing database read-only, treats
+a missing one as empty, and never migrates or repairs it. Read-only errors stay
+visible. These promises concern importer archive/runtime initialization, not
+the CLI's independent interactive release notice or SQLite WAL sidecar bytes.
+
+Fixed omission counts report excluded conversations. Already archived rows
+remain, independent user profiles remain eligible, and import retention/priority
+semantics are unchanged. Catalog evidence does not authenticate the producer,
+prove complete capture, or establish that a current channel never originated
+as a group DM. This is not a public-export minimizer or a safe-to-publish verdict.
 
 ## Desktop Source
 
