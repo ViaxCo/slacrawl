@@ -27,11 +27,13 @@ type ThreadWork struct {
 }
 
 // ThreadWorkDiscovery scopes page-commit discovery to one admitted channel.
-// ExcludedTS keeps known or already attempted work on its existing generation.
+// KnownWork is rechecked after page writes; ExcludedTS contains work positively
+// completed by this invocation, which must not be recreated by later pages.
 type ThreadWorkDiscovery struct {
 	SourceName  string
 	WorkspaceID string
 	ChannelID   string
+	KnownWork   map[string]ThreadWork
 	ExcludedTS  map[string]struct{}
 }
 
@@ -72,9 +74,7 @@ where `+threadRootPredicate+` order by m.ts`, string(keys), discovery.ChannelID,
 		if err := rows.Scan(&ts); err != nil {
 			return nil, err
 		}
-		if _, excluded := discovery.ExcludedTS[ts]; !excluded {
-			requests = append(requests, ThreadWork{SourceName: discovery.SourceName, WorkspaceID: discovery.WorkspaceID, ChannelID: discovery.ChannelID, TS: ts})
-		}
+		requests = append(requests, ThreadWork{SourceName: discovery.SourceName, WorkspaceID: discovery.WorkspaceID, ChannelID: discovery.ChannelID, TS: ts})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -83,6 +83,32 @@ where `+threadRootPredicate+` order by m.ts`, string(keys), discovery.ChannelID,
 		return nil, err
 	}
 	return requests, nil
+}
+
+// Cancellation can remove a prepared generation before history revives its
+// parent. Recheck exclusions in the page transaction: absent work may be
+// recreated without replacing an extant generation or its skip.
+func filterKnownThreadWork(ctx context.Context, q storedb.DBTX, discovery ThreadWorkDiscovery, requests []ThreadWork) ([]ThreadWork, error) {
+	filtered := make([]ThreadWork, 0, len(requests))
+	for _, work := range requests {
+		if work.SourceName == discovery.SourceName && work.WorkspaceID == discovery.WorkspaceID && work.ChannelID == discovery.ChannelID {
+			if _, completed := discovery.ExcludedTS[work.TS]; completed {
+				continue
+			}
+			if known, ok := discovery.KnownWork[work.TS]; ok && known.SourceName == work.SourceName && known.WorkspaceID == work.WorkspaceID && known.ChannelID == work.ChannelID && known.TS == work.TS {
+				var pending bool
+				if err := q.QueryRowContext(ctx, `select exists (select 1 from sync_state
+where source_name = ? and entity_type = ? and entity_id = ?)`, work.SourceName, ThreadPendingEntityType, threadWorkKey(work)).Scan(&pending); err != nil {
+					return nil, err
+				}
+				if pending {
+					continue
+				}
+			}
+		}
+		filtered = append(filtered, work)
+	}
+	return filtered, nil
 }
 
 func threadWorkKey(work ThreadWork) string {
@@ -291,27 +317,31 @@ where s.source_name = ? and s.entity_type = ? and s.entity_id = ? and s.value = 
 
 // Completion and API skip cleanup share a writer snapshot so an old response
 // cannot remove a renewed generation or the newer attempt's skip state.
-func (s *Store) CompleteThreadWork(ctx context.Context, work ThreadWork, apiSkipKey string) error {
+// The bool reports committed completion, not a revoked no-op.
+func (s *Store) CompleteThreadWork(ctx context.Context, work ThreadWork, apiSkipKey string) (bool, error) {
 	dbtx, commit, rollback, err := s.beginMessageTransaction(ctx, true)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer rollback()
 	current, err := threadWorkCurrent(ctx, dbtx, work)
 	if err != nil || !current {
-		return err
+		return false, err
 	}
 	if _, err := dbtx.ExecContext(ctx, `delete from sync_state
 where source_name = ? and entity_type = ? and entity_id = ? and value = ?`,
 		work.SourceName, ThreadPendingEntityType, threadWorkKey(work), work.Generation); err != nil {
-		return err
+		return false, err
 	}
 	if work.SourceName == "api-user" && apiSkipKey != "" {
 		if _, err := dbtx.ExecContext(ctx, `delete from sync_state where source_name = 'api-user' and entity_type = 'thread_skip' and entity_id = ?`, apiSkipKey); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return commit()
+	if err := commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // A deletion cancels both consumers' work only if the retained target really is

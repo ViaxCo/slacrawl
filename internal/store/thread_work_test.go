@@ -34,7 +34,9 @@ func TestThreadWorkDiscoveryAndGeneration(t *testing.T) {
 	for i := range first {
 		require.Equal(t, first[i].TS, renewed[i].TS)
 		require.NotEqual(t, first[i].Generation, renewed[i].Generation)
-		require.NoError(t, st.CompleteThreadWork(ctx, first[i], ""))
+		completed, err := st.CompleteThreadWork(ctx, first[i], "")
+		require.NoError(t, err)
+		require.False(t, completed)
 	}
 	remaining, err := st.PendingThreadWork(ctx, "api-user", "T1", "C1")
 	require.NoError(t, err)
@@ -43,7 +45,9 @@ func TestThreadWorkDiscoveryAndGeneration(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, other)
 	for _, item := range renewed {
-		require.NoError(t, st.CompleteThreadWork(ctx, item, ""))
+		completed, err := st.CompleteThreadWork(ctx, item, "")
+		require.NoError(t, err)
+		require.True(t, completed)
 	}
 	remaining, err = st.PendingThreadWork(ctx, "api-user", "T1", "C1")
 	require.NoError(t, err)
@@ -278,9 +282,13 @@ func TestThreadWorkDiscoveryAtPageCommit(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, work, 1)
 				if mode == "completed" {
-					require.NoError(t, st.CompleteThreadWork(ctx, work[0], ""))
+					completed, err := st.CompleteThreadWork(ctx, work[0], "")
+					require.NoError(t, err)
+					require.True(t, completed)
+					discovery.ExcludedTS[root.TS] = struct{}{}
+				} else {
+					discovery.KnownWork = map[string]ThreadWork{root.TS: work[0]}
 				}
-				discovery.ExcludedTS[root.TS] = struct{}{}
 				before, err = st.QueryReadOnly(ctx, "select * from sync_state")
 				require.NoError(t, err)
 				wantQueued = false
@@ -336,6 +344,125 @@ func TestThreadWorkDiscoveryAtPageCommit(t *testing.T) {
 				after, err := st.QueryReadOnly(ctx, "select * from sync_state")
 				require.NoError(t, err)
 				require.Equal(t, before, after, "discovery cannot renew known work or recreate completed work")
+			}
+			requireMessageFTSParity(t, st)
+		})
+	}
+}
+
+func TestKnownThreadWorkRevalidatedAtPageCommit(t *testing.T) {
+	for _, mode := range []string{"hint", "duplicate-hint", "child", "current", "renewed", "completed", "revoked-completion", "still-deleted", "enqueue-failure", "read-failure", "nil", "unrelated-source"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			st := openBatchTestStore(t)
+			now := time.Unix(1710000000, 0).UTC()
+			seedBatchCatalog(t, st, "T1", "C1", "U1", now)
+			root := batchMessage("C1", "1710000001.000000", "T1", "root", now)
+			root.SourceName, root.SourceRank = "api-bot", 2
+			root.ReplyCount = 1
+			require.NoError(t, st.UpsertMessage(ctx, root, nil))
+			prepared, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+			require.NoError(t, err)
+			require.Len(t, prepared, 1)
+			work := prepared[0]
+			discovery := &ThreadWorkDiscovery{SourceName: work.SourceName, WorkspaceID: work.WorkspaceID, ChannelID: work.ChannelID,
+				KnownWork: map[string]ThreadWork{root.TS: work}, ExcludedTS: map[string]struct{}{}}
+			if mode != "current" && mode != "renewed" && mode != "completed" && mode != "nil" && mode != "unrelated-source" {
+				deleted := root
+				deleted.DeletedTS = root.TS
+				require.NoError(t, st.MarkMessageDeleted(ctx, deleted, nil))
+				pending, err := st.PendingThreadWork(ctx, "api-user", "T1", "C1")
+				require.NoError(t, err)
+				require.Empty(t, pending)
+			}
+			if mode == "renewed" {
+				_, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+				require.NoError(t, err)
+				require.NoError(t, st.SetSyncState(ctx, "api-user", "thread_skip", "T1|C1|"+root.TS, "new attempt skip"))
+			}
+			if mode == "completed" || mode == "revoked-completion" {
+				completed, err := st.CompleteThreadWork(ctx, work, "")
+				require.NoError(t, err)
+				require.Equal(t, mode == "completed", completed)
+				if completed {
+					discovery.ExcludedTS[root.TS] = struct{}{}
+				}
+			}
+			root.Text, root.NormalizedText, root.RawJSON = "revived root", "revived root", `{"text":"revived root"}`
+			batch := WriteBatch{Messages: []MessageWrite{{Message: root}}, PendingThreads: []ThreadWork{work}, ThreadDiscovery: discovery}
+			switch mode {
+			case "duplicate-hint":
+				root.ReplyCount = 0
+				batch.Messages = append(batch.Messages, MessageWrite{Message: root})
+			case "child":
+				batch.Messages[0].Message.ReplyCount = 0
+				child := batchMessage("C1", "1710000002.000000", "T1", "child", now)
+				child.SourceName, child.SourceRank = "api-bot", 2
+				child.ThreadTS = root.TS
+				batch.Messages = append(batch.Messages, MessageWrite{Message: child})
+				batch.PendingThreads = nil
+			case "still-deleted":
+				batch.Messages = nil
+			case "nil":
+				batch.ThreadDiscovery = nil
+			case "unrelated-source":
+				batch.PendingThreads[0].SourceName = "mcp"
+			case "enqueue-failure":
+				_, err := st.DB().ExecContext(ctx, `create trigger reject_requeued_thread before insert on sync_state when new.entity_type='thread_pending_v1' begin select raise(abort,'synthetic_requeue_failure'); end`)
+				require.NoError(t, err)
+			case "read-failure":
+				_, err := st.DB().ExecContext(ctx, "alter table sync_state rename to saved_sync_state")
+				require.NoError(t, err)
+			}
+			stateTable := "sync_state"
+			if mode == "read-failure" {
+				stateTable = "saved_sync_state"
+			}
+			tables := []string{"messages", "message_events", "message_event_heads", "message_mentions", "message_files", "message_fts", stateTable}
+			before := map[string]any{}
+			for _, table := range tables {
+				before[table], err = st.QueryReadOnly(ctx, "select * from "+table)
+				require.NoError(t, err)
+			}
+			result, err := st.ApplyWriteBatch(ctx, batch)
+			if mode == "enqueue-failure" || mode == "read-failure" {
+				require.Error(t, err)
+				if mode == "enqueue-failure" {
+					require.ErrorContains(t, err, "synthetic_requeue_failure")
+				} else {
+					require.ErrorContains(t, err, "no such table: sync_state")
+				}
+				for _, table := range tables {
+					after, err := st.QueryReadOnly(ctx, "select * from "+table)
+					require.NoError(t, err)
+					require.Equal(t, before[table], after, table+" must roll back with requeue failure")
+				}
+				return
+			}
+			require.NoError(t, err)
+			if mode == "current" || mode == "renewed" || mode == "completed" || mode == "still-deleted" {
+				require.Empty(t, result.PendingThreads)
+				after, err := st.QueryReadOnly(ctx, "select * from sync_state")
+				require.NoError(t, err)
+				require.Equal(t, before[stateTable], after, "existing work/skip and completed exclusions remain unchanged")
+			} else {
+				require.Len(t, result.PendingThreads, 1)
+				queued := result.PendingThreads[0]
+				require.Equal(t, root.TS, queued.TS)
+				require.NotEmpty(t, queued.Generation)
+				require.NotEqual(t, work.Generation, queued.Generation)
+				current, err := st.ThreadWorkCurrent(ctx, queued)
+				require.NoError(t, err)
+				require.True(t, current)
+				current, err = st.ThreadWorkCurrent(ctx, work)
+				require.NoError(t, err)
+				require.Equal(t, mode == "unrelated-source", current, "an old canceled generation cannot become current again")
+				if mode == "unrelated-source" {
+					require.Equal(t, "mcp", queued.SourceName)
+					pending, err := st.PendingThreadWork(ctx, "api-user", "T1", "C1")
+					require.NoError(t, err)
+					require.Equal(t, prepared, pending)
+				}
 			}
 			requireMessageFTSParity(t, st)
 		})
@@ -777,7 +904,8 @@ func TestThreadCompletionKeepsNewerSkipAndRollsBack(t *testing.T) {
 			}
 			before, err := st.QueryReadOnly(ctx, "select * from sync_state order by source_name,entity_type,entity_id")
 			require.NoError(t, err)
-			err = st.CompleteThreadWork(ctx, work[0], key)
+			completed, err := st.CompleteThreadWork(ctx, work[0], key)
+			require.Equal(t, mode == "current", completed)
 			if mode == "rollback" {
 				require.ErrorContains(t, err, "synthetic_skip_cleanup_failure")
 			} else {

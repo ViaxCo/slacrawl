@@ -313,6 +313,151 @@ func TestHistoryPageChildrenPersistThreadWork(t *testing.T) {
 	}
 }
 
+func TestRetainedThreadRevivalRequeuesCanceledWork(t *testing.T) {
+	for _, mode := range []string{"hint", "duplicate-hint", "child", "history-error", "history-incomplete", "history-limited", "unavailable", "renewed", "completed", "revoked-later-page"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			st := mustStore(t)
+			defer func() { require.NoError(t, st.Close()) }()
+			const rootTS, childTS = "1710000001.000000", "1710000002.000000"
+			now := time.Unix(1710000400, 0).UTC()
+			retainedOwnerSeed(t, st, rootTS)
+			prior := historyCoverage{Complete: true, Latest: "1710000200.000000"}
+			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", prior))
+			require.NoError(t, st.SetSyncState(ctx, SourceBot, "workspace", "T123", "2020-01-01T00:00:00Z"))
+			workspaceBefore, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='workspace'")
+			require.NoError(t, err)
+			deleteRoot := func() {
+				require.NoError(t, st.MarkMessageDeleted(ctx, store.Message{WorkspaceID: "T123", ChannelID: "C123", TS: rootTS,
+					DeletedTS: rootTS, SourceName: SourceBot, SourceRank: 2, RawJSON: `{"subtype":"message_deleted"}`, UpdatedAt: now}, nil))
+				pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+				require.NoError(t, err)
+				require.Empty(t, pending, "committed deletion cancels the prepared generation")
+			}
+			tokens := config.Tokens{Bot: "fixture-bot", User: "fixture-user"}
+			if mode == "unavailable" {
+				tokens.User = ""
+			}
+			histories, replies := 0, 0
+			var prepared store.ThreadWork
+			var newer []map[string]any
+			const workQuery = "select * from sync_state where source_name='api-user' and entity_type in ('thread_pending_v1','thread_skip') order by entity_type,entity_id"
+			client := primaryOwnerClient(t, tokens, func(r *http.Request, form url.Values) (any, error) {
+				switch r.URL.Path {
+				case "/conversations.history":
+					histories++
+					require.Equal(t, "C123", form.Get("channel"))
+					if histories == 1 {
+						work, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+						require.NoError(t, err)
+						require.Len(t, work, 1)
+						prepared = work[0]
+						if mode != "completed" && mode != "revoked-later-page" {
+							deleteRoot()
+						}
+						if mode == "renewed" {
+							retainedOwnerSeed(t, st, rootTS)
+							_, err := st.PrepareThreadWork(ctx, SourceUser, "T123", "C123")
+							require.NoError(t, err)
+							require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|C123|"+rootTS, "new attempt skip"))
+							newer, err = st.QueryReadOnly(ctx, workQuery)
+							require.NoError(t, err)
+						}
+					} else if mode == "history-error" {
+						return map[string]any{"ok": false, "error": "synthetic_after_revival_failure"}, nil
+					}
+					root := map[string]any{"ts": rootTS, "text": "revived root", "reply_count": 1}
+					messages := []any{root}
+					if mode == "duplicate-hint" {
+						messages = append(messages, map[string]any{"ts": rootTS, "text": "revived root", "reply_count": 0})
+					}
+					if mode == "child" || mode == "history-error" || mode == "history-incomplete" || mode == "history-limited" {
+						root["reply_count"] = 0
+						messages = append(messages, map[string]any{"ts": childTS, "thread_ts": rootTS, "text": "history child <@U1>"})
+					}
+					payload := map[string]any{"ok": true, "messages": messages}
+					if histories == 1 && (mode == "history-error" || mode == "completed" || mode == "revoked-later-page") {
+						payload["response_metadata"] = map[string]any{"next_cursor": "next-history"}
+					}
+					if mode == "history-incomplete" {
+						payload["has_more"] = true
+					}
+					if mode == "history-limited" {
+						payload["is_limited"] = true
+					}
+					return payload, nil
+				case "/conversations.replies":
+					replies++
+					require.Equal(t, 1, replies)
+					require.Equal(t, "C123", form.Get("channel"))
+					require.Equal(t, rootTS, form.Get("ts"))
+					work, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+					require.NoError(t, err)
+					require.Len(t, work, 1)
+					if mode != "completed" && mode != "revoked-later-page" {
+						require.NotEqual(t, prepared.Generation, work[0].Generation, "revival must use the newly committed generation")
+					}
+					payload := map[string]any{"ok": true, "messages": []any{map[string]any{"ts": "1710000003.000000", "thread_ts": rootTS, "text": "reply child"}}}
+					if mode == "revoked-later-page" {
+						deleteRoot()
+						payload["has_more"] = true
+						payload["response_metadata"] = map[string]any{"next_cursor": "stale-next"}
+					}
+					return payload, nil
+				}
+				return primaryOwnerResponse(r.URL.Path), nil
+			})
+			client.now = func() time.Time { return now }
+			err = client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"})
+			failed := mode == "history-error" || mode == "history-incomplete" || mode == "history-limited"
+			if failed {
+				require.ErrorContains(t, err, map[string]string{"history-error": "synthetic_after_revival_failure", "history-incomplete": "has_more without a continuation cursor", "history-limited": "completeness of the requested interval is uncertified"}[mode])
+				workspaceAfter, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='workspace'")
+				require.NoError(t, err)
+				require.Equal(t, workspaceBefore, workspaceAfter)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, map[bool]int{true: 2, false: 1}[mode == "history-error" || mode == "completed" || mode == "revoked-later-page"], histories)
+			wantReply := mode == "hint" || mode == "duplicate-hint" || mode == "child" || mode == "completed" || mode == "revoked-later-page"
+			require.Equal(t, map[bool]int{true: 1, false: 0}[wantReply], replies)
+			pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+			require.NoError(t, err)
+			wantPending := failed || mode == "unavailable" || mode == "renewed" || mode == "revoked-later-page"
+			require.Len(t, pending, map[bool]int{true: 1, false: 0}[wantPending])
+			if wantPending {
+				require.Equal(t, rootTS, pending[0].TS)
+				require.NotEqual(t, prepared.Generation, pending[0].Generation)
+				current, err := st.ThreadWorkCurrent(ctx, pending[0])
+				require.NoError(t, err)
+				require.True(t, current)
+			}
+			if mode == "renewed" {
+				after, err := st.QueryReadOnly(ctx, workQuery)
+				require.NoError(t, err)
+				require.Equal(t, newer, after, "another attempt's generation, skip and timestamps must survive")
+			}
+			if mode == "revoked-later-page" {
+				rows, err := st.QueryReadOnly(ctx, "select ts from messages where ts='1710000003.000000'")
+				require.NoError(t, err)
+				require.Empty(t, rows, "the canceled response must remain discarded")
+			}
+			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			require.NoError(t, err)
+			if failed {
+				require.Equal(t, prior.Latest, coverage.Latest)
+				require.NotNil(t, coverage.Pending)
+			} else {
+				require.Equal(t, "1710000400.000000", coverage.Latest)
+				require.Nil(t, coverage.Pending)
+			}
+			status, err := st.Status(ctx)
+			require.NoError(t, err)
+			require.Equal(t, map[bool]string{true: "partial", false: "full"}[wantPending], status.ThreadState)
+		})
+	}
+}
+
 func TestTailDeletionRetiresPendingThread(t *testing.T) {
 	st := mustStore(t)
 	defer func() { require.NoError(t, st.Close()) }()

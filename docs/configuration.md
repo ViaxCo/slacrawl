@@ -619,6 +619,12 @@ are unavailable, bot history can still complete with partial thread coverage;
 the saved work remains. Switching from bot-primary to user-primary sync keeps
 that replies work without borrowing the bot's history checkpoint.
 
+Existing message reconciliation can revive a tombstone when an in-flight history
+page arrives later. If that page admits thread evidence after cancellation, its
+transaction queues fresh work while preserving any existing newer generation.
+Roots successfully completed during this sync stay excluded. A revoked attempt
+is not completion and can leave newly queued work for the next sync.
+
 Successful replies retire only the generation that was processed. Retained
 requests and writes recheck that generation and the parent's live ownership;
 deletion or renewal during a request discards its stale response. Full cleanup
