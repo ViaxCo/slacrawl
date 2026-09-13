@@ -424,6 +424,8 @@ Share config:
    or skips, choose the name/ID
    branch once, record file identity/digests, and check existing DB collisions.
    Any name-branch raw row wins; only zero rows permit ID fallback.
+   Before metadata writes, check existing workspace ownership of admitted
+   channels and every retained user ID. Dry-run performs the same checks.
 6. Re-read each selected file through its retained source, verify its actual
    opened identity and digest, then decode that same buffer. Never rescan
    directories/catalogs or select a new fallback during execution.

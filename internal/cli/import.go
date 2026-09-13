@@ -144,6 +144,9 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 }
 
 func runImportExecution(ctx context.Context, st *store.Store, plan *importer.Prepared, workspaceID string, dryRun, force bool) (ImportReport, []importChannelProgress, error) {
+	if err := validateImportCatalogOwnership(ctx, st, plan, workspaceID); err != nil {
+		return ImportReport{}, nil, err
+	}
 	now := time.Now().UTC()
 	report := ImportReport{Workspace: workspaceID, DryRun: dryRun, Users: len(plan.Users()), OmittedDM: plan.OmittedDM()}
 	channels := plan.Channels()
@@ -218,6 +221,38 @@ func runImportExecution(ctx context.Context, st *store.Store, plan *importer.Pre
 		progress = append(progress, row)
 	}
 	return report, progress, nil
+}
+
+func validateImportCatalogOwnership(ctx context.Context, st *store.Store, plan *importer.Prepared, workspaceID string) error {
+	if st == nil {
+		return nil
+	}
+	// Metadata-only collisions must fail before workspace or roster writes, even
+	// without matching message keys. Dry-run checks the same retained identities.
+	check := func(id string, lookup func(context.Context, string) (string, error)) error {
+		existing, err := lookup(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if existing != workspaceID {
+			return errors.New("import catalog identity belongs to another workspace")
+		}
+		return nil
+	}
+	for _, channel := range plan.Channels() {
+		if err := check(channel.ID, st.ChannelWorkspaceID); err != nil {
+			return err
+		}
+	}
+	for _, user := range plan.Users() {
+		if err := check(user.ID, st.UserWorkspaceID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateImportMessageKeys(ctx context.Context, st *store.Store, plan *importer.Prepared, workspaceID string) error {
