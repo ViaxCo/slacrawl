@@ -6,6 +6,7 @@ import (
 	"flag"
 	"strings"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/share"
 )
@@ -114,6 +115,12 @@ func (a *App) runSubscribe(ctx context.Context, configPath string, args []string
 	if strings.TrimSpace(*remote) == "" {
 		return errors.New("subscribe requires a remote")
 	}
+	policy := admission.FromConfig(cfg.Sync.IncludeDMs)
+	if !*noImport {
+		if err := share.ValidateImportPolicy(policy); err != nil {
+			return err
+		}
+	}
 
 	cfg.Share.Remote = strings.TrimSpace(*remote)
 	cfg.Share.RepoPath = *repoPath
@@ -148,6 +155,7 @@ func (a *App) runSubscribe(ctx context.Context, configPath string, args []string
 	if err != nil {
 		return err
 	}
+	opts.DMPolicy = policy
 	if err := share.Pull(ctx, opts); err != nil {
 		return err
 	}
@@ -190,6 +198,10 @@ func (a *App) runUpdate(ctx context.Context, configPath string, args []string, f
 	if strings.TrimSpace(*ref) != "" && !*restore {
 		return errors.New("update --ref requires --restore because historical snapshots replace local rows")
 	}
+	policy := admission.FromConfig(cfg.Sync.IncludeDMs)
+	if err := share.ValidateImportPolicy(policy); err != nil {
+		return err
+	}
 	st, err := a.openStore(cfg)
 	if err != nil {
 		return err
@@ -199,6 +211,7 @@ func (a *App) runUpdate(ctx context.Context, configPath string, args []string, f
 	if err != nil {
 		return err
 	}
+	opts.DMPolicy = policy
 	var manifest share.Manifest
 	var imported bool
 	if strings.TrimSpace(*ref) == "" {
