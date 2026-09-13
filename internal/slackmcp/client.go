@@ -202,18 +202,7 @@ func toolNameOptional(tools []mcpclient.Tool, name string) string {
 
 func (c *Client) channels(ctx context.Context, tools toolset, query string) ([]ChannelRecord, error) {
 	if tools.provider == providerReference {
-		channels, err := c.referenceChannels(ctx, tools)
-		if err != nil || strings.TrimSpace(query) == "" {
-			return channels, err
-		}
-		query = strings.TrimPrefix(strings.TrimSpace(query), "#")
-		filtered := channels[:0]
-		for _, channel := range channels {
-			if strings.EqualFold(channel.ID, query) || strings.EqualFold(channel.Name, query) {
-				filtered = append(filtered, channel)
-			}
-		}
-		return filtered, nil
+		return c.referenceChannels(ctx, tools, false)
 	}
 	return collectPages(c.maxPages, func(cursor string) (page[ChannelRecord], error) {
 		raw, err := c.mcp.CallToolText(ctx, tools.searchChannels, map[string]any{
@@ -248,9 +237,9 @@ func (c *Client) users(ctx context.Context, tools toolset) ([]UserRecord, error)
 	})
 }
 
-func (c *Client) channelMessages(ctx context.Context, tools toolset, channelID, oldest string) (channelPage, error) {
+func (c *Client) channelMessages(ctx context.Context, tools toolset, workspaceID, channelID, oldest string) (channelPage, error) {
 	if tools.provider == providerReference {
-		return c.referenceChannelMessages(ctx, tools, channelID, oldest)
+		return c.referenceChannelMessages(ctx, tools, workspaceID, channelID, oldest)
 	}
 	var result channelPage
 	err := walkPages(c.maxPages, func(cursor string) (string, error) {
@@ -268,6 +257,14 @@ func (c *Client) channelMessages(ctx context.Context, tools toolset, channelID, 
 		if err != nil {
 			return "", err
 		}
+		if next.ChannelID != channelID {
+			return "", errors.New("MCP channel response does not match requested conversation")
+		}
+		for _, message := range next.Messages {
+			if strings.TrimSpace(message.TS) == "" {
+				return "", errors.New("MCP message timestamp is empty")
+			}
+		}
 		if result.ChannelID == "" {
 			result.ChannelID = next.ChannelID
 			result.ChannelName = next.ChannelName
@@ -279,12 +276,12 @@ func (c *Client) channelMessages(ctx context.Context, tools toolset, channelID, 
 	return result, err
 }
 
-func (c *Client) threadMessages(ctx context.Context, tools toolset, channelID, threadTS string) (threadPage, error) {
+func (c *Client) threadMessages(ctx context.Context, tools toolset, workspaceID, channelID, threadTS string) (threadPage, error) {
 	if tools.readThread == "" {
 		return threadPage{}, errors.New("Slack MCP connector does not provide a read-thread tool")
 	}
 	if tools.provider == providerReference {
-		return c.referenceThreadMessages(ctx, tools, channelID, threadTS)
+		return c.referenceThreadMessages(ctx, tools, workspaceID, channelID, threadTS)
 	}
 	var result threadPage
 	err := walkPages(c.maxPages, func(cursor string) (string, error) {
@@ -300,6 +297,9 @@ func (c *Client) threadMessages(ctx context.Context, tools toolset, channelID, t
 		}
 		next, err := parseThreadMessages(raw, channelID)
 		if err != nil {
+			return "", err
+		}
+		if err := validateThreadPage(next, channelID, threadTS); err != nil {
 			return "", err
 		}
 		if result.Parent == nil {

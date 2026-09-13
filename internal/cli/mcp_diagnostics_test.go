@@ -90,8 +90,8 @@ func TestMCPWorkspaceCollisionDiagnosticsAcrossCLIPaths(t *testing.T) {
 						case "slack_read_channel":
 							payload["messages"] = "Channel: test (" + channelID + ")"
 							if collision == "message" {
-								// The text adapter still accepts a returned foreign header.
-								// The second message collides and must roll back the first.
+								// Admission now rejects this foreign header before either
+								// message can reach persistence.
 								payload["messages"] = "Channel: test (" + foreignChannel + ")\n\n=== Message from test (" + foreignUser + ") at 2024-03-09T16:00:00Z === \nMessage TS: 1710000000.000002\n" + canary + "\n\n=== Message from test (" + foreignUser + ") at 2024-03-09T16:00:00Z === \nMessage TS: 1710000000.000001\n" + canary
 							}
 						default:
@@ -116,7 +116,11 @@ func TestMCPWorkspaceCollisionDiagnosticsAcrossCLIPaths(t *testing.T) {
 				var stdout, stderr bytes.Buffer
 				app := &App{Stdout: &stdout, Stderr: &stderr}
 				err = app.Run(ctx, []string{"--config", configPath, "sync", "--source", source, "--workspace", "TREQUEST", "--full"})
-				require.ErrorContains(t, err, "workspace identity conflict")
+				if collision == "message" {
+					require.ErrorContains(t, err, "does not match requested conversation")
+				} else {
+					require.ErrorContains(t, err, "workspace identity conflict")
+				}
 				output := fmt.Sprint(err) + stdout.String() + stderr.String()
 				for _, value := range []string{foreignWorkspace, foreignChannel, foreignUser, "TREQUEST", canary} {
 					require.NotContains(t, output, value)

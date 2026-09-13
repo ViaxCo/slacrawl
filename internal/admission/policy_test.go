@@ -35,3 +35,29 @@ func TestDMPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeConversationKinds(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags NativeFlags
+		want  Kind
+	}{
+		{"public", NativeFlags{IsChannel: true}, PublicChannel},
+		{"modern private", NativeFlags{IsChannel: true, IsPrivate: true}, PrivateChannel},
+		{"legacy private", NativeFlags{IsGroup: true, IsPrivate: true}, PrivateChannel},
+		{"private alone", NativeFlags{IsPrivate: true}, Unknown},
+		{"group alone", NativeFlags{IsGroup: true}, Unknown},
+		{"conflicting channel flags", NativeFlags{IsChannel: true, IsGroup: true, IsPrivate: true}, Unknown},
+		{"absent flags", NativeFlags{}, Unknown},
+		{"IM", NativeFlags{IsIM: true, IsPrivate: true}, IM},
+		{"MPIM", NativeFlags{IsMPIM: true, IsPrivate: true}, MPIM},
+		{"IM veto", NativeFlags{IsIM: true, IsChannel: true, IsGroup: true}, IM},
+		{"MPIM veto", NativeFlags{IsMPIM: true, IsChannel: true}, MPIM},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.flags.Kind(); got != tc.want {
+				t.Fatalf("kind = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

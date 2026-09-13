@@ -394,6 +394,34 @@ Share config:
 14. update FTS rows and mentions
 15. write checkpoints, channel skips, and join attempts
 
+### MCP sync
+
+1. discover the configured MCP adapter; explicit `include_dms = false` rejects
+   text adapters before data calls or archive writes because they lack native type evidence
+2. for strict native admission, read the complete available catalog once with
+   explicit successful responses on every page; resolve direct IDs exactly,
+   while omitted/true retain existing per-name requests and direct-ID shortcuts;
+   under every policy, retain available observations until all selectors finish,
+   then apply whole-ID alias exclusions before identity qualification
+3. validate selected catalog identity before DM classification under every policy:
+   a present foreign context workspace fails, including on a DM or duplicate;
+   after that check, explicit false excludes shared native IM/MPIM types, while
+   other unknown or conflicting types fail before writes and latest-only filtering
+4. validate every retained latest-message identity across those observations
+   before selected payloads proceed; explicit false with no eligible conversations
+   records that outcome and leaves workspace/user/freshness state untouched
+5. validate each channel page and every thread parent/reply before affected writes;
+   require nonblank top-level timestamps and reply timestamps distinct from the parent;
+   check native explicit channel/context/thread fields before filtering/conversion;
+   nested metadata and catalog latest-message timestamps remain optional
+6. retain existing priority, retention, request defaults, and payload projections
+   for omitted/true; return fixed omission counts and preserve earlier successful
+   history commits if a later request fails
+
+Configured workspace identity without returned context remains operator-bound,
+not authenticated proof. Existing reference history pagination and MCP coverage
+limits remain; no existing rows are purged and no export certification is implied.
+
 ### External provider sync
 
 1. resolve `provider:<name>` against `[[providers]]` and require a workspace ID

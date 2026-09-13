@@ -48,21 +48,10 @@ func (k kindObservations) reason() string {
 }
 
 func desktopConversationKind(channel ReduxChannel) admission.Kind {
-	switch {
-	case channel.IsIM:
-		return admission.IM
-	case channel.IsMPIM:
-		return admission.MPIM
-	case channel.IsChannel && !channel.IsGroup:
-		if channel.IsPrivate {
-			return admission.PrivateChannel
-		}
-		return admission.PublicChannel
-	case !channel.IsChannel && channel.IsGroup && channel.IsPrivate:
-		return admission.PrivateChannel
-	default:
-		return admission.Unknown
-	}
+	return (admission.NativeFlags{
+		IsIM: channel.IsIM, IsMPIM: channel.IsMPIM,
+		IsChannel: channel.IsChannel, IsGroup: channel.IsGroup, IsPrivate: channel.IsPrivate,
+	}).Kind()
 }
 
 func observeReduxKinds(observations map[string]kindObservations, state ReduxDecodedState) {

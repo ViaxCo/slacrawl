@@ -225,9 +225,9 @@ ID is not sent to custom origins; configure a dedicated `account_id_env` when
 the custom server needs one. Explicit custom-server tokens and stdio remain
 supported.
 
-`max_pages` bounds each users, channels, channel-history, and thread pagination loop; hitting the bound returns an error instead of silently accepting an incomplete page set. The Codex HTTP connector accepts at most 20 channel or user search results per request. Explicit channel IDs avoid global channel and user enumeration. Normal MCP sync overlaps the latest stored message timestamp per channel by one hour and rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply; `--full` removes the local channel cursor, while `--latest-only` skips channels with no local history. MCP is an explicit source and is not included in `--source all`.
+`max_pages` bounds each users, channels, channel-history, and thread pagination loop; hitting the bound returns an error instead of silently accepting an incomplete page set. The Codex HTTP connector accepts at most 20 channel or user search results per request. With `include_dms` omitted/true, explicit channel IDs avoid global channel and user enumeration. Normal MCP sync overlaps the latest stored message timestamp per channel by one hour and rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply; `--full` removes the local channel cursor, while `--latest-only` skips channels with no local history. MCP is an explicit source and is not included in `--source all`.
 
-The connector's channel search response may omit privacy metadata. Those channels are stored with kind `mcp_channel` rather than being assumed public; they remain locally searchable but are not treated as public channels by archive export logic.
+The text connector's channel search response may omit privacy metadata. With `include_dms` omitted/true, those channels remain locally searchable with kind `mcp_channel`, recording unknown classification. Legacy `publish` still includes these archive rows; that kind is not an export privacy filter.
 
 For the archived MCP reference Slack server, use stdio and export the server's required `SLACK_BOT_TOKEN` and `SLACK_TEAM_ID` variables before running slacrawl:
 
@@ -247,15 +247,61 @@ The subprocess receives a minimal environment plus known Slack/Codex token varia
 
 Tool discovery selects either the Codex Slack connector contract or the reference `slack_list_channels`, `slack_get_channel_history`, `slack_get_thread_replies`, and `slack_get_users` contract.
 
+### MCP direct-message policy
+
+`[sync].include_dms = false` applies to both `--source mcp` and `connector`.
+The text connector cannot establish native conversation types, so this setting
+stops it immediately after tool discovery, before data calls or archive writes.
+Use `--source api` or a qualified native reference MCP server for this policy.
+Tool names, connector metadata, channel names, ID prefixes, and a private flag
+alone do not establish conversation type.
+
+For the native reference adapter, strict exclusion reads the complete available
+channel catalog once, requiring `ok=true` on every page. Explicit IDs require an
+exact catalog ID match. Existing selectors and exclusions apply before admission;
+all observations for a selected duplicate ID are checked together. Selected
+catalog identity is checked before DM classification under every policy: a
+present foreign context workspace stops the sync even on a DM or duplicate.
+That record cannot supply type evidence for the configured workspace. Native
+`is_im`/`is_mpim` flags exclude that identity even if other channel flags appear.
+Other selected conversations require consistent public/private native type
+flags; missing or conflicting evidence stops the sync before archive writes,
+including with `--latest-only`. Fixed counts report skipped DMs. If no
+conversations are eligible, workspace/user rows and MCP freshness are untouched,
+and output says so.
+
+Under every policy, available observations for selected IDs survive name matching
+and deduplication, including observations from earlier name requests. An excluded
+alias excludes its whole ID before identity checks; unrelated catalog IDs are
+not admitted or validated. Omitted/true retain existing payload selection and
+per-name requests. Direct-ID-only selection still avoids enumeration
+under those policies, so it does not acquire catalog evidence.
+
+Under every policy, selected catalog and retained message context workspace IDs
+must agree with the configured workspace. Every returned channel page and thread
+parent/reply must match the requested conversation and thread before the affected
+writes. Native message identities are checked before local timestamp filtering
+or conversion. Top-level history and thread messages require nonblank timestamps;
+replies must not reuse the parent timestamp. Nested metadata and catalog latest
+timestamps remain optional. Earlier successful history writes remain if a later
+thread fails. Missing context is bound to the operator's configured workspace;
+it is not authenticated identity proof. External authors and their team IDs are allowed.
+
+Omitted/true retain the existing request patterns and stored payload projections,
+subject to the identity checks above. Previously archived DMs are not
+purged. The reference server's bounded history window and MCP cursor-based
+coverage limits remain unchanged; admission does not certify complete history,
+DM-origin history, or a safe export.
+
 Ctrl-C cancels MCP sync and stops its stdio server, including when the server stops reading requests and fills the stdin pipe.
 
 MCP response failures report the operation, HTTP status or JSON-RPC code when
 available, and a fixed reason. Ordinary errors omit server response bodies,
 tool names and error text, parser snippets, conversation identifiers, and opaque
 cursors. Transport errors retain cancellation/deadline detection and the
-credential-origin rejection reason without printing returned URLs. Successful
-response content and archive writes are unchanged; these diagnostics do not
-establish conversation scope or remove previously archived data.
+credential-origin rejection reason without printing returned URLs. These
+diagnostics do not establish conversation scope or remove previously archived
+data.
 
 ## External Archive Providers
 
@@ -519,9 +565,9 @@ must agree with the envelope, including nested edited/deleted/root messages.
 Slack Connect event/author workspace IDs and differing event/message timestamps
 are not conversation identity conflicts.
 
-This controls future API/tail/desktop intake only. It does not purge archived DMs
-or change MCP, provider, or import intake. Desktop uses the policy as described
-below. It does not certify the archive or a Git share as safe to publish:
+This controls future API/tail/desktop/MCP intake only. It does not purge archived
+DMs or change provider or import intake. Desktop uses the policy as described
+below; MCP uses the native evidence requirements above. It does not certify the archive or a Git share as safe to publish:
 admitted messages can contain sensitive text
 and file metadata, and a current channel type does not establish that its
 history lacks messages from a converted group DM.

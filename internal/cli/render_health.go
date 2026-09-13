@@ -152,13 +152,26 @@ func renderSyncBlock(w *strings.Builder, title string, value any) bool {
 			}
 		}
 	}
+	noMCPIntake := false
+	if summary, ok := report["summary"].(map[string]any); ok {
+		if mcp, ok := summary["mcp"].(map[string]any); ok {
+			noMCPIntake = truthy(mcp["no_eligible_conversations"])
+			if intValue(mcp["omitted_dm"]) > 0 {
+				omissions = append(omissions, metric{"MCP DMs", shortValue(mcp["omitted_dm"]), ansiYellow})
+			}
+		}
+	}
 	writeTitle(w, strings.ToUpper(title))
 	if len(omissions) > 0 {
 		w.WriteString(colorize(ansiYellow, "● Completed with omissions"))
 	} else {
 		w.WriteString(colorize(ansiGreen, "● Completed"))
 	}
-	w.WriteString(colorize(ansiDim, "  local state refreshed"))
+	if noMCPIntake {
+		w.WriteString(colorize(ansiDim, "  no eligible MCP conversations"))
+	} else {
+		w.WriteString(colorize(ansiDim, "  local state refreshed"))
+	}
 	w.WriteByte('\n')
 	if len(omissions) > 0 {
 		writeMetricRow(w, omissions)
