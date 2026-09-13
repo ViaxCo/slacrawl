@@ -277,11 +277,12 @@ checks do not establish complete history or resumable backfill. See Slack's
 
 ### Retained MCP threads
 
-Ordinary MCP sync and `--full` without `--since` save eligible retained roots
-before history writes can remove their reply hints. New history hints are saved
-with their message batch. The local replies queue survives request failures,
-incomplete native replies and process restarts; it does not store a server
-cursor or extend the native server's history window.
+With a thread tool, ordinary MCP sync and `--full` without `--since` save
+eligible retained roots before history writes can remove their reply hints.
+New hints and work identified by archived replies are saved with their message
+batch, even if a later batch fails. The local replies queue survives
+request failures, incomplete native replies and process restarts; it does not
+store a server cursor or extend the native server's history window.
 
 Explicit `--since`, including `--full --since`, fetches threads only for roots
 in the returned history. It leaves the ordinary queue and older retained roots

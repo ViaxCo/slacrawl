@@ -134,6 +134,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 
 		ordinaryThreads := opts.Since == "" && tools.readThread != ""
 		pendingThreads := map[string]store.ThreadWork{}
+		knownThreads := map[string]struct{}{}
 		if ordinaryThreads {
 			work, err := st.PrepareThreadWork(ctx, SourceName, workspaceID, channel.ID)
 			if err != nil {
@@ -141,10 +142,16 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			}
 			for _, item := range work {
 				pendingThreads[item.TS] = item
+				knownThreads[item.TS] = struct{}{}
 			}
 		}
 		threadRoots := map[string]struct{}{}
 		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, min(len(channelResult.Messages), maxMessageBatchSize))}
+		if ordinaryThreads {
+			// Keep admitted child evidence with its history batch even if a later
+			// batch fails before retained-root discovery can run.
+			batch.ThreadDiscovery = &store.ThreadWorkDiscovery{SourceName: SourceName, WorkspaceID: workspaceID, ChannelID: channel.ID, ExcludedTS: knownThreads}
+		}
 		writeHistoryBatch := func() error {
 			result, err := st.ApplyWriteBatch(ctx, batch)
 			if err != nil {
@@ -153,6 +160,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			summary.Messages += result.MessagesWritten
 			for _, work := range result.PendingThreads {
 				pendingThreads[work.TS] = work
+				knownThreads[work.TS] = struct{}{}
 			}
 			batch.Messages = batch.Messages[:0]
 			batch.PendingThreads = batch.PendingThreads[:0]
@@ -163,7 +171,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			if message.ReplyCount > 0 {
 				threadRoots[message.TS] = struct{}{}
 				if ordinaryThreads {
-					if _, known := pendingThreads[message.TS]; !known {
+					if _, known := knownThreads[message.TS]; !known {
 						batch.PendingThreads = append(batch.PendingThreads, store.ThreadWork{SourceName: SourceName, WorkspaceID: workspaceID, ChannelID: channel.ID, TS: message.TS})
 					}
 				}
@@ -199,7 +207,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 				return summary, err
 			}
 			for _, root := range storedRoots {
-				if _, known := pendingThreads[root.TS]; !known {
+				if _, known := knownThreads[root.TS]; !known {
 					batch.PendingThreads = append(batch.PendingThreads, store.ThreadWork{SourceName: SourceName, WorkspaceID: workspaceID, ChannelID: channel.ID, TS: root.TS})
 				}
 			}
