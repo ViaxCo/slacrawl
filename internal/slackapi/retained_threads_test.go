@@ -173,6 +173,146 @@ func TestRetainedThreadFailuresKeepWork(t *testing.T) {
 	}
 }
 
+func TestHistoryPageChildrenPersistThreadWork(t *testing.T) {
+	for _, mode := range []string{"root-child-error", "child-root-incomplete", "root-page-limited", "child-page-error", "known", "synced", "since", "repair"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			st := mustStore(t)
+			defer func() { require.NoError(t, st.Close()) }()
+			const rootTS, childTS = "1710000001.000000", "1710000002.000000"
+			now := time.Unix(1710000400, 0).UTC()
+			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Name: "fixture", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
+			prior := historyCoverage{Complete: true, Latest: "1710000200.000000"}
+			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", prior))
+			require.NoError(t, st.SetSyncState(ctx, SourceBot, "workspace", "T123", "2020-01-01T00:00:00Z"))
+			workspaceBefore, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='workspace'")
+			require.NoError(t, err)
+			root := map[string]any{"ts": rootTS, "channel": "C123", "text": "root", "reply_count": 0}
+			child := map[string]any{"ts": childTS, "channel": "C123", "thread_ts": rootTS, "text": "child <@U1>"}
+			if mode == "known" {
+				for _, msg := range []store.Message{
+					{WorkspaceID: "T123", ChannelID: "C123", TS: rootTS, SourceName: SourceBot, SourceRank: 2, RawJSON: "{}", UpdatedAt: now},
+					{WorkspaceID: "T123", ChannelID: "C123", TS: childTS, ThreadTS: rootTS, SourceName: SourceBot, SourceRank: 2, RawJSON: "{}", UpdatedAt: now},
+				} {
+					require.NoError(t, st.UpsertMessage(ctx, msg, nil))
+				}
+			}
+			histories, replies := 0, 0
+			var prepared []map[string]any
+			client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
+				switch r.URL.Path {
+				case "/conversations.history":
+					histories++
+					require.Equal(t, "C123", form.Get("channel"))
+					if histories == 1 && mode == "known" {
+						prepared, err = st.QueryReadOnly(ctx, "select * from sync_state where entity_type='thread_pending_v1'")
+						require.NoError(t, err)
+						require.Len(t, prepared, 1)
+					}
+					messages := []any{root, child}
+					next := "next"
+					payload := map[string]any{"ok": true}
+					switch mode {
+					case "child-root-incomplete":
+						messages, next = []any{child, root}, ""
+						payload["has_more"] = true
+					case "root-page-limited", "child-page-error":
+						first, second := any(root), any(child)
+						if mode == "child-page-error" {
+							first, second = second, first
+						}
+						if histories == 1 {
+							messages = []any{first}
+						} else if histories == 2 {
+							messages, next = []any{second}, "last"
+							if mode == "root-page-limited" {
+								next = ""
+								payload["is_limited"] = true
+							}
+						} else {
+							return map[string]any{"ok": false, "error": "synthetic_later_history_failure"}, nil
+						}
+					case "synced":
+						if histories == 1 {
+							messages = []any{map[string]any{"ts": rootTS, "channel": "C123", "text": "root", "reply_count": 1}}
+						} else if histories == 2 {
+							next = "last"
+						} else {
+							return map[string]any{"ok": false, "error": "synthetic_later_history_failure"}, nil
+						}
+					default:
+						if histories > 1 {
+							return map[string]any{"ok": false, "error": "synthetic_later_history_failure"}, nil
+						}
+					}
+					payload["messages"] = messages
+					if next != "" {
+						payload["response_metadata"] = map[string]any{"next_cursor": next}
+					}
+					return payload, nil
+				case "/conversations.replies":
+					replies++
+					require.Equal(t, "synced", mode)
+					require.Equal(t, rootTS, form.Get("ts"))
+					return map[string]any{"ok": true, "messages": []any{}}, nil
+				}
+				return primaryOwnerResponse(r.URL.Path), nil
+			})
+			client.now = func() time.Time { return now }
+			opts := SyncOptions{WorkspaceID: "T123"}
+			if mode == "since" {
+				opts.Since = "1710000000.000000"
+			}
+			if mode == "repair" {
+				err = client.repairWorkspace(ctx, st, "T123")
+			} else {
+				err = client.Sync(ctx, st, opts)
+			}
+			require.Error(t, err)
+			switch mode {
+			case "child-root-incomplete":
+				require.ErrorContains(t, err, "has_more without a continuation cursor")
+			case "root-page-limited":
+				require.ErrorContains(t, err, "completeness of the requested interval is uncertified")
+			default:
+				require.ErrorContains(t, err, "synthetic_later_history_failure")
+			}
+			require.Equal(t, map[string]int{"root-child-error": 2, "child-root-incomplete": 1, "root-page-limited": 2, "child-page-error": 3, "known": 2, "synced": 3, "since": 2, "repair": 2}[mode], histories)
+			require.Equal(t, map[bool]int{true: 1, false: 0}[mode == "synced"], replies)
+			pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+			require.NoError(t, err)
+			if mode == "synced" || mode == "since" || mode == "repair" {
+				require.Empty(t, pending)
+			} else {
+				require.Len(t, pending, 1)
+				require.Equal(t, rootTS, pending[0].TS)
+				require.NotEmpty(t, pending[0].Generation)
+			}
+			if mode == "known" {
+				after, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='thread_pending_v1'")
+				require.NoError(t, err)
+				require.Equal(t, prepared, after, "page discovery must not renew the prepared generation")
+			}
+			rows, err := st.QueryReadOnly(ctx, "select ts,coalesce(thread_ts,'') as thread_ts,source_name,source_rank from messages order by ts")
+			require.NoError(t, err)
+			require.Equal(t, []map[string]any{
+				{"ts": rootTS, "thread_ts": "", "source_name": SourceBot, "source_rank": int64(2)},
+				{"ts": childTS, "thread_ts": rootTS, "source_name": SourceBot, "source_rank": int64(2)},
+			}, rows)
+			workspaceAfter, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='workspace'")
+			require.NoError(t, err)
+			require.Equal(t, workspaceBefore, workspaceAfter)
+			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			require.NoError(t, err)
+			require.Equal(t, prior.Latest, coverage.Latest)
+			require.True(t, coverage.Complete)
+			if mode != "since" {
+				require.NotNil(t, coverage.Pending)
+			}
+		})
+	}
+}
+
 func TestTailDeletionRetiresPendingThread(t *testing.T) {
 	st := mustStore(t)
 	defer func() { require.NoError(t, st.Close()) }()

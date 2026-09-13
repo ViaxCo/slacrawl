@@ -48,13 +48,17 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 	inclusive := retentionFloor != "" && oldest == retentionFloor
 	syncedThreads := map[string]struct{}{}
 	pendingThreads := map[string]store.ThreadWork{}
+	knownThreads := map[string]struct{}{}
+	var discovery *store.ThreadWorkDiscovery
 	if source.retainedThreads {
+		discovery = &store.ThreadWorkDiscovery{SourceName: SourceUser, WorkspaceID: workspaceID, ChannelID: channel.ID, ExcludedTS: knownThreads}
 		work, err := st.PrepareThreadWork(ctx, SourceUser, workspaceID, channel.ID)
 		if err != nil {
 			return err
 		}
 		for _, item := range work {
 			pendingThreads[item.TS] = item
+			knownThreads[item.TS] = struct{}{}
 		}
 	}
 	syncThreadOnce := func(threadTS string) error {
@@ -62,6 +66,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			return nil
 		}
 		syncedThreads[threadTS] = struct{}{}
+		knownThreads[threadTS] = struct{}{}
 		threadKey := workspaceID + "|" + channel.ID + "|" + threadTS
 		var work *store.ThreadWork
 		if pending, ok := pendingThreads[threadTS]; ok {
@@ -145,7 +150,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		if err := validateMessagePage(resp.Messages, channel.ID); err != nil {
 			return fmt.Errorf("channel %s history: %w", channel.ID, err)
 		}
-		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(resp.Messages))}
+		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(resp.Messages)), ThreadDiscovery: discovery}
 		threadTSs := make([]string, 0)
 		queuedThreads := map[string]struct{}{}
 		for _, rawMsg := range resp.Messages {
@@ -160,10 +165,8 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 				SkipWorkspaceCollision: true,
 			})
 			if source.retainedThreads && msg.ReplyCount > 0 {
-				if _, known := pendingThreads[msg.Timestamp]; !known {
-					if _, synced := syncedThreads[msg.Timestamp]; !synced {
-						batch.PendingThreads = append(batch.PendingThreads, store.ThreadWork{SourceName: SourceUser, WorkspaceID: workspaceID, ChannelID: channel.ID, TS: msg.Timestamp})
-					}
+				if _, known := knownThreads[msg.Timestamp]; !known {
+					batch.PendingThreads = append(batch.PendingThreads, store.ThreadWork{SourceName: SourceUser, WorkspaceID: workspaceID, ChannelID: channel.ID, TS: msg.Timestamp})
 				}
 			}
 			if msg.ReplyCount > 0 && userRepliesAvailable {
@@ -187,6 +190,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 			for _, work := range result.PendingThreads {
 				pendingThreads[work.TS] = work
+				knownThreads[work.TS] = struct{}{}
 			}
 		}
 		for _, threadTS := range threadTSs {
@@ -222,9 +226,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		}
 		batch := store.WriteBatch{}
 		for _, root := range roots {
-			_, known := pendingThreads[root.TS]
-			_, synced := syncedThreads[root.TS]
-			if !known && !synced {
+			if _, known := knownThreads[root.TS]; !known {
 				batch.PendingThreads = append(batch.PendingThreads, store.ThreadWork{SourceName: SourceUser, WorkspaceID: workspaceID, ChannelID: channel.ID, TS: root.TS})
 			}
 		}
@@ -235,6 +237,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 			for _, work := range result.PendingThreads {
 				pendingThreads[work.TS] = work
+				knownThreads[work.TS] = struct{}{}
 			}
 		}
 		if userRepliesAvailable {

@@ -163,13 +163,7 @@ func (s *Store) ChannelThreadRoots(ctx context.Context, workspaceID, channelID s
 	return channelThreadRoots(ctx, s.db, workspaceID, channelID)
 }
 
-func channelThreadRoots(ctx context.Context, q storedb.DBTX, workspaceID, channelID string) ([]ThreadRoot, error) {
-	rows, err := q.QueryContext(ctx, `
-select m.channel_id, m.ts
-from messages m
-where m.workspace_id = ?
-  and m.channel_id = ?
-  and coalesce(m.thread_ts, '') in ('', m.ts)
+const threadRootPredicate = `coalesce(m.thread_ts, '') in ('', m.ts)
   and trim(coalesce(m.deleted_ts, '')) = ''
   and coalesce(m.subtype, '') <> 'message_deleted'
   and (
@@ -181,7 +175,13 @@ where m.workspace_id = ?
         and r.thread_ts = m.ts
         and r.ts <> m.ts
     )
-  )
+  )`
+
+func channelThreadRoots(ctx context.Context, q storedb.DBTX, workspaceID, channelID string) ([]ThreadRoot, error) {
+	rows, err := q.QueryContext(ctx, `
+select m.channel_id, m.ts
+from messages m
+where m.workspace_id = ? and m.channel_id = ? and `+threadRootPredicate+`
 order by m.ts
 `, workspaceID, channelID)
 	if err != nil {

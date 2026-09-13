@@ -48,6 +48,7 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 	}
 	result := WriteBatchResult{}
 	deleted := make(map[ThreadWork]struct{})
+	var threadMessageTSs []string
 	for _, write := range batch.Messages {
 		if _, unchanged := unchangedMessages[providerMessageKey(write.Message)]; unchanged {
 			continue
@@ -62,6 +63,9 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 		}
 		if written {
 			result.MessagesWritten++
+			if discovery := batch.ThreadDiscovery; discovery != nil && write.Message.WorkspaceID == discovery.WorkspaceID && write.Message.ChannelID == discovery.ChannelID {
+				threadMessageTSs = append(threadMessageTSs, write.Message.TS)
+			}
 			if messageDeletesThreadWork(write.Message) {
 				deleted[ThreadWork{WorkspaceID: write.Message.WorkspaceID, ChannelID: write.Message.ChannelID, TS: write.Message.TS}] = struct{}{}
 			}
@@ -74,7 +78,15 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 			return WriteBatchResult{}, err
 		}
 	}
-	result.PendingThreads, err = enqueueThreadWork(ctx, dbtx, batch.PendingThreads)
+	requests := batch.PendingThreads
+	if batch.ThreadDiscovery != nil {
+		discovered, err := discoverThreadWork(ctx, dbtx, *batch.ThreadDiscovery, threadMessageTSs)
+		if err != nil {
+			return WriteBatchResult{}, err
+		}
+		requests = append(requests, discovered...)
+	}
+	result.PendingThreads, err = enqueueThreadWork(ctx, dbtx, requests)
 	if err != nil {
 		return WriteBatchResult{}, err
 	}

@@ -26,6 +26,65 @@ type ThreadWork struct {
 	Generation  string
 }
 
+// ThreadWorkDiscovery scopes page-commit discovery to one admitted channel.
+// ExcludedTS keeps known or already attempted work on its existing generation.
+type ThreadWorkDiscovery struct {
+	SourceName  string
+	WorkspaceID string
+	ChannelID   string
+	ExcludedTS  map[string]struct{}
+}
+
+func discoverThreadWork(ctx context.Context, q storedb.DBTX, discovery ThreadWorkDiscovery, messageTSs []string) ([]ThreadWork, error) {
+	if err := validateThreadWorkSource(discovery.SourceName); err != nil {
+		return nil, err
+	}
+	owner, err := storedb.New(q).GetChannelWorkspace(ctx, discovery.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	if owner != discovery.WorkspaceID {
+		return nil, &WorkspaceCollisionError{Entity: "channel", ID: discovery.ChannelID, ExistingWorkspaceID: owner, WorkspaceID: discovery.WorkspaceID}
+	}
+	if len(messageTSs) == 0 {
+		return nil, nil
+	}
+	keys, err := json.Marshal(messageTSs)
+	if err != nil {
+		return nil, err
+	}
+	// Inspect final retained relationships only for admitted page keys. This
+	// covers both page orders without trusting a rejected child's raw fields
+	// or rescanning the channel; an arriving root can find an archived child.
+	rows, err := q.QueryContext(ctx, `select distinct m.ts from json_each(?) k
+join messages a on a.channel_id = ? and a.ts = k.value and a.workspace_id = ?
+join messages m on m.channel_id = a.channel_id and m.workspace_id = a.workspace_id
+  and m.ts = case when coalesce(a.thread_ts, '') = '' then a.ts else a.thread_ts end
+join channels c on c.id = m.channel_id and c.workspace_id = m.workspace_id
+where `+threadRootPredicate+` order by m.ts`, string(keys), discovery.ChannelID, discovery.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var requests []ThreadWork
+	for rows.Next() {
+		var ts string
+		if err := rows.Scan(&ts); err != nil {
+			return nil, err
+		}
+		if _, excluded := discovery.ExcludedTS[ts]; !excluded {
+			requests = append(requests, ThreadWork{SourceName: discovery.SourceName, WorkspaceID: discovery.WorkspaceID, ChannelID: discovery.ChannelID, TS: ts})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return requests, nil
+}
+
 func threadWorkKey(work ThreadWork) string {
 	key, _ := json.Marshal([]string{work.WorkspaceID, work.ChannelID, work.TS})
 	return string(key)

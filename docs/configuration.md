@@ -612,8 +612,9 @@ an empty or self-referencing `thread_ts` is supported. Explicit `--since`,
 untouched. Current-page thread processing keeps its existing scope.
 
 Replies work is saved locally before history can overwrite hints and in the
-same transaction as newly fetched page hints. Errors, incomplete replies and
-intentional scope skips keep it pending for a later sync. When user replies
+same transaction as fetched messages that establish roots through reply counts
+or retained child relationships. Later history errors, incomplete responses and
+intentional scope skips keep that work pending for a later sync. When user replies
 are unavailable, bot history can still complete with partial thread coverage;
 the saved work remains. Switching from bot-primary to user-primary sync keeps
 that replies work without borrowing the bot's history checkpoint.

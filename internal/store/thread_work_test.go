@@ -217,6 +217,131 @@ func TestThreadWorkPageAtomicity(t *testing.T) {
 	}
 }
 
+func TestThreadWorkDiscoveryAtPageCommit(t *testing.T) {
+	for _, mode := range []string{"root-child", "child-root", "root-page", "child-page", "foreign-child", "priority-child", "retained-child", "overwritten-child", "positive-hint", "known", "completed", "enqueue-failure", "nil", "invalid-source", "invalid-scope", "unrelated-request"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			st := openBatchTestStore(t)
+			now := time.Unix(1710000000, 0).UTC()
+			seedBatchCatalog(t, st, "T1", "C1", "U1", now)
+			root := batchMessage("C1", "1710000001.000000", "T1", "root", now)
+			child := batchMessage("C1", "1710000002.000000", "T1", "child", now)
+			child.ThreadTS = root.TS
+			discovery := &ThreadWorkDiscovery{SourceName: "api-user", WorkspaceID: "T1", ChannelID: "C1", ExcludedTS: map[string]struct{}{}}
+			batch := WriteBatch{Messages: []MessageWrite{{Message: root}, {Message: child}}, ThreadDiscovery: discovery}
+			wantSource := "api-user"
+			wantQueued := true
+			var before []map[string]any
+			switch mode {
+			case "child-root":
+				batch.Messages[0], batch.Messages[1] = batch.Messages[1], batch.Messages[0]
+			case "root-page", "child-page":
+				first, second := root, child
+				if mode == "child-page" {
+					first, second = second, first
+				}
+				result, err := st.ApplyWriteBatch(ctx, WriteBatch{Messages: []MessageWrite{{Message: first}}, ThreadDiscovery: discovery})
+				require.NoError(t, err)
+				require.Empty(t, result.PendingThreads, "one unhinted row alone does not establish an owned thread")
+				batch.Messages = []MessageWrite{{Message: second}}
+			case "foreign-child":
+				seedBatchCatalog(t, st, "T2", "C2", "U2", now)
+				foreign := child
+				foreign.WorkspaceID = "T2"
+				require.NoError(t, st.UpsertMessage(ctx, foreign, nil))
+				batch.Messages[1].SkipWorkspaceCollision = true
+				wantQueued = false
+			case "priority-child", "retained-child":
+				retained := child
+				retained.SourceName, retained.SourceRank = "api-user", 1
+				if mode == "priority-child" {
+					retained.ThreadTS = ""
+					wantQueued = false
+				} else {
+					batch.Messages[1].Message.ThreadTS = "1710000099.000000"
+				}
+				require.NoError(t, st.UpsertMessage(ctx, retained, nil))
+				batch.Messages[1].PreserveHigherPriority = true
+			case "overwritten-child", "positive-hint":
+				child.ThreadTS = "1710000099.000000"
+				batch.Messages = append(batch.Messages, MessageWrite{Message: child})
+				wantQueued = mode == "positive-hint"
+				if wantQueued {
+					batch.Messages[0].Message.ReplyCount = 1
+					batch.Messages = append(batch.Messages, MessageWrite{Message: root})
+					batch.PendingThreads = []ThreadWork{{SourceName: "api-user", WorkspaceID: "T1", ChannelID: "C1", TS: root.TS}}
+				}
+			case "known", "completed":
+				require.NoError(t, st.UpsertMessage(ctx, root, nil))
+				require.NoError(t, st.UpsertMessage(ctx, child, nil))
+				work, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+				require.NoError(t, err)
+				require.Len(t, work, 1)
+				if mode == "completed" {
+					require.NoError(t, st.CompleteThreadWork(ctx, work[0], ""))
+				}
+				discovery.ExcludedTS[root.TS] = struct{}{}
+				before, err = st.QueryReadOnly(ctx, "select * from sync_state")
+				require.NoError(t, err)
+				wantQueued = false
+			case "enqueue-failure":
+				_, err := st.DB().ExecContext(ctx, `create trigger reject_discovered_thread before insert on sync_state when new.entity_type='thread_pending_v1' begin select raise(abort,'synthetic_discovery_queue_failure'); end`)
+				require.NoError(t, err)
+			case "nil":
+				batch.ThreadDiscovery = nil
+				wantQueued = false
+			case "invalid-source":
+				discovery.SourceName = "unsupported"
+				batch.Messages = nil
+			case "invalid-scope":
+				discovery.WorkspaceID = "T2"
+				batch.Messages = nil
+			case "unrelated-request":
+				discovery.ExcludedTS[root.TS] = struct{}{}
+				wantSource = "mcp"
+				batch.PendingThreads = []ThreadWork{{SourceName: wantSource, WorkspaceID: "T1", ChannelID: "C1", TS: root.TS}}
+			}
+			result, err := st.ApplyWriteBatch(ctx, batch)
+			if mode == "enqueue-failure" || mode == "invalid-source" || mode == "invalid-scope" {
+				require.Error(t, err)
+				if mode == "enqueue-failure" {
+					require.ErrorContains(t, err, "synthetic_discovery_queue_failure")
+				} else if mode == "invalid-scope" {
+					require.True(t, IsWorkspaceCollision(err, "channel"))
+				} else {
+					require.ErrorContains(t, err, "unsupported pending thread source")
+				}
+				for _, table := range []string{"messages", "message_events", "message_event_heads", "message_mentions", "message_files", "message_fts", "sync_state"} {
+					assertBatchCount(t, st, "select count(*) from "+table, 0)
+				}
+				return
+			}
+			require.NoError(t, err)
+			if mode == "foreign-child" {
+				require.Len(t, result.CollisionsSkipped, 1)
+			}
+			if wantQueued {
+				require.Len(t, result.PendingThreads, 1)
+				work := result.PendingThreads[0]
+				require.Equal(t, wantSource, work.SourceName)
+				require.Equal(t, "T1", work.WorkspaceID)
+				require.Equal(t, "C1", work.ChannelID)
+				require.Equal(t, root.TS, work.TS)
+				require.NotEmpty(t, work.Generation)
+				pending, err := st.PendingThreadWork(ctx, wantSource, "T1", "C1")
+				require.NoError(t, err)
+				require.Equal(t, result.PendingThreads, pending)
+			} else {
+				require.Empty(t, result.PendingThreads)
+				after, err := st.QueryReadOnly(ctx, "select * from sync_state")
+				require.NoError(t, err)
+				require.Equal(t, before, after, "discovery cannot renew known work or recreate completed work")
+			}
+			requireMessageFTSParity(t, st)
+		})
+	}
+}
+
 func TestThreadWorkRejectsInconsistentParents(t *testing.T) {
 	for _, mode := range []string{"missing", "foreign", "child", "canceled"} {
 		t.Run(mode, func(t *testing.T) {
