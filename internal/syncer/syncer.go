@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/provider"
 	"github.com/openclaw/slacrawl/internal/slackapi"
@@ -77,8 +78,7 @@ func Run(ctx context.Context, cfg config.Config, st *store.Store, opts Options) 
 
 func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts Options, tokens config.Tokens) (Summary, error) {
 	summary := Summary{}
-	includeDMs := cfg.IncludeDMsResolved(tokens.User != "")
-	apiClient := slackapi.NewWithOptions(tokens, opts.APIURL, opts.HTTPClient).WithIncludeDMs(includeDMs).WithLogger(opts.Logger)
+	apiClient := slackapi.NewWithOptions(tokens, opts.APIURL, opts.HTTPClient).WithDMPolicy(admission.FromConfig(cfg.Sync.IncludeDMs)).WithLogger(opts.Logger)
 	apiOptions := slackapi.SyncOptions{
 		WorkspaceID: opts.WorkspaceID, Channels: opts.Channels,
 		ExcludeChannels: opts.ExcludeChannels, Since: opts.Since,

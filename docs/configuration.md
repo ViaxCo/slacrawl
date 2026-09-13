@@ -468,6 +468,27 @@ enabled = false
 token_env = "SLACK_USER_TOKEN"
 ```
 
+### API direct-message policy
+
+`[sync].include_dms` defaults to whether a user token is configured. Set it to
+`false` to exclude IM and MPIM conversations from API sync before channel
+metadata, history checkpoints, or messages are written.
+Under this explicit exclusion, a selected conversation without a proven public
+or private channel type fails the sync instead of being treated as complete.
+Channel allow-lists and excluded names still apply before this check.
+
+All API policies reject missing conversation IDs, conflicting context workspace
+IDs, and mismatched channel IDs in typed latest-message, history, or reply
+payloads. A rejected page is not written; earlier pages and unfinished coverage
+remain available for retry. Slack Connect authors and conversation hosts may
+belong to other workspaces and do not trigger this check.
+
+This controls future API intake only. It does not purge archived DMs, filter
+Socket Mode events or periodic tail repair, or change desktop, MCP, provider,
+or import intake.
+It does not certify the archive or a Git share as safe to publish; admitted
+messages can still contain sensitive text and file metadata.
+
 ## Desktop Source
 
 Desktop ingestion is optional and read-only.

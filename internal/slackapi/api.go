@@ -14,6 +14,7 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/store"
 )
@@ -63,7 +64,7 @@ type Client struct {
 	appToken     string
 	apiURL       string
 	httpClient   *http.Client
-	includeDMs   bool
+	dmPolicy     admission.DMPolicy
 	sleep        func(context.Context, time.Duration) error
 	now          func() time.Time
 	socketModeFn func(*slack.Client) socketModeRunner
@@ -83,7 +84,6 @@ func NewWithOptions(tokens config.Tokens, apiURL string, httpClient *http.Client
 		appToken:   tokens.App,
 		apiURL:     slack.APIURL,
 		httpClient: httpClient,
-		includeDMs: tokens.User != "",
 		sleep:      sleepContext,
 		now:        func() time.Time { return time.Now().UTC() },
 	}
@@ -115,8 +115,8 @@ func NewWithOptions(tokens config.Tokens, apiURL string, httpClient *http.Client
 	return client
 }
 
-func (c *Client) WithIncludeDMs(include bool) *Client {
-	c.includeDMs = include
+func (c *Client) WithDMPolicy(policy admission.DMPolicy) *Client {
+	c.dmPolicy = policy
 	return c
 }
 
@@ -152,7 +152,7 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 		if err == nil {
 			diag.UserAuthAvailable = true
 			diag.ThreadCoverage = "full"
-			if c.includeDMs {
+			if c.dmPolicy.Enabled(c.tokens.User != "") {
 				diag.DMsIncluded = true
 				diag.DMsMissingScope = c.dmMissingScope(ctx, resp.TeamID)
 			}
@@ -222,7 +222,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		users    []slack.User
 		userByID map[string]slack.User
 	)
-	if c.includeDMs && userRepliesAvailable && c.user != nil {
+	if c.dmPolicy.Enabled(c.tokens.User != "") && userRepliesAvailable && c.user != nil {
 		users, err = c.getUsers(ctx, c.bot)
 		if err != nil {
 			return err

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Enforce `sync.include_dms = false` before API sync persists conversation metadata or messages; reject unknown conversation types under this policy and mismatched channel identities under every policy. Existing rows and other ingestion sources are unchanged.
+
 - Report canceled concurrent API syncs as failures while preserving completed writes and the original worker error when it cancels sibling requests.
 - Reject successfully authenticated user tokens from another workspace before API sync or tail repair writes; report the mismatch in doctor while preserving bot-only coverage for missing or invalid user tokens.
 - Allow desktop/wiretap sync, watch, and all/hybrid sync to exclude unsent drafts with `[slack.desktop].include_drafts = false`; preserve the default and leave already archived drafts unchanged.

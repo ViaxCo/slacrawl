@@ -362,7 +362,10 @@ Share config:
 2. resolve tokens
 3. authenticate the bot and optional user token; reject a successful workspace mismatch before archive writes
 4. fetch workspace metadata
-5. fetch channels
+5. fetch channels, apply allow-list and excluded-name filters, then admit conversations before metadata or coverage writes:
+   - explicit `[sync].include_dms = false` skips IM/MPIM and rejects unknown or conflicting conversation types
+   - omitted/true retain the existing per-source acquisition defaults
+   - reject missing channel IDs, foreign context workspace IDs, and mismatched typed latest-message channel IDs for retained conversations under every policy
 6. derive per-channel sync window:
    - explicit `--since` wins
    - `--full` disables incremental cutoffs
@@ -371,12 +374,13 @@ Share config:
    - retain unfinished intervals across failures; observed message maxima do not certify completed backfill
    - histories without a completion checkpoint start at the permitted retention floor, including desktop-only or legacy archives
    - explicit `--since` coverage is isolated from ordinary/full history checkpoints
-7. apply any configured or CLI-provided excluded channel-name filters after channel discovery and allow-list filtering
+7. persist admitted channel metadata
 8. fetch users
 9. backfill message history
 10. when `auto_join` is enabled, attempt public-channel join and retry once on `not_in_channel`
 11. backfill thread replies only when a user token is configured and successfully authenticates to the bot's workspace
-12. normalize messages
+12. validate every message channel ID in the complete history/replies page, including nested message, previous-message, and root fields, before normalizing or writing that page; earlier pages remain resumable on failure
+   - missing message channel IDs inherit the requested conversation
    - repair malformed UTF-8 before indexing
    - normalize indexed text with NFKC
    - strip zero-width and non-printable control noise
