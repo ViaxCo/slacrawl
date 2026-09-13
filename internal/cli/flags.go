@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -107,7 +108,7 @@ func normalizeSinceTimestamp(value string) (string, error) {
 	if value == "" {
 		return "", nil
 	}
-	if _, err := strconv.ParseFloat(value, 64); err == nil {
+	if timestamp, err := strconv.ParseFloat(value, 64); err == nil && !math.IsNaN(timestamp) && !math.IsInf(timestamp, 0) {
 		return value, nil
 	}
 	if parsed, err := time.Parse(time.RFC3339, value); err == nil {

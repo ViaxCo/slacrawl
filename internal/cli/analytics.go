@@ -43,18 +43,12 @@ func (a *App) printAnalyticsUsage() {
 }
 
 func (a *App) runAnalyticsQuiet(ctx context.Context, configPath string, args []string, defaultFormat OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
-	}
-
 	fs := flag.NewFlagSet("analytics quiet", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	since := fs.String("since", "30d", "lookback window, e.g. 7d, 30d")
 	workspaceID := fs.String("workspace", "", "workspace id")
 	formatFlag := fs.String("format", string(defaultFormat), "output format: text|json|log")
 	jsonOut := fs.Bool("json", false, "json output")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
 	}
 	if err := rejectUnexpectedArgs("analytics quiet", fs.Args()); err != nil {
@@ -69,6 +63,10 @@ func (a *App) runAnalyticsQuiet(ctx context.Context, configPath string, args []s
 		return err
 	}
 
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		return err
+	}
 	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
 		return err
@@ -87,19 +85,13 @@ func (a *App) runAnalyticsQuiet(ctx context.Context, configPath string, args []s
 }
 
 func (a *App) runAnalyticsTrends(ctx context.Context, configPath string, args []string, defaultFormat OutputFormat) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return err
-	}
-
 	fs := flag.NewFlagSet("analytics trends", flag.ContinueOnError)
-	fs.SetOutput(a.Stderr)
 	weeks := fs.Int("weeks", 8, "number of weeks")
 	workspaceID := fs.String("workspace", "", "workspace id")
 	channel := fs.String("channel", "", "channel id or name")
 	formatFlag := fs.String("format", string(defaultFormat), "output format: text|json|log")
 	jsonOut := fs.Bool("json", false, "json output")
-	if err := fs.Parse(args); err != nil {
+	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
 	}
 	if err := rejectUnexpectedArgs("analytics trends", fs.Args()); err != nil {
@@ -120,6 +112,10 @@ func (a *App) runAnalyticsTrends(ctx context.Context, configPath string, args []
 		return err
 	}
 
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		return err
+	}
 	st, err := a.openReadableStore(ctx, cfg)
 	if err != nil {
 		return err
