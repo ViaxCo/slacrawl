@@ -19,6 +19,7 @@ import (
 	"github.com/slack-go/slack/socketmode"
 	"github.com/stretchr/testify/require"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/store"
 )
@@ -217,7 +218,7 @@ func TestSyncSkipsDMsWhenDisabled(t *testing.T) {
 	client := NewWithOptions(config.Tokens{
 		Bot:  "xoxb-test",
 		User: "xoxp-test",
-	}, server.URL()+"/", server.Client()).WithIncludeDMs(false)
+	}, server.URL()+"/", server.Client()).WithDMPolicy(admission.Exclude)
 	client.sleep = func(context.Context, time.Duration) error { return nil }
 
 	st := mustStore(t)
@@ -267,7 +268,7 @@ func TestSyncSkipsUnreadableThreadsAndContinues(t *testing.T) {
 	client := NewWithOptions(config.Tokens{
 		Bot:  "xoxb-test",
 		User: "xoxp-test",
-	}, server.URL()+"/", server.Client()).WithIncludeDMs(false)
+	}, server.URL()+"/", server.Client()).WithDMPolicy(admission.Exclude)
 	client.sleep = func(context.Context, time.Duration) error { return nil }
 
 	st := mustStore(t)
@@ -298,7 +299,7 @@ func TestSyncSkipsUnreadableThreadsAndContinues(t *testing.T) {
 	client = NewWithOptions(config.Tokens{
 		Bot:  "xoxb-test",
 		User: "xoxp-test",
-	}, readable.URL()+"/", readable.Client()).WithIncludeDMs(false)
+	}, readable.URL()+"/", readable.Client()).WithDMPolicy(admission.Exclude)
 	client.sleep = func(context.Context, time.Duration) error { return nil }
 
 	require.NoError(t, client.Sync(context.Background(), st, SyncOptions{Channels: []string{"C222"}}))
@@ -362,7 +363,7 @@ func TestDoctorCanDisableDMInclusion(t *testing.T) {
 	client := NewWithOptions(config.Tokens{
 		Bot:  "xoxb-test",
 		User: "xoxp-test",
-	}, server.URL()+"/", server.Client()).WithIncludeDMs(false)
+	}, server.URL()+"/", server.Client()).WithDMPolicy(admission.Exclude)
 	client.sleep = func(context.Context, time.Duration) error { return nil }
 
 	diag, err := client.Doctor(context.Background())

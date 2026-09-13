@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/store"
 )
@@ -19,7 +20,7 @@ func TestSyncRejectsSecondaryWorkspaceMismatch(t *testing.T) {
 		t.Run("requested="+workspaceID, func(t *testing.T) {
 			server := newMismatchedUserSlackServer(t)
 			defer server.Close()
-			client := NewWithOptions(config.Tokens{Bot: "xoxb-test", User: "xoxp-test"}, server.URL()+"/", server.Client()).WithIncludeDMs(false)
+			client := NewWithOptions(config.Tokens{Bot: "xoxb-test", User: "xoxp-test"}, server.URL()+"/", server.Client()).WithDMPolicy(admission.Exclude)
 			st := mustStore(t)
 			defer func() { require.NoError(t, st.Close()) }()
 			err := client.Sync(context.Background(), st, SyncOptions{WorkspaceID: workspaceID})
@@ -34,7 +35,7 @@ func TestSyncRejectsSecondaryWorkspaceMismatch(t *testing.T) {
 func TestRepairRejectsSecondaryWorkspaceMismatch(t *testing.T) {
 	server := newMismatchedUserSlackServer(t)
 	defer server.Close()
-	client := NewWithOptions(config.Tokens{Bot: "xoxb-test", User: "xoxp-test"}, server.URL()+"/", server.Client()).WithIncludeDMs(false)
+	client := NewWithOptions(config.Tokens{Bot: "xoxb-test", User: "xoxp-test"}, server.URL()+"/", server.Client()).WithDMPolicy(admission.Exclude)
 	st := mustStore(t)
 	defer func() { require.NoError(t, st.Close()) }()
 	err := client.repairWorkspace(context.Background(), st, "T123")
