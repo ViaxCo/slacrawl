@@ -66,9 +66,27 @@ slacrawl import ./my-export.zip --workspace T01234567
 slacrawl import ./extracted-export --workspace T01234567 --dry-run
 ```
 
-Directory imports confine catalog and message reads to the selected export
-root. Symlinks within that root and a symlink to the root itself are supported;
-links that escape the root are rejected.
+Set `[sync].include_dms = false` in that config to exclude known DMs before
+importing metadata or messages. Public/private channels require consistent
+workspace JSON catalog or native type evidence; unknown types and ambiguous
+ownership stop the import. `--force` does not bypass this policy.
+
+Directory reads remain confined to the export root. Contained aliases for the
+same conversation and a linked outer root are supported; two conversations
+cannot share a locator, directory, or message file. ZIP imports reject ambiguous
+entries and shared conversation payload ranges.
+
+`--dry-run` uses an existing archive read-only, or treats a missing archive as
+empty. It does not initialize runtime directories, migrate the database, or
+repair its search index. A pending repair or incompatible old schema can fail
+read-only validation. Ordinary imports still open the archive writable after
+catalog/locator admission; a later body error can leave that initialization and
+previously committed 500-message batches.
+
+The selected files and catalog are fixed during preparation. Changed, replaced,
+or missing selected files fail; new files require a new import. See
+[Slack export admission](configuration.md#slack-export-admission) for format and
+privacy limits.
 
 Desktop and Socket Mode loops serve different sources:
 
