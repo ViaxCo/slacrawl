@@ -583,6 +583,13 @@ payloads. A rejected page is not written; earlier pages and unfinished coverage
 remain available for retry. Slack Connect authors and conversation hosts may
 belong to other workspaces and do not trigger this check.
 
+API history/replies and periodic repair also reject empty or whitespace-only
+top-level message timestamps before writing any part of that page. Accepted
+timestamps stay unchanged; nested metadata and catalog latest timestamps remain
+optional, and native replies may echo their parent. Failure preserves earlier
+pages and the previous successful workspace state; retry resumes the pending
+history interval.
+
 For live Socket Mode events, omitted/true keeps accepting delivered DMs even
 without a user token. Explicit `false` skips `im`, `mpim`, and the retired
 workspace-app `app_home` DM event type before content normalization or writes,
