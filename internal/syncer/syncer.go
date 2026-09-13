@@ -96,6 +96,7 @@ func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts
 			return summary, errors.New("slack MCP source is disabled in config")
 		}
 		mcpSummary, err := slackmcp.Sync(ctx, st, slackmcp.Options{
+			DMPolicy:        admission.FromConfig(cfg.Sync.IncludeDMs),
 			WorkspaceID:     opts.WorkspaceID,
 			Channels:        opts.Channels,
 			ExcludeChannels: opts.ExcludeChannels,

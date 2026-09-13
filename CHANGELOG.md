@@ -2,13 +2,15 @@
 
 ## Unreleased
 
+- Honor explicit `sync.include_dms = false` before MCP writes using fresh native conversation evidence, including explicit IDs. Text adapters stop before data calls under this policy; native adapters report excluded DMs and leave freshness untouched when nothing is eligible. Apply channel exclusions to every returned alias of a selected ID, and reject selected catalog and retained message/context/thread identity conflicts under every policy while preserving existing payload projections and previously archived rows.
+
 - Keep MCP server response bodies, error text, parser snippets, returned identifiers, and opaque cursors out of ordinary failure diagnostics. Preserve operation/status details, cancellation detection, credential-origin restrictions, and successful intake.
 
 - Honor explicit `sync.include_dms = false` before desktop/wiretap, watch, and all/hybrid desktop writes. Omit unclassified or conflicting cache records and multi-destination drafts with any excluded destination; report omissions and reject retained container identity conflicts before writes. Existing archived rows and omitted/true defaults remain unchanged.
 
 - Honor explicit `sync.include_dms = false` in Socket Mode tailing before message, deletion, or channel metadata writes. Untyped events require conversation read access; lookup failures stop tailing without acknowledging the event. Keep omitted/true DM defaults and restrict channel metadata updates to their owning workspace.
 
-- Enforce `sync.include_dms = false` before API sync persists conversation metadata or messages; reject unknown conversation types under this policy and mismatched channel identities under every policy. Existing rows and other ingestion sources are unchanged.
+- Enforce `sync.include_dms = false` before API sync persists conversation metadata or messages; reject unknown conversation types under this policy and mismatched channel identities under every policy. Previously archived rows are unchanged.
 
 - Report canceled concurrent API syncs as failures while preserving completed writes and the original worker error when it cancels sibling requests.
 - Reject successfully authenticated user tokens from another workspace before API sync or tail repair writes; report the mismatch in doctor while preserving bot-only coverage for missing or invalid user tokens.

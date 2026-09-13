@@ -10,23 +10,10 @@ import (
 )
 
 func conversationKind(channel slack.Channel) admission.Kind {
-	// Private also describes DMs, and legacy private channels use is_group.
-	// Neither a list request's types nor an ID prefix proves the returned kind.
-	switch {
-	case channel.IsIM:
-		return admission.IM
-	case channel.IsMpIM:
-		return admission.MPIM
-	case channel.IsChannel && !channel.IsGroup:
-		if channel.IsPrivate {
-			return admission.PrivateChannel
-		}
-		return admission.PublicChannel
-	case !channel.IsChannel && channel.IsGroup && channel.IsPrivate:
-		return admission.PrivateChannel
-	default:
-		return admission.Unknown
-	}
+	return (admission.NativeFlags{
+		IsIM: channel.IsIM, IsMPIM: channel.IsMpIM,
+		IsChannel: channel.IsChannel, IsGroup: channel.IsGroup, IsPrivate: channel.IsPrivate,
+	}).Kind()
 }
 
 func (c *Client) admitChannels(workspaceID string, channels []slack.Channel) ([]slack.Channel, error) {
