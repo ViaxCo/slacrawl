@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - feat/use-crawlkit
   workflow_dispatch:
 
 permissions:
@@ -22,26 +21,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
-
-      - name: Verify module cache
-        run: go mod verify
-
-      - name: Check go.mod tidy
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
-
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
-
-      - name: Run govulncheck
-        run: '"$(go env GOPATH)/bin/govulncheck" ./...'
+      - name: Verify dependencies
+        run: make tidy-check vulncheck
 
   lint:
     runs-on: ubuntu-latest
@@ -49,70 +34,52 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+      - name: Check source and workflows
+        run: make fmt-check vet deadcode workflow-lint
 
-      - name: Check formatting
-        run: |
-          changed="$(gofmt -l .)"
-          if [ -n "$changed" ]; then
-            printf 'gofmt wants changes in:\n%s\n' "$changed"
-            exit 1
-          fi
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Install deadcode
-        run: go install golang.org/x/tools/cmd/deadcode@v0.50.0
-
-      - name: Deadcode
-        run: |
-          output_file=$(mktemp)
-          "$(go env GOPATH)/bin/deadcode" -test ./... > "$output_file"
-          if [ -s "$output_file" ]; then
-            cat "$output_file"
-            exit 1
-          fi
-
-  test:
-    runs-on: ubuntu-latest
+  test-platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            go: '1.27.1'
+            target: test-race
+          - os: macos-latest
+            go: '1.27.0'
+            target: test
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
-          cache: true
+          go-version: ${{ matrix.go }}
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Test and smoke
+        run: make ${{ matrix.target }} smoke
 
-      - name: Test
-        run: go test -count=1 ./...
-
-      - name: Build CLI
-        run: go build -ldflags "-X github.com/openclaw/slacrawl/internal/cli.version=ci" -o bin/slacrawl ./cmd/slacrawl
-
-      - name: Smoke test CLI control surface
-        run: |
-          set -euo pipefail
-          output="$(./bin/slacrawl --help 2>&1 || true)"
-          printf '%s\n' "$output"
-          printf '%s' "$output" | grep -q "Usage of slacrawl:"
-          printf '%s' "$output" | grep -q "metadata"
-          printf '%s' "$output" | grep -q "tui"
-          test "$(./bin/slacrawl --version)" = "ci"
-          ./bin/slacrawl metadata --json | grep -q '"schema_version"'
-          cfg="$RUNNER_TEMP/slacrawl.toml"
-          db="$RUNNER_TEMP/slacrawl.db"
-          ./bin/slacrawl --config "$cfg" init --db "$db"
-          ./bin/slacrawl --config "$cfg" status --json | grep -q '"databases"'
-          ./bin/slacrawl --config "$cfg" tui --json --limit 1 | grep -q '^\['
+  test:
+    if: always()
+    needs: test-platform
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every test platform
+        env:
+          RESULT: ${{ needs.test-platform.result }}
+        run: test "$RESULT" = success
 
   release-check:
     runs-on: ubuntu-latest
@@ -122,16 +89,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
-
       - name: Snapshot release build
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: 'v2.18.1'
           args: release --snapshot --clean --skip=publish

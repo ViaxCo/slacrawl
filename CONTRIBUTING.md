@@ -24,6 +24,12 @@ make build
 make check
 ```
 
+`make check` includes the race detector and workflow syntax validation. CI runs
+the race-enabled suite on Linux with Go 1.27.1 and the regular suite on macOS
+with the minimum Go 1.27.0, with Node.js 24 available for Desktop decoding tests.
+Both platforms run the same `make smoke` CLI checks. Dependency updates wait at
+least two days after release; Dependabot uses the same cooldown.
+
 Run the CLI locally:
 
 ```bash

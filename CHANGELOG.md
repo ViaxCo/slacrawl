@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update SQLite's libc runtime to 1.75.7; verify Linux with the race detector and macOS on the minimum Go 1.27.0, provision Node for decoder tests, and pin snapshot packaging to GoReleaser 2.18.1.
+
 ## 0.9.1 - 2026-09-11
 
 **Highlights:** Refresh archive runtime dependencies and security analysis tooling while retaining the Go 1.27.0 minimum.
