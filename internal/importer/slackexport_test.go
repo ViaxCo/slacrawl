@@ -242,3 +242,45 @@ func TestOpenMissingPath(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, os.ErrNotExist))
 }
+
+func TestDirectoryExportRejectsEscapingSymlinks(t *testing.T) {
+	for _, target := range []string{"users.json", "channels.json", "general", "general/2026-01-01.json"} {
+		t.Run(target, func(t *testing.T) {
+			outside := writeFixtureDir(t, minimalFixtureFiles())
+			root := t.TempDir()
+			link := filepath.Join(root, target)
+			require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o750))
+			require.NoError(t, os.Symlink(filepath.Join(outside, target), link))
+			ex, err := Open(root)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, ex.Close()) }()
+			switch target {
+			case "users.json":
+				_, err = ex.Users()
+			case "channels.json":
+				_, err = ex.Channels()
+			default:
+				var messages []MessageEnvelope
+				messages, err = collectMessages(ex, "general")
+				require.Empty(t, messages)
+			}
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestDirectoryExportAllowsContainedSymlinksAndLinkedRoot(t *testing.T) {
+	root := writeFixtureDir(t, map[string]string{
+		"data/2026-01-01.json": `[{"text":"inside","ts":"1.0"}]`,
+	})
+	require.NoError(t, os.Symlink("data", filepath.Join(root, "general")))
+	linkedRoot := filepath.Join(t.TempDir(), "export")
+	require.NoError(t, os.Symlink(root, linkedRoot))
+	ex, err := Open(linkedRoot)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, ex.Close()) }()
+	messages, err := collectMessages(ex, "general")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Equal(t, "inside", messages[0].Raw["text"])
+}

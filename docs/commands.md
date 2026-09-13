@@ -57,6 +57,10 @@ slacrawl import ./my-export.zip --workspace T01234567
 slacrawl import ./extracted-export --workspace T01234567 --dry-run
 ```
 
+Directory imports confine catalog and message reads to the selected export
+root. Symlinks within that root and a symlink to the root itself are supported;
+links that escape the root are rejected.
+
 Desktop and Socket Mode loops serve different sources:
 
 ```sh
