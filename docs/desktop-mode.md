@@ -32,6 +32,38 @@ search entries, and sync draft counts before persistence. Existing archived
 drafts remain unchanged. Desktop snapshots still read the cache; this setting
 does not remove DMs or make an existing archive safe to publish.
 
+## Excluding Direct Messages
+
+Set `[sync].include_dms = false` to exclude future desktop DM intake. The policy
+applies to desktop/wiretap sync, `watch`, and the desktop phase of all/hybrid
+sync. Omitted/true retain the existing desktop recovery behavior.
+
+Strict exclusion requires selected cache metadata that identifies a public or
+private channel. IM/MPIM flags take exclusion precedence; ID prefixes and the
+private flag alone do not prove a channel type. Conflicting or unknown type
+observations from other decoded blobs veto admission, even when a richer blob
+is selected. Historical metadata cannot supply missing selected classification.
+
+Admission runs before desktop writes. It covers channel metadata, cached
+messages, draft-derived rows, recent-channel hints, and read-marker checkpoints.
+Every destination in a draft must be eligible and resolve to the same workspace;
+otherwise the whole draft is omitted. A retained channel/message identity that
+conflicts with its cache container stops the desktop phase before any writes.
+Workspace and channel selectors still apply.
+
+Sync reports **Completed with omissions** and fixed reason counts when records
+are excluded or decoding is partial. With strict exclusion, unknown or heuristic
+message shapes and unattributed download/expandable counts are omitted. Missing
+Node prevents positive cached-channel classification. `doctor` continues to show
+raw cache diagnostics; member profiles and custom statuses remain independent
+metadata and are not anonymized by this policy.
+
+Previously archived rows are not purged. Desktop retention-floor enforcement is
+separate work; this admission policy does not prevent purged history from
+returning or certify historical DM-origin content. Persistent channel hints and
+read-marker keys also retain their existing identity model. Neither an admitted
+current channel type nor these controls certify a safe export.
+
 ## What It Does Not Yet Cover
 
 Desktop mode is still partial in a few areas:

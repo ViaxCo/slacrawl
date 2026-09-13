@@ -9,14 +9,38 @@ if (!inputPath) {
 const buffer = fs.readFileSync(inputPath);
 const value = v8.deserialize(buffer);
 
-const channels = Object.values(value.channels || {}).filter(
-  (entry) => entry && typeof entry === "object" && entry.id
+const rawChannelEntries = Object.entries(value.channels || {});
+const channelEntries = rawChannelEntries.filter(
+  ([, entry]) => entry && typeof entry === "object" && entry.id
 );
+const channels = channelEntries.map(([, entry]) => entry);
+const channelProvenance = channelEntries.map(([key, entry]) => ({
+  key: Array.isArray(value.channels) ? "" : key,
+  aliases: channelAliases(entry, true),
+}));
+// Sparse keyed entries remain exclusion evidence even when legacy selection
+// cannot retain a channel payload. Keep only identities and native type flags.
+const channelObservations = rawChannelEntries.map(([key, entry]) => {
+  const channel = entry && typeof entry === "object" ? entry : {};
+  return {
+    key: Array.isArray(value.channels) ? "" : key,
+    id: typeof channel.id === "string" ? channel.id : "",
+    aliases: channelAliases(channel, true),
+    context_team_id: typeof channel.context_team_id === "string" ? channel.context_team_id : "",
+    is_channel: channel.is_channel === true,
+    is_group: channel.is_group === true,
+    is_im: channel.is_im === true,
+    is_mpim: channel.is_mpim === true,
+    is_private: channel.is_private === true,
+  };
+});
 const members = Object.values(value.members || {}).filter(
   (entry) => entry && typeof entry === "object" && entry.id
 );
 const messages = [];
 const seenMessages = new Set();
+const messageProvenance = new Map();
+const evidenceVisits = new WeakMap();
 const workspaceId =
   value.selfTeamIds?.teamId ||
   value.selfTeamIds?.defaultWorkspaceId ||
@@ -49,7 +73,14 @@ function looksLikeMessage(entry) {
   );
 }
 
-function pushMessage(entry, fallbackChannel, fallbackTS) {
+function channelAliases(entry, includeID = false) {
+  return [...new Set([
+    ...(includeID ? [entry.id] : []),
+    entry.channel, entry.channel_id, entry.conversation, entry.conversation_id,
+  ].filter((id) => typeof id === "string" && id.trim() !== ""))];
+}
+
+function pushMessage(entry, fallbackChannel, fallbackTS, context, select) {
   if (!looksLikeMessage(entry)) {
     return;
   }
@@ -65,10 +96,21 @@ function pushMessage(entry, fallbackChannel, fallbackTS) {
     return;
   }
   const key = `${channel}|${ts}`;
-  if (seenMessages.has(key)) {
+  // Observe every alias/container before duplicate selection discards a payload.
+  const aliases = channelAliases(entry);
+  const evidence = messageProvenance.get(key) || {
+    channel, ts, aliases: [], containers: [], conflict: false, supported: false,
+  };
+  evidence.aliases = [...new Set([...evidence.aliases, ...aliases])];
+  evidence.containers = [...new Set([...evidence.containers, context.channel])];
+  evidence.conflict ||= [...aliases, context.channel]
+    .some((id) => id && id !== channel);
+  messageProvenance.set(key, evidence);
+  if (!select || seenMessages.has(key)) {
     return;
   }
   seenMessages.add(key);
+  evidence.supported = context.supported;
   messages.push({
     ...entry,
     channel,
@@ -84,22 +126,33 @@ function pushMessage(entry, fallbackChannel, fallbackTS) {
   });
 }
 
-function walkMessages(node, fallbackChannel, seenNodes) {
+function walkMessages(node, fallbackChannel, seenNodes, context, ancestors, select = true) {
   if (!node || typeof node !== "object") {
     return;
   }
-  if (seenNodes.has(node)) {
+  if (ancestors.has(node)) {
     return;
   }
-  seenNodes.add(node);
+  // Keep legacy selection while revisiting shared nodes for identity evidence.
+  select = select && !seenNodes.has(node);
+  const contextKey = JSON.stringify([context.channel, fallbackChannel, context.supported]);
+  const visited = evidenceVisits.get(node) || new Set();
+  // Revisit shared nodes for distinct identity evidence, not every DAG path.
+  // Parent timestamp-key evidence is already collected before this recursion.
+  if (!select && visited.has(contextKey)) return;
+  visited.add(contextKey);
+  evidenceVisits.set(node, visited);
+  if (select) seenNodes.add(node);
+  ancestors.add(node);
   if (Array.isArray(node)) {
     for (const entry of node) {
-      walkMessages(entry, fallbackChannel, seenNodes);
+      walkMessages(entry, fallbackChannel, seenNodes, context, ancestors, select);
     }
+    ancestors.delete(node);
     return;
   }
 
-  pushMessage(node, fallbackChannel);
+  pushMessage(node, fallbackChannel, undefined, context, select);
 
   for (const [key, child] of Object.entries(node)) {
     const nextChannel =
@@ -108,19 +161,26 @@ function walkMessages(node, fallbackChannel, seenNodes) {
       child && typeof child === "object" && !Array.isArray(child) && child.ts === undefined
         ? key
         : undefined;
+    const childContext = {
+      channel: context.channel,
+      // Supported cache containers never regain trust below an arbitrary field.
+      supported: context.supported &&
+        (/^\d+(?:\.\d+)?$/.test(key) || key === "replies" || key === "messages"),
+    };
     if (looksLikeMessage(child)) {
-      pushMessage(child, nextChannel, nextFallbackTS);
+      pushMessage(child, nextChannel, nextFallbackTS, childContext, select);
     }
-    walkMessages(child, nextChannel, seenNodes);
+    walkMessages(child, nextChannel, seenNodes, childContext, ancestors, select);
   }
+  ancestors.delete(node);
 }
 
 for (const [channelID, byTS] of Object.entries(value.messages || {})) {
-  walkMessages(byTS, channelID, new WeakSet());
+  walkMessages(byTS, channelID, new WeakSet(), { channel: channelID, supported: /^[CDG]/.test(channelID) }, new WeakSet());
 }
 
 for (const [channelID, threadState] of Object.entries(value.threads || {})) {
-  walkMessages(threadState, channelID, new WeakSet());
+  walkMessages(threadState, channelID, new WeakSet(), { channel: channelID, supported: /^[CDG]/.test(channelID) }, new WeakSet());
 }
 
 process.stdout.write(
@@ -130,5 +190,10 @@ process.stdout.write(
     channels,
     members,
     messages,
+    provenance: {
+      channels: channelProvenance,
+      observations: channelObservations,
+      messages: messages.map((message) => messageProvenance.get(`${message.channel}|${message.ts}`)),
+    },
   })
 );
