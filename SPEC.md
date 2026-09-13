@@ -66,7 +66,7 @@ Important Slack facts that drive the schema:
 
 - messages are scoped by `(channel_id, ts)`
 - threads remain message relationships via `thread_ts`
-- historical thread replies for public/private channel threads require a user token
+- Slacrawl's historical thread-reply path uses a user token for public/private channels
 - live updates should use Socket Mode when enabled
 - desktop-local data is an optional read-only source and must never become a write path
 
@@ -179,9 +179,15 @@ Must check:
 - FTS presence
 - desktop-local source availability
 - whether thread coverage can be full or only partial
-- if a configured user token authenticates successfully to the bot's workspace
-- recent API channel skips and tail connection/repair state when present
+- if a configured user token authenticates successfully, matching the bot's workspace when a bot is present
+- recent `api-bot` and `api-user` channel skips together, ordered by `updated_at DESC, entity_id ASC` with one limit of 20; retain the opened-empty array shape
+- tail connection/repair state when present; Tail requires bot and app credentials even with a valid user token
 - configured git-share repo plus last import / stale state when share mode is enabled
+
+Nested `slack_api.thread_coverage` belongs to global-token diagnostics. Top-level
+`thread_coverage` uses the named-workspace aggregate when configured. Retained
+`api-user/thread_skip` rows downgrade either full result to partial in both
+fields, without changing individual workspace diagnostics or persisted status.
 
 ### `purge`
 
@@ -324,7 +330,7 @@ Credential model:
 
 - bot token: `xoxb-`
 - app token: `xapp-`
-- optional user token: `xoxp-`
+- user token: `xoxp-`; optional beside a bot, or primary for user-only API sync
 - each token source can be enabled or disabled independently
 - desktop source can be enabled or disabled independently
 - `[slack.desktop].include_drafts` defaults to `true`; explicit `false` excludes
@@ -369,7 +375,7 @@ Share config:
 
 1. load config
 2. resolve tokens
-3. authenticate the bot and optional user token; reject a successful workspace mismatch before archive writes
+3. select the configured bot, otherwise the user, as primary for this invocation; authenticate it and reject failures without fallback. Validate the workspace and any successfully authenticated optional user before API data writes
 4. fetch workspace metadata
 5. fetch channels, apply allow-list and excluded-name filters, then admit conversations before metadata or coverage writes:
    - explicit `[sync].include_dms = false` skips IM/MPIM and rejects unknown or conflicting conversation types
@@ -384,10 +390,10 @@ Share config:
    - histories without a completion checkpoint start at the permitted retention floor, including desktop-only or legacy archives
    - explicit `--since` coverage is isolated from ordinary/full history checkpoints
 7. persist admitted channel metadata
-8. fetch users
+8. fetch users with the primary client, including the profile snapshot used for DM names
 9. backfill message history
-10. when `auto_join` is enabled, attempt public-channel join and retry once on `not_in_channel`
-11. backfill thread replies only when a user token is configured and successfully authenticates to the bot's workspace
+10. for bot-primary history only, when `auto_join` is enabled, attempt public-channel join and retry once on `not_in_channel`; user-primary history never joins and does not suppress ordinary `missing_scope` failures
+11. backfill thread replies when the user token authenticates to the selected workspace; reuse primary user authentication without another auth call
 12. validate every message channel ID in the complete history/replies page, including nested message, previous-message, and root fields, before normalizing or writing that page; earlier pages remain resumable on failure
    - missing message channel IDs inherit the requested conversation
    - after identity validation, require a nonblank top-level timestamp under every policy, including periodic repair; preserve accepted timestamp bytes
@@ -406,6 +412,8 @@ Share config:
     - a corrected retry resumes the pending interval before clearing it
     - periodic repair uses the same scan completion rules; one-message capability probes only decode responses
     - existing channel skips and join attempts remain separately recorded
+    - primary history uses `api-bot` rank 2 or `api-user` rank 1; workspace success records that source, coverage remains source-specific, and ordinary message reconciliation is unchanged
+    - Tail and periodic repair keep their bot-owned catalog/history path; selecting a primary for Sync never reassigns the stored bot client
 
 ### Slack export import
 

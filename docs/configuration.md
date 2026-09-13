@@ -519,13 +519,14 @@ Text normalization notes:
 
 ### Bot token
 
-Use the bot token for normal API sync:
+When configured, the bot token is primary for API sync:
 
 - channel discovery
 - users snapshot
 - channel history
 
-Disable it entirely if you want desktop-only operation:
+An invalid configured bot stops sync; it does not fall back to a user token.
+Disable it for user-only API sync or desktop-only operation:
 
 ```toml
 [slack.bot]
@@ -535,7 +536,8 @@ token_env = "SLACK_BOT_TOKEN"
 
 ### App token
 
-Use the app token only when you want live Socket Mode tailing:
+Use the app token with a bot token for live Socket Mode tailing. A user token
+plus an app token does not satisfy Tail's bot requirement:
 
 ```toml
 [slack.app]
@@ -553,13 +555,23 @@ token_env = "SLACK_APP_TOKEN"
 
 ### User token
 
-The user token is optional, but it upgrades historical thread coverage for public and private channels.
+Without a configured bot, API sync authenticates the user as primary for
+workspace validation, channel discovery, profiles and history. This applies to
+`api`, its `bot` alias, and the API portion of `all`. User-primary history uses
+`api-user` rank 1, never joins channels, and reports ordinary history scope
+errors. Its history coverage and successful workspace marker remain separate
+from `api-bot`; switching tokens does not borrow the bot's completed interval.
 
-The bot and user tokens must authenticate to the same workspace. API sync and
+With a bot, the user is optional. Slacrawl uses it for historical replies and
+optional DM discovery while the bot retains primary ownership.
+
+When both authenticate, bot and user tokens must belong to the same workspace. API sync and
 periodic tail repair reject a valid user token from another workspace before
 fetching data or updating the archive. Doctor reports that mismatch as
 unavailable user auth with partial thread coverage. Missing or invalid user
-tokens retain bot-only coverage.
+tokens retain bot-only coverage when a bot is primary. User-primary auth errors
+and cancellation stop Sync. CLI archive initialization and automatic share
+checks still occur before API authentication.
 
 ```toml
 [slack.user]
@@ -574,6 +586,20 @@ If you do not want user-token access at all:
 enabled = false
 token_env = "SLACK_USER_TOKEN"
 ```
+
+### Doctor coverage ownership
+
+Doctor authenticates a configured user even without a bot and fills the
+existing user availability/error fields. Bot credentials remain absent and
+Tail remains unavailable without them. Failed user auth is reported as an
+unavailable capability rather than a successful user session.
+
+In JSON, `slack_api.thread_coverage` describes global credentials; top-level
+`thread_coverage` uses the named-workspace aggregate when present. An archived
+`api-user/thread_skip` downgrades either full result to partial in both fields.
+Individual `workspace_api` diagnostics and stored `status.thread_state` remain
+unchanged. Recent channel skips combine `api-bot` and `api-user`, newest first
+with channel-ID tie ordering and one limit of 20.
 
 ### API history completeness
 

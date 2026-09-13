@@ -68,7 +68,7 @@ func (a *App) runDoctor(ctx context.Context, configPath string, args []string, f
 		return err
 	}
 	tokens := cfg.ResolveTokens()
-	diag, err := slackapi.New(tokens).WithDMPolicy(admission.FromConfig(cfg.Sync.IncludeDMs)).Doctor(ctx)
+	diag, err := slackapi.NewWithOptions(tokens, a.apiURL, a.httpClient).WithDMPolicy(admission.FromConfig(cfg.Sync.IncludeDMs)).Doctor(ctx)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
@@ -90,10 +90,9 @@ func (a *App) runDoctor(ctx context.Context, configPath string, args []string, f
 	if threadCoverage == "" {
 		threadCoverage = "partial"
 	}
-	diag.ThreadCoverage = threadCoverage
 
 	var status store.Status
-	var channelSkips []store.SyncStateRow
+	var channelSkips []map[string]any
 	var tailState []store.SyncStateRow
 	archiveProfile := archiveProfileFromConfig(cfg)
 	shareState := shareStateFromConfig(cfg)
@@ -104,7 +103,7 @@ func (a *App) runDoctor(ctx context.Context, configPath string, args []string, f
 		}
 	} else {
 		defer st.Close()
-		if threadCoverage == "full" {
+		if threadCoverage == "full" || diag.ThreadCoverage == "full" {
 			hasThreadSkips, err := st.HasSyncStateType(ctx, slackapi.SourceUser, "thread_skip")
 			if err != nil {
 				return err
@@ -126,9 +125,14 @@ func (a *App) runDoctor(ctx context.Context, configPath string, args []string, f
 		if err != nil {
 			return err
 		}
-		channelSkips, err = st.ListSyncState(ctx, "api-bot", "channel_skip", 20)
+		channelSkips, err = st.QueryReadOnly(ctx, `SELECT source_name, entity_type, entity_id, value
+			FROM sync_state WHERE source_name IN ('api-bot', 'api-user') AND entity_type = 'channel_skip'
+			ORDER BY updated_at DESC, entity_id ASC LIMIT 20`)
 		if err != nil {
 			return err
+		}
+		if channelSkips == nil {
+			channelSkips = []map[string]any{}
 		}
 		tailState, err = st.ListSyncState(ctx, "tail", "", 20)
 		if err != nil {
@@ -251,7 +255,7 @@ func (a *App) workspaceDoctorReports(ctx context.Context, cfg config.Config) ([]
 	reports := make([]map[string]any, 0, len(workspaceIDs))
 	for _, workspaceID := range workspaceIDs {
 		tokens := cfg.ResolveTokensForWorkspace(workspaceID)
-		diag, err := slackapi.New(tokens).WithDMPolicy(admission.FromConfig(cfg.Sync.IncludeDMs)).Doctor(ctx)
+		diag, err := slackapi.NewWithOptions(tokens, a.apiURL, a.httpClient).WithDMPolicy(admission.FromConfig(cfg.Sync.IncludeDMs)).Doctor(ctx)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			return nil, fmt.Errorf("doctor %s: %w", workspaceID, err)
 		}

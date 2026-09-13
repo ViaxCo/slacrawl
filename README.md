@@ -36,7 +36,7 @@ The repository also includes a [`Dockerfile`](Dockerfile) for container builds.
 
 ## Quick start
 
-Set `SLACK_BOT_TOKEN` to a bot token that can read the workspace, then replace the example workspace and channel IDs:
+Set `SLACK_BOT_TOKEN`, or `SLACK_USER_TOKEN` for user-only API sync, to a token that can read the workspace. Then replace the example workspace and channel IDs:
 
 ```sh
 slacrawl init --workspace T01234567
@@ -46,7 +46,7 @@ slacrawl search "incident"
 slacrawl tui
 ```
 
-`init` writes `~/.slacrawl/config.toml`; database-backed commands use `~/.slacrawl/slacrawl.db` by default. A user token is optional for broader thread and DM coverage; an app token is only needed for live Socket Mode tailing.
+`init` writes `~/.slacrawl/config.toml`; database-backed commands use `~/.slacrawl/slacrawl.db` by default. A configured bot takes precedence; failed bot authentication never falls back to the user token. Without a bot, the user owns discovery, profiles and history. Slacrawl uses the user token for historical replies and optional DMs. Live Socket Mode tailing still requires both bot and app tokens.
 
 Already have a Slack export? Import its ZIP or extracted directory instead of syncing from the API:
 
