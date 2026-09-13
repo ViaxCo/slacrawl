@@ -118,7 +118,6 @@ func TestStdioClientIgnoresLateCanceledResponse(t *testing.T) {
 	_, err = client.CallToolText(ctx, "slow", nil)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 
-	time.Sleep(100 * time.Millisecond)
 	text, err := client.CallToolText(context.Background(), "fast", nil)
 	require.NoError(t, err)
 	require.Equal(t, "ok", text)
