@@ -121,16 +121,13 @@ select
 	coalesce(nullif(c.name, ''), m.channel_id) as channel_name,
 	coalesce(c.kind, '') as kind,
 	count(*) as messages,
-	count(distinct case when m.thread_ts != '' and m.thread_ts = m.ts then m.ts else null end) as threads,
+	` + threadCountSQL + ` as threads,
 	count(distinct case when nullif(m.user_id, '') is not null then m.workspace_id || '|' || m.user_id end) as active_authors
 from messages m
 left join channels c on c.id = m.channel_id and c.workspace_id = m.workspace_id
-where m.ts not like 'draft:%'
-  and instr(m.ts, '.') > 0
-  and cast(substr(m.ts, 1, instr(m.ts, '.') - 1) as integer) >= ?
-  and m.ts <= ?
+where ` + messageWindowSQL + `
 `)
-	args := []any{since.Unix(), slackTSBoundary(until)}
+	args := []any{slackTSLowerBound(since), slackTSBoundary(until)}
 	if workspaceID != "" {
 		query.WriteString("  and m.workspace_id = ?\n")
 		args = append(args, workspaceID)
@@ -173,16 +170,13 @@ select
 	count(*) as total
 from messages m
 left join users u on u.id = m.user_id and u.workspace_id = m.workspace_id
-where m.ts not like 'draft:%'
-  and instr(m.ts, '.') > 0
-  and cast(substr(m.ts, 1, instr(m.ts, '.') - 1) as integer) >= ?
-  and m.ts <= ?
+where `+messageWindowSQL+`
   and m.workspace_id = ?
   and m.channel_id = ?
 group by m.workspace_id, m.user_id
 order by total desc, name asc
 limit ?
-`, since.Unix(), slackTSBoundary(until), workspaceID, channelID, limit)
+`, slackTSLowerBound(since), slackTSBoundary(until), workspaceID, channelID, limit)
 }
 
 // topMentionsForChannel returns the top mention targets for a single channel.
@@ -202,17 +196,14 @@ from message_mentions mm
 join messages m on m.channel_id = mm.channel_id and m.ts = mm.ts
 left join users u on u.id = mm.target_id and u.workspace_id = m.workspace_id
 left join channels c on c.id = mm.target_id and c.workspace_id = m.workspace_id
-where m.ts not like 'draft:%'
+where `+messageWindowSQL+`
   and mm.deleted_at is null
-  and instr(m.ts, '.') > 0
-  and cast(substr(m.ts, 1, instr(m.ts, '.') - 1) as integer) >= ?
-  and m.ts <= ?
   and m.workspace_id = ?
   and m.channel_id = ?
 group by mm.target_id
 order by total desc, name asc
 limit ?
-`, since.Unix(), slackTSBoundary(until), workspaceID, channelID, limit)
+`, slackTSLowerBound(since), slackTSBoundary(until), workspaceID, channelID, limit)
 }
 
 // digestTotals sums messages/threads/channels/authors across the whole window.
@@ -221,17 +212,14 @@ func digestTotals(ctx context.Context, db *sql.DB, since time.Time, until time.T
 	query.WriteString(`
 select
 	count(*) as messages,
-	count(distinct case when m.thread_ts != '' and m.thread_ts = m.ts then m.ts else null end) as threads,
+	` + threadCountSQL + ` as threads,
 	count(distinct m.workspace_id || '|' || m.channel_id) as channels,
 	count(distinct case when nullif(m.user_id, '') is not null then m.workspace_id || '|' || m.user_id end) as active_authors
 from messages m
 left join channels c on c.id = m.channel_id and c.workspace_id = m.workspace_id
-where m.ts not like 'draft:%'
-  and instr(m.ts, '.') > 0
-  and cast(substr(m.ts, 1, instr(m.ts, '.') - 1) as integer) >= ?
-  and m.ts <= ?
+where ` + messageWindowSQL + `
 `)
-	args := []any{since.Unix(), slackTSBoundary(until)}
+	args := []any{slackTSLowerBound(since), slackTSBoundary(until)}
 	if workspaceID != "" {
 		query.WriteString("  and m.workspace_id = ?\n")
 		args = append(args, workspaceID)
@@ -246,11 +234,6 @@ where m.ts not like 'draft:%'
 		return DigestTotals{}, fmt.Errorf("digest totals: %w", err)
 	}
 	return totals, nil
-}
-
-func slackTSBoundary(t time.Time) string {
-	t = t.UTC()
-	return fmt.Sprintf("%d.%06d", t.Unix(), t.Nanosecond()/1000)
 }
 
 // humanDuration renders a window duration as a compact human string (e.g. "7d", "36h").

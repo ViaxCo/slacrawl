@@ -116,6 +116,10 @@ Analytics commands accept workspace filters; digest and trends also accept chann
 `analytics digest --help`, `analytics quiet --help`, and `analytics trends --help`
 work before configuration has been created and also when the config is malformed.
 
+Digest and trend windows include their exact microsecond boundaries. Quiet-channel
+reports ignore messages after their advertised end time. Thread totals count each
+channel's root independently, using either its thread marker or reply metadata.
+
 ## Retention
 
 `purge` previews or deletes messages and message-owned records before an exclusive cutoff. It accepts either `--older-than` or `--before`; deletion requires `--force`.
