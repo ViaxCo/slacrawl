@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/search"
 	"github.com/openclaw/slacrawl/internal/store"
@@ -27,6 +28,7 @@ const ProtocolVersion = "slacrawl-provider-v1"
 const maxStoreBatchRecords = 1_000
 
 type Options struct {
+	DMPolicy        admission.DMPolicy
 	WorkspaceID     string
 	Channels        []string
 	ExcludeChannels []string
@@ -123,6 +125,11 @@ func SourceName(name string) string {
 }
 
 func Sync(ctx context.Context, st *store.Store, providerConfig config.Provider, opts Options) (Summary, error) {
+	// Provider v1 has no authoritative conversation evidence. Reject before
+	// checkpoint access or process launch; filtering a partial stream is too late.
+	if opts.DMPolicy == admission.Exclude {
+		return Summary{}, errors.New("external provider v1 cannot enforce sync.include_dms=false; use API sync or a supported Slack workspace JSON export")
+	}
 	workspaceID := strings.TrimSpace(opts.WorkspaceID)
 	if workspaceID == "" {
 		return Summary{}, errors.New("workspace ID is required for provider sync")

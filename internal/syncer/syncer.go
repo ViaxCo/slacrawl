@@ -123,6 +123,7 @@ func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts
 			return summary, fmt.Errorf("provider %q is not configured", name)
 		}
 		providerSummary, err := provider.Sync(ctx, st, providerConfig, provider.Options{
+			DMPolicy:    admission.FromConfig(cfg.Sync.IncludeDMs),
 			WorkspaceID: opts.WorkspaceID, Channels: opts.Channels,
 			ExcludeChannels: opts.ExcludeChannels, Since: opts.Since,
 			Full: opts.Full, LatestOnly: opts.LatestOnly, Limit: opts.Limit,

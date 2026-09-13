@@ -483,7 +483,9 @@ atomic sync, or resumable backfill; native tool arguments and text responses sta
 
 ### External provider sync
 
-1. resolve `provider:<name>` against `[[providers]]` and require a workspace ID
+1. resolve `provider:<name>` against `[[providers]]`; the provider owner rejects
+   explicit `[sync].include_dms = false` before checkpoint access or process launch,
+   then requires a workspace ID; omitted/true preserve provider behavior
 2. choose a checkpoint key from the provider name, workspace, and normalized invocation scope
    - the unfiltered incremental run uses the workspace checkpoint
    - `--since`, `--full`, `--latest-only`, channel filters, exclusions, and `--limit` use isolated scope checkpoints
@@ -518,6 +520,12 @@ as sparse workspace-bound profiles that a later real user record can enrich.
 Incremental imports enforce stored retention floors; `--full` or an explicit
 `--since` older than the floor is a deliberate restore that may reintroduce
 purged history.
+
+Provider v1's arbitrary channel kinds and opaque raw payloads do not establish
+DM exclusion. Use API sync or a supported Slack workspace JSON export for this
+policy. CLI archive initialization and earlier share/config errors retain their
+existing order. No request/checkpoint format changes, existing-DM purge, or
+safe-export qualification are implied; `include_drafts` remains Desktop-only.
 
 ### Git share sync
 
