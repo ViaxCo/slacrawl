@@ -51,7 +51,7 @@ func TestAutomaticAuthRedirects(t *testing.T) {
 }
 
 func TestAutomaticAuthRedirectCallerPolicy(t *testing.T) {
-	callerError := errors.New("caller declined redirect")
+	callerError := errors.New("caller declined redirect: " + diagnosticCanary)
 	for _, tc := range []struct {
 		name, target string
 		callbackErr  error
@@ -94,6 +94,7 @@ func TestAutomaticAuthRedirectCallerPolicy(t *testing.T) {
 				}
 				if tc.callbackErr != nil {
 					require.ErrorIs(t, err, tc.callbackErr)
+					assertSafeDiagnostic(t, err)
 				} else if tc.wantCalls == 1 {
 					require.ErrorContains(t, err, "credential origin")
 				} else {

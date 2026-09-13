@@ -3,6 +3,7 @@ package slackmcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -181,10 +182,10 @@ func (c *Client) referenceThreadMessages(ctx context.Context, tools toolset, cha
 
 func decodeReferenceResponse(raw string, response *referenceResponse) error {
 	if err := json.Unmarshal([]byte(raw), response); err != nil {
-		return err
+		return errors.New("invalid Slack API response")
 	}
 	if response.Error != "" {
-		return fmt.Errorf("Slack API error: %s", response.Error)
+		return errors.New("Slack API reported an error")
 	}
 	return nil
 }

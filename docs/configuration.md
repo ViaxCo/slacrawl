@@ -249,6 +249,14 @@ Tool discovery selects either the Codex Slack connector contract or the referenc
 
 Ctrl-C cancels MCP sync and stops its stdio server, including when the server stops reading requests and fills the stdin pipe.
 
+MCP response failures report the operation, HTTP status or JSON-RPC code when
+available, and a fixed reason. Ordinary errors omit server response bodies,
+tool names and error text, parser snippets, conversation identifiers, and opaque
+cursors. Transport errors retain cancellation/deadline detection and the
+credential-origin rejection reason without printing returned URLs. Successful
+response content and archive writes are unchanged; these diagnostics do not
+establish conversation scope or remove previously archived data.
+
 ## External Archive Providers
 
 Use `[[providers]]` to adapt another local archive to the canonical SQLite
