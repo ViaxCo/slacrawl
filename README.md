@@ -75,6 +75,11 @@ Every source feeds the same SQLite archive and search index.
 
 Treat one config and database as one visibility boundary. Keep personal and company archives in separate configs, database paths, and share remotes. See [Configuration](docs/configuration.md) for tokens, multiple workspaces, MCP, external providers, media caching, and source precedence; see [Desktop mode](docs/desktop-mode.md) for local-cache coverage and limitations.
 
+Ordinary API sync also revisits retained thread roots, keeping unfinished replies
+work across restarts and token changes. Explicit `--since` and Tail repair leave
+that backlog alone. See [Retained API threads](docs/configuration.md#retained-api-threads)
+for scope and partial-coverage behavior.
+
 External provider v1 sync rejects `[sync].include_dms = false` before reading its
 checkpoint or launching the adapter. Use API sync or a supported Slack workspace
 JSON export when excluding DMs. Omitted/true retain provider intake behavior.

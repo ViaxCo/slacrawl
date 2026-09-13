@@ -186,7 +186,7 @@ Must check:
 
 Nested `slack_api.thread_coverage` belongs to global-token diagnostics. Top-level
 `thread_coverage` uses the named-workspace aggregate when configured. Retained
-`api-user/thread_skip` rows downgrade either full result to partial in both
+`api-user/thread_skip` rows or pending API thread work downgrade either full result to partial in both
 fields, without changing individual workspace diagnostics or persisted status.
 
 ### `purge`
@@ -394,6 +394,13 @@ Share config:
 9. backfill message history
 10. for bot-primary history only, when `auto_join` is enabled, attempt public-channel join and retry once on `not_in_channel`; user-primary history never joins and does not suppress ordinary `missing_scope` failures
 11. backfill thread replies when the user token authenticates to the selected workspace; reuse primary user authentication without another auth call
+    - ordinary sync with empty `Since`, including Full, durably queues eligible retained roots before history and page-discovered roots with their message transaction; post-history discovery runs after completeness checks
+    - use `api-user`-owned workspace/channel/root jobs with generation-conditional completion; preserve jobs when hints disappear, replies fail or replies capability is unavailable
+    - reconcile retained work before completed history coverage; do not re-enqueue roots completed during the same attempt
+    - explicit Since, Full+Since, Tail repair and excluded conversations leave ordinary jobs untouched
+    - committed stored tombstones (nonempty `deleted_ts` or `subtype=message_deleted`) and purge cancel matching jobs; preparation reconciles already-stored tombstones before fetching
+    - hidden deletion events are not returned by Slack history polling; do not infer deletion from absent hints or claim polling discovers deletions
+    - pending jobs stay local across Git share, do not advance freshness timestamps, and keep API Doctor thread coverage partial; MCP consumption remains a separate change
 12. validate every message channel ID in the complete history/replies page, including nested message, previous-message, and root fields, before normalizing or writing that page; earlier pages remain resumable on failure
    - missing message channel IDs inherit the requested conversation
    - after identity validation, require a nonblank top-level timestamp under every policy, including periodic repair; preserve accepted timestamp bytes

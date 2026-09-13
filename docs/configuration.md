@@ -596,10 +596,45 @@ unavailable capability rather than a successful user session.
 
 In JSON, `slack_api.thread_coverage` describes global credentials; top-level
 `thread_coverage` uses the named-workspace aggregate when present. An archived
-`api-user/thread_skip` downgrades either full result to partial in both fields.
+`api-user/thread_skip` or pending API thread work downgrades either full result
+to partial in both fields.
 Individual `workspace_api` diagnostics and stored `status.thread_state` remain
 unchanged. Recent channel skips combine `api-bot` and `api-user`, newest first
 with channel-ID tie ordering and one limit of 20.
+
+### Retained API threads
+
+Ordinary API sync and `--full` without `--since` revisit eligible roots already
+in the selected channels, even when fetched history no longer contains their
+reply hints. Roots need a positive reply count or a distinct archived child;
+an empty or self-referencing `thread_ts` is supported. Explicit `--since`,
+`--full --since`, Tail repair and excluded conversations leave this backlog
+untouched. Current-page thread processing keeps its existing scope.
+
+Replies work is saved locally before history can overwrite hints and in the
+same transaction as newly fetched page hints. Errors, incomplete replies and
+intentional scope skips keep it pending for a later sync. When user replies
+are unavailable, bot history can still complete with partial thread coverage;
+the saved work remains. Switching from bot-primary to user-primary sync keeps
+that replies work without borrowing the bot's history checkpoint.
+
+Successful replies retire only the generation that was processed. Retained
+requests and writes recheck that generation and the parent's live ownership;
+deletion or renewal during a request discards its stale response. Full cleanup
+keeps thread-skip records while API replies work is still pending. Remaining
+retained work runs after complete history traversal and before the completed history
+horizon is saved. A replies failure can therefore stop later channel or media
+work while preserving committed messages and the pending history interval.
+
+Committed parent tombstones and local purge cancel matching work. Preparation
+also reconciles tombstones already in the archive. History polling does not
+discover hidden deletion events; see Slack's
+[message contract](https://docs.slack.dev/reference/events/message/#hidden-subtypes).
+Missing reply metadata is not deletion. The local jobs are excluded from Git
+share export/import and freshness timestamps; archive source entry counts still
+include them. A full restore clears local work along with replaced archive rows.
+This API change does not add MCP backlog processing or certify complete Slack
+capture; MCP scope handling is a separate change.
 
 ### API history completeness
 

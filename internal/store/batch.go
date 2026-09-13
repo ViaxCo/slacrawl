@@ -17,6 +17,15 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 		return WriteBatchResult{}, err
 	}
 	defer rollback()
+	if batch.ThreadGuard != nil {
+		current, err := threadWorkCurrent(ctx, dbtx, *batch.ThreadGuard)
+		if err != nil {
+			return WriteBatchResult{}, err
+		}
+		if !current {
+			return WriteBatchResult{ThreadWorkRevoked: true}, nil
+		}
+	}
 	qtx := storedb.New(dbtx)
 	for _, workspace := range batch.Workspaces {
 		if err := ensureWorkspace(ctx, dbtx, workspace); err != nil {
@@ -38,6 +47,7 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 		return WriteBatchResult{}, err
 	}
 	result := WriteBatchResult{}
+	deleted := make(map[ThreadWork]struct{})
 	for _, write := range batch.Messages {
 		if _, unchanged := unchangedMessages[providerMessageKey(write.Message)]; unchanged {
 			continue
@@ -52,7 +62,21 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 		}
 		if written {
 			result.MessagesWritten++
+			if messageDeletesThreadWork(write.Message) {
+				deleted[ThreadWork{WorkspaceID: write.Message.WorkspaceID, ChannelID: write.Message.ChannelID, TS: write.Message.TS}] = struct{}{}
+			}
 		}
+	}
+	// A later ordered write may revive the target. Only final tombstones cancel
+	// work; page hints are then saved against the final admitted parent state.
+	for key := range deleted {
+		if err := retireDeletedThreadWork(ctx, dbtx, key.WorkspaceID, key.ChannelID, key.TS); err != nil {
+			return WriteBatchResult{}, err
+		}
+	}
+	result.PendingThreads, err = enqueueThreadWork(ctx, dbtx, batch.PendingThreads)
+	if err != nil {
+		return WriteBatchResult{}, err
 	}
 	for _, state := range batch.SyncStates {
 		if err := qtx.SetSyncState(ctx, storedb.SetSyncStateParams{

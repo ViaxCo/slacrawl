@@ -42,6 +42,11 @@ func (s *Store) upsertMessage(ctx context.Context, message Message, mentions []M
 	if !written {
 		return false, nil
 	}
+	if messageDeletesThreadWork(message) {
+		if err := retireDeletedThreadWork(ctx, dbtx, message.WorkspaceID, message.ChannelID, message.TS); err != nil {
+			return false, err
+		}
+	}
 	if err := commit(); err != nil {
 		return false, err
 	}
@@ -335,6 +340,9 @@ where channel_id = ? and ts = ?
 		return false, err
 	}
 	if err := appendMessageEvent(ctx, qtx, message, updatedAt); err != nil {
+		return false, err
+	}
+	if err := retireDeletedThreadWork(ctx, dbtx, message.WorkspaceID, message.ChannelID, message.TS); err != nil {
 		return false, err
 	}
 	if err := commit(); err != nil {

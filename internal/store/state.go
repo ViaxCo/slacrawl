@@ -29,12 +29,10 @@ func (s *Store) DeleteSyncState(ctx context.Context, source, entityType, entityI
 	})
 }
 
-func (s *Store) DeleteSyncStateByTypePrefix(ctx context.Context, source, entityType, entityIDPrefix string) error {
-	return s.q.DeleteSyncStateByTypePrefix(ctx, storedb.DeleteSyncStateByTypePrefixParams{
-		SourceName:   source,
-		EntityType:   entityType,
-		EntityIDLike: entityIDPrefix + "%",
-	})
+func (s *Store) DeleteAPIThreadSkipsIfNoPending(ctx context.Context, entityIDPrefix string) error {
+	// Full sync cannot erase a newer attempt's skip while its work is pending.
+	// The SQL condition and deletion share one snapshot.
+	return s.q.DeleteAPIThreadSkipsIfNoPending(ctx, entityIDPrefix+"%")
 }
 
 func (s *Store) HasSyncStateType(ctx context.Context, source, entityType string) (bool, error) {
@@ -159,12 +157,18 @@ func parseRetentionTimestamp(value string) (float64, bool) {
 }
 
 func (s *Store) ChannelThreadRoots(ctx context.Context, workspaceID, channelID string) ([]ThreadRoot, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return channelThreadRoots(ctx, s.db, workspaceID, channelID)
+}
+
+func channelThreadRoots(ctx context.Context, q storedb.DBTX, workspaceID, channelID string) ([]ThreadRoot, error) {
+	rows, err := q.QueryContext(ctx, `
 select m.channel_id, m.ts
 from messages m
 where m.workspace_id = ?
   and m.channel_id = ?
-  and coalesce(m.thread_ts, '') = ''
+  and coalesce(m.thread_ts, '') in ('', m.ts)
+  and trim(coalesce(m.deleted_ts, '')) = ''
+  and coalesce(m.subtype, '') <> 'message_deleted'
   and (
     m.reply_count > 0
     or exists (
@@ -172,6 +176,7 @@ where m.workspace_id = ?
       where r.workspace_id = m.workspace_id
         and r.channel_id = m.channel_id
         and r.thread_ts = m.ts
+        and r.ts <> m.ts
     )
   )
 order by m.ts

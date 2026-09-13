@@ -53,7 +53,7 @@ func exportTable(ctx context.Context, db *sql.DB, dataDir, table string) (TableM
 		for i, column := range columns {
 			row[column] = exportValue(values[i])
 		}
-		if isLocalHistoryCoverage(table, row) {
+		if isLocalSyncProgress(table, row) {
 			continue
 		}
 		body, err := json.Marshal(row)
@@ -170,8 +170,8 @@ func importTableFile(ctx context.Context, tx *sql.Tx, stmt *sql.Stmt, columns []
 		if err != nil {
 			return 0, fmt.Errorf("decode %s: %w", rel, err)
 		}
-		if isLocalHistoryCoverage(table.Name, row) {
-			// Discard foreign coverage without bypassing the required-field and
+		if isLocalSyncProgress(table.Name, row) {
+			// Discard foreign progress without bypassing the required-field and
 			// SQL scalar checks that insertion previously enforced.
 			for _, column := range []string{"source_name", "entity_type", "entity_id", "value", "updated_at"} {
 				value := importValue(row[column])
@@ -233,9 +233,12 @@ func importTableFile(ctx context.Context, tx *sql.Tx, stmt *sql.Stmt, columns []
 	return rows, nil
 }
 
-func isLocalHistoryCoverage(table string, row map[string]any) bool {
-	return table == "sync_state" && row["entity_type"] == "history_coverage_v1" &&
-		(row["source_name"] == "api-bot" || row["source_name"] == "api-user")
+func isLocalSyncProgress(table string, row map[string]any) bool {
+	if table != "sync_state" {
+		return false
+	}
+	return (row["entity_type"] == "history_coverage_v1" && (row["source_name"] == "api-bot" || row["source_name"] == "api-user")) ||
+		(row["entity_type"] == "thread_pending_v1" && (row["source_name"] == "api-user" || row["source_name"] == "mcp"))
 }
 
 func synthesizeLegacySubordinateTombstone(ctx context.Context, tx *sql.Tx, row map[string]any) error {

@@ -1930,7 +1930,7 @@ func TestSyncThreadRejectsRepeatedCursor(t *testing.T) {
 	defer cancel()
 	client := NewWithOptions(config.Tokens{Bot: "xoxb-test", User: "xoxp-test"}, server.URL+"/", server.Client())
 	client.sleep = func(context.Context, time.Duration) error { return nil }
-	err := client.syncThread(ctx, st, "T123", "C123", "1710000000.000100", false, now)
+	_, err := client.syncThread(ctx, st, "T123", "C123", "1710000000.000100", false, now, nil)
 	require.ErrorContains(t, err, `conversations.replies repeated cursor "stuck"`)
 	require.Equal(t, 2, calls)
 }

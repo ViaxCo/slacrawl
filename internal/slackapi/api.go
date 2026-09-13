@@ -55,6 +55,7 @@ type SyncOptions struct {
 	Concurrency      int
 	AutoJoin         *bool
 	enforceRetention bool
+	ordinarySync     bool
 }
 
 type Client struct {
@@ -162,6 +163,9 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 }
 
 func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) error {
+	// Empty Since alone also describes Tail repair; only ordinary Sync owns
+	// the durable retained-thread backlog.
+	opts.ordinarySync = true
 	// Selection is invocation-local: Tail and its repair path still own the bot.
 	source := channelSyncSource{
 		historyClient: c.bot, token: c.tokens.Bot, sourceName: SourceBot,
@@ -297,7 +301,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	if userRepliesAvailable && !threadRepliesSkipped.Skipped() {
 		threadSkipPrefix := workspaceID + "|"
 		if opts.Full && len(opts.Channels) == 0 {
-			if err := st.DeleteSyncStateByTypePrefix(ctx, SourceUser, "thread_skip", threadSkipPrefix); err != nil {
+			if err := st.DeleteAPIThreadSkipsIfNoPending(ctx, threadSkipPrefix); err != nil {
 				return err
 			}
 		}
@@ -305,7 +309,11 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		if err != nil {
 			return err
 		}
-		if !hasThreadSkips {
+		hasPendingThreads, err := st.HasSyncStateType(ctx, SourceUser, store.ThreadPendingEntityType)
+		if err != nil {
+			return err
+		}
+		if !hasThreadSkips && !hasPendingThreads {
 			threadCoverage = "full"
 		}
 	}

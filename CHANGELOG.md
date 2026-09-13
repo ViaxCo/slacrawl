@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Persist retained-thread work during ordinary API sync, including when replies are unavailable. Resume it after lost history hints, failed replies, restarts or bot-to-user changes; keep explicit Since and Tail repair scoped. Retire work only after matching-generation success or committed tombstone/purge cleanup, keep it out of Git share and freshness timestamps, and report pending API coverage as partial.
+
 - Support user-only API sync across discovery, profiles, history and source-specific completion state; preserve configured-bot precedence, user-token replies and bot/app Tail requirements. Doctor now authenticates user-only credentials, keeps global coverage separate from named-workspace aggregation, and reports one ordered list of bot/user channel skips without changing stored status.
 
 - Reject external provider v1 sync when `sync.include_dms = false`, before checkpoint access or adapter launch. Use API sync or a supported Slack workspace JSON export for DM exclusion. Omitted/true retain provider requests and scoped cursors; existing archive rows and CLI initialization remain unchanged.
