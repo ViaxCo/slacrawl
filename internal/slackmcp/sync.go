@@ -110,6 +110,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 	}
 	restoreRequested := opts.Since != "" || opts.Full
 	summary.Users = userCount
+	var coverage messageCoverage
 	for _, channel := range selected {
 		enforceRetention, err := syncEnforcesRetention(ctx, st, workspaceID, channel.ID, oldestByChannel[channel.ID], restoreRequested)
 		if err != nil {
@@ -119,6 +120,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		if err != nil {
 			return summary, fmt.Errorf("read MCP channel: %w", err)
 		}
+		coverage.include(channelResult.coverage)
 		if channel.Name == "" {
 			channel.Name = channelResult.ChannelName
 		}
@@ -169,12 +171,21 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		}
 		sort.Strings(orderedRoots)
 		for _, threadTS := range orderedRoots {
-			replies, err := syncThread(ctx, st, client, tools, workspaceID, channel.ID, threadTS, enforceRetention, now)
+			replies, threadCoverage, err := syncThread(ctx, st, client, tools, workspaceID, channel.ID, threadTS, enforceRetention, now)
 			if err != nil {
 				return summary, err
 			}
 			summary.Replies += replies
+			coverage.include(threadCoverage)
 		}
+	}
+	// Keep valid batches and concrete errors, but never let a later successful
+	// response erase an earlier incomplete response before recording freshness.
+	if coverage.limited {
+		return summary, errors.New("native MCP coverage is incomplete because of Slack history/message limits; received messages were processed without advancing successful sync state; review Slack workspace history availability")
+	}
+	if coverage.more {
+		return summary, errors.New("native MCP history or replies are incomplete; received messages were processed without advancing successful sync state; use --source api for paginated backfill")
 	}
 	if err := st.SetSyncState(ctx, SourceName, "workspace", workspaceID, now.Format(time.RFC3339)); err != nil {
 		return summary, err
@@ -205,10 +216,10 @@ func syncEnforcesRetention(ctx context.Context, st *store.Store, workspaceID, ch
 	return store.ShouldEnforceRetention(oldest, floor, true), nil
 }
 
-func syncThread(ctx context.Context, st *store.Store, client *Client, tools toolset, workspaceID, channelID, threadTS string, enforceRetention bool, now time.Time) (int, error) {
+func syncThread(ctx context.Context, st *store.Store, client *Client, tools toolset, workspaceID, channelID, threadTS string, enforceRetention bool, now time.Time) (int, messageCoverage, error) {
 	thread, err := client.threadMessages(ctx, tools, workspaceID, channelID, threadTS)
 	if err != nil {
-		return 0, fmt.Errorf("read MCP thread: %w", err)
+		return 0, messageCoverage{}, fmt.Errorf("read MCP thread: %w", err)
 	}
 	if thread.Parent != nil && (len(thread.Replies) > 0 || thread.Parent.ReplyCount > 0 || strings.TrimSpace(thread.Parent.LatestReply) != "") {
 		thread.Parent.ReplyCount = max(thread.Parent.ReplyCount, len(thread.Replies))
@@ -216,7 +227,7 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 		if _, err := st.ApplyWriteBatch(ctx, store.WriteBatch{Messages: []store.MessageWrite{
 			toMessageWrite(workspaceID, *thread.Parent, enforceRetention, now),
 		}}); err != nil {
-			return 0, persistenceError(err)
+			return 0, thread.coverage, persistenceError(err)
 		}
 	}
 	batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(thread.Replies))}
@@ -224,13 +235,13 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 		batch.Messages = append(batch.Messages, toMessageWrite(workspaceID, reply, enforceRetention, now))
 	}
 	if len(batch.Messages) == 0 {
-		return 0, nil
+		return 0, thread.coverage, nil
 	}
 	result, err := st.ApplyWriteBatch(ctx, batch)
 	if err != nil {
-		return 0, persistenceError(err)
+		return 0, thread.coverage, persistenceError(err)
 	}
-	return result.MessagesWritten, nil
+	return result.MessagesWritten, thread.coverage, nil
 }
 
 func syncPlan(ctx context.Context, st *store.Store, workspaceID string, channels []ChannelRecord, opts Options) (map[string]string, []ChannelRecord, error) {

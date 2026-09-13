@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Report incomplete native MCP history/replies before advancing successful workspace sync state when Slack returns more-page or history/message-limit signals. Keep valid fetched writes and concrete errors; require explicit successful native responses under every DM policy without changing text adapters or tool arguments.
+
 - Reject legacy Git share imports when `sync.include_dms = false`, before acquisition or snapshot/media writes. Subscribe rejects before saving its importing configuration; automatic paths check archive staleness first. Set `share.auto_update = false` to continue local/API work. Existing rows and unfiltered publishing remain unchanged.
 
 - Honor explicit `sync.include_dms = false` before MCP writes using fresh native conversation evidence, including explicit IDs. Text adapters stop before data calls under this policy; native adapters report excluded DMs and leave freshness untouched when nothing is eligible. Apply channel exclusions to every returned alias of a selected ID, and reject selected catalog and retained message/context/thread identity conflicts under every policy while preserving existing payload projections and previously archived rows.

@@ -14,6 +14,8 @@ import (
 type referenceResponse struct {
 	OK               bool                      `json:"ok"`
 	Error            string                    `json:"error"`
+	HasMore          bool                      `json:"has_more"`
+	IsLimited        bool                      `json:"is_limited"`
 	Channels         []referenceChannel        `json:"channels"`
 	Members          []referenceUser           `json:"members"`
 	Messages         []referenceMessage        `json:"messages"`
@@ -22,6 +24,13 @@ type referenceResponse struct {
 
 type referenceResponseMetadata struct {
 	NextCursor string `json:"next_cursor"`
+}
+
+func (r referenceResponse) coverage() messageCoverage {
+	return messageCoverage{
+		more:    r.HasMore || strings.TrimSpace(r.ResponseMetadata.NextCursor) != "",
+		limited: r.IsLimited,
+	}
 }
 
 type referenceChannel struct {
@@ -156,9 +165,13 @@ func (c *Client) referenceChannelMessages(ctx context.Context, tools toolset, wo
 	if err := decodeReferenceResponse(raw, &response); err != nil {
 		return channelPage{}, fmt.Errorf("decode reference Slack channel history: %w", err)
 	}
+	if !response.OK {
+		return channelPage{}, errors.New("native MCP history did not report successful Slack response")
+	}
 	if err := validateReferenceMessages(response.Messages, workspaceID, channelID, ""); err != nil {
 		return channelPage{}, err
 	}
+	coverage := response.coverage()
 	messages := make([]MessageRecord, 0, len(response.Messages))
 	for _, message := range response.Messages {
 		if !timestampAtLeast(message.TS, oldest) {
@@ -166,7 +179,7 @@ func (c *Client) referenceChannelMessages(ctx context.Context, tools toolset, wo
 		}
 		messages = append(messages, referenceMessageRecord(channelID, message))
 	}
-	return channelPage{ChannelID: channelID, Messages: messages}, nil
+	return channelPage{ChannelID: channelID, Messages: messages, coverage: coverage}, nil
 }
 
 func (c *Client) referenceThreadMessages(ctx context.Context, tools toolset, workspaceID, channelID, threadTS string) (threadPage, error) {
@@ -181,10 +194,13 @@ func (c *Client) referenceThreadMessages(ctx context.Context, tools toolset, wor
 	if err := decodeReferenceResponse(raw, &response); err != nil {
 		return threadPage{}, fmt.Errorf("decode reference Slack thread: %w", err)
 	}
+	if !response.OK {
+		return threadPage{}, errors.New("native MCP replies did not report successful Slack response")
+	}
 	if err := validateReferenceMessages(response.Messages, workspaceID, channelID, threadTS); err != nil {
 		return threadPage{}, err
 	}
-	result := threadPage{}
+	result := threadPage{coverage: response.coverage()}
 	for i, message := range response.Messages {
 		record := referenceMessageRecord(channelID, message)
 		if message.TS == threadTS || i == 0 && result.Parent == nil {
