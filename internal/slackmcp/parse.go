@@ -2,7 +2,7 @@ package slackmcp
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
@@ -63,14 +63,14 @@ var (
 func parseChannels(raw string) (page[ChannelRecord], error) {
 	var envelope searchEnvelope
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
-		return page[ChannelRecord]{}, fmt.Errorf("decode Slack MCP channel search payload: %w", err)
+		return page[ChannelRecord]{}, errors.New("decode Slack MCP channel search payload: invalid response")
 	}
 	var channels []ChannelRecord
 	for _, block := range resultBlocks(envelope.Results) {
 		fields := parseFields(block)
 		id := firstNonEmpty(fields["Channel ID"], fields["ID"], permalinkChannelID(fields["Permalink"]))
 		if id == "" {
-			return page[ChannelRecord]{}, errorsf("channel result missing ID", block)
+			return page[ChannelRecord]{}, errors.New("Slack MCP channel result missing ID")
 		}
 		kind, private := channelKind(fields)
 		channels = append(channels, ChannelRecord{
@@ -90,14 +90,14 @@ func parseChannels(raw string) (page[ChannelRecord], error) {
 func parseUsers(raw string) (page[UserRecord], error) {
 	var envelope searchEnvelope
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
-		return page[UserRecord]{}, fmt.Errorf("decode Slack MCP user search payload: %w", err)
+		return page[UserRecord]{}, errors.New("decode Slack MCP user search payload: invalid response")
 	}
 	var users []UserRecord
 	for _, block := range resultBlocks(envelope.Results) {
 		fields := parseFields(block)
 		id := firstNonEmpty(fields["User ID"], fields["ID"])
 		if id == "" {
-			return page[UserRecord]{}, errorsf("user result missing ID", block)
+			return page[UserRecord]{}, errors.New("Slack MCP user result missing ID")
 		}
 		users = append(users, UserRecord{
 			ID:        id,
@@ -115,12 +115,12 @@ func parseUsers(raw string) (page[UserRecord], error) {
 func parseChannelMessages(raw string) (channelPage, error) {
 	var envelope messagesEnvelope
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
-		return channelPage{}, fmt.Errorf("decode Slack MCP channel payload: %w", err)
+		return channelPage{}, errors.New("decode Slack MCP channel payload: invalid response")
 	}
 	header := firstLine(envelope.Messages)
 	matches := readChannelHeaderRE.FindStringSubmatch(header)
 	if matches == nil {
-		return channelPage{}, fmt.Errorf("parse Slack MCP channel header %q", header)
+		return channelPage{}, errors.New("parse Slack MCP channel header: invalid response")
 	}
 	result := channelPage{
 		ChannelID:   matches[2],
@@ -143,7 +143,7 @@ func parseChannelMessages(raw string) (channelPage, error) {
 		}
 		identity, occurredAt, ok := strings.Cut(header, " at ")
 		if !ok {
-			return channelPage{}, fmt.Errorf("parse Slack MCP message time from %q", header)
+			return channelPage{}, errors.New("parse Slack MCP message time: invalid response")
 		}
 		name, id := parseNameID(identity)
 		text, metadata := splitMessageBodyAndMetadata(messageBody)
@@ -167,13 +167,13 @@ func parseChannelMessages(raw string) (channelPage, error) {
 func parseThreadMessages(raw, channelID string) (threadPage, error) {
 	var envelope messagesEnvelope
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
-		return threadPage{}, fmt.Errorf("decode Slack MCP thread payload: %w", err)
+		return threadPage{}, errors.New("decode Slack MCP thread payload: invalid response")
 	}
 	parentPart, repliesPart, ok := strings.Cut(envelope.Messages, "\n\n=== THREAD REPLIES")
 	if !ok {
 		parent, err := parseThreadMessage(envelope.Messages, channelID, "")
 		if err != nil {
-			return threadPage{}, fmt.Errorf("Slack MCP thread payload missing replies separator")
+			return threadPage{}, errors.New("Slack MCP thread payload missing replies separator")
 		}
 		return threadPage{Parent: &parent, NextCursor: extractCursor(envelope.PaginationInfo)}, nil
 	}
@@ -207,7 +207,7 @@ func parseThreadMessage(raw, channelID, threadTS string) (MessageRecord, error) 
 	occurredAt := fieldValue(lines, "Time: ")
 	ts := fieldValue(lines, "Message TS: ")
 	if occurredAt == "" || ts == "" {
-		return MessageRecord{}, fmt.Errorf("Slack MCP thread message missing required fields")
+		return MessageRecord{}, errors.New("Slack MCP thread message missing required fields")
 	}
 	name, id := parseNameID(from)
 	text, metadata := splitMessageBodyAndMetadata(collectAfterMessageTS(lines))
@@ -400,12 +400,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func errorsf(message, payload string) error {
-	payload = strings.TrimSpace(payload)
-	if len(payload) > 120 {
-		payload = payload[:120] + "..."
-	}
-	return fmt.Errorf("%s: %s", message, payload)
 }

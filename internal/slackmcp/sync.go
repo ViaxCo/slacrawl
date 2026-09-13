@@ -85,7 +85,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		}
 		for _, user := range users {
 			if err := st.EnsureUser(ctx, toStoreUser(workspaceID, user, now)); err != nil {
-				return Summary{}, err
+				return Summary{}, persistenceError(err)
 			}
 		}
 		userCount = len(users)
@@ -104,7 +104,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		}
 		channelResult, err := client.channelMessages(ctx, tools, channel.ID, oldestByChannel[channel.ID])
 		if err != nil {
-			return summary, fmt.Errorf("read MCP channel %s: %w", channel.ID, err)
+			return summary, fmt.Errorf("read MCP channel: %w", err)
 		}
 		if channel.Name == "" {
 			channel.Name = channelResult.ChannelName
@@ -113,7 +113,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			channel.Kind = "mcp_channel"
 		}
 		if err := st.EnsureChannel(ctx, toStoreChannel(workspaceID, channel, now)); err != nil {
-			return summary, err
+			return summary, persistenceError(err)
 		}
 		summary.Channels++
 
@@ -124,7 +124,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			if len(batch.Messages) == maxMessageBatchSize {
 				result, err := st.ApplyWriteBatch(ctx, batch)
 				if err != nil {
-					return summary, err
+					return summary, persistenceError(err)
 				}
 				summary.Messages += result.MessagesWritten
 				batch.Messages = batch.Messages[:0]
@@ -136,7 +136,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		if len(batch.Messages) > 0 {
 			result, err := st.ApplyWriteBatch(ctx, batch)
 			if err != nil {
-				return summary, err
+				return summary, persistenceError(err)
 			}
 			summary.Messages += result.MessagesWritten
 		}
@@ -169,6 +169,15 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 	return summary, nil
 }
 
+func persistenceError(err error) error {
+	// Store collisions carry response-controlled IDs. Keep their rejection
+	// actionable here without changing shared store diagnostics or transactions.
+	if store.IsWorkspaceCollision(err, "") {
+		return errors.New("store MCP data: workspace identity conflict; check the configured workspace and archive")
+	}
+	return err
+}
+
 func syncEnforcesRetention(ctx context.Context, st *store.Store, workspaceID, channelID, oldest string, restoreRequested bool) (bool, error) {
 	if !restoreRequested {
 		return true, nil
@@ -186,7 +195,7 @@ func syncEnforcesRetention(ctx context.Context, st *store.Store, workspaceID, ch
 func syncThread(ctx context.Context, st *store.Store, client *Client, tools toolset, workspaceID, channelID, threadTS string, enforceRetention bool, now time.Time) (int, error) {
 	thread, err := client.threadMessages(ctx, tools, channelID, threadTS)
 	if err != nil {
-		return 0, fmt.Errorf("read MCP thread %s/%s: %w", channelID, threadTS, err)
+		return 0, fmt.Errorf("read MCP thread: %w", err)
 	}
 	if thread.Parent != nil && (len(thread.Replies) > 0 || thread.Parent.ReplyCount > 0 || strings.TrimSpace(thread.Parent.LatestReply) != "") {
 		thread.Parent.ReplyCount = max(thread.Parent.ReplyCount, len(thread.Replies))
@@ -194,7 +203,7 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 		if _, err := st.ApplyWriteBatch(ctx, store.WriteBatch{Messages: []store.MessageWrite{
 			toMessageWrite(workspaceID, *thread.Parent, enforceRetention, now),
 		}}); err != nil {
-			return 0, err
+			return 0, persistenceError(err)
 		}
 	}
 	batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(thread.Replies))}
@@ -206,7 +215,7 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 	}
 	result, err := st.ApplyWriteBatch(ctx, batch)
 	if err != nil {
-		return 0, err
+		return 0, persistenceError(err)
 	}
 	return result.MessagesWritten, nil
 }
