@@ -94,12 +94,9 @@ select
 	cast(substr(m.ts, 1, instr(m.ts, '.') - 1) as integer) as ts_epoch
 from messages m
 left join channels c on c.id = m.channel_id and c.workspace_id = m.workspace_id
-where m.ts not like 'draft:%'
-  and instr(m.ts, '.') > 0
-  and cast(substr(m.ts, 1, instr(m.ts, '.') - 1) as integer) >= ?
-  and cast(substr(m.ts, 1, instr(m.ts, '.') - 1) as integer) <= ?
+where ` + messageWindowSQL + `
 `)
-	args := []any{since.Unix(), until.Unix()}
+	args := []any{slackTSLowerBound(since), slackTSBoundary(until)}
 	if workspaceID != "" {
 		query.WriteString("  and m.workspace_id = ?\n")
 		args = append(args, workspaceID)

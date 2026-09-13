@@ -81,10 +81,11 @@ with latest_messages as (
 	select
 		m.workspace_id,
 		m.channel_id,
-		max(cast(substr(m.ts, 1, instr(m.ts, '.') - 1) as integer)) as last_ts
+		max(m.ts) as last_ts
 	from messages m
 	where m.ts not like 'draft:%'
 	  and instr(m.ts, '.') > 0
+	  and m.ts <= ?
 	group by m.workspace_id, m.channel_id
 )
 select
@@ -92,18 +93,18 @@ select
 	c.id as channel_id,
 	coalesce(nullif(c.name, ''), c.id) as channel_name,
 	coalesce(c.kind, '') as kind,
-	lm.last_ts
+	cast(substr(lm.last_ts, 1, instr(lm.last_ts, '.') - 1) as integer)
 from channels c
 left join latest_messages lm on lm.workspace_id = c.workspace_id and lm.channel_id = c.id
 where 1 = 1
 `)
-	args := make([]any, 0, 2)
+	args := []any{slackTSBoundary(now)}
 	if workspaceID != "" {
 		query.WriteString("  and c.workspace_id = ?\n")
 		args = append(args, workspaceID)
 	}
 	query.WriteString("  and (lm.last_ts is null or lm.last_ts < ?)\n")
-	args = append(args, since.Unix())
+	args = append(args, slackTSLowerBound(since))
 	query.WriteString(`order by
 	case when lm.last_ts is null then 0 else 1 end,
 	lm.last_ts asc,

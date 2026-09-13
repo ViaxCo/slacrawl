@@ -157,9 +157,6 @@ func TestAnalyticsTrendsCommand(t *testing.T) {
 	seed := func(channelID string, weekStart time.Time, count int) {
 		for i := 0; i < count; i++ {
 			seedTime := weekStart.Add(time.Duration(i+1) * time.Hour)
-			if weekStart.Equal(currentWeekStart) {
-				seedTime = now
-			}
 			ts := fmt.Sprintf("%d.%06d", seedTime.Unix(), i+1)
 			require.NoError(t, st.UpsertMessage(ctx, store.Message{
 				ChannelID:      channelID,
