@@ -70,7 +70,9 @@ Treat one config and database as one visibility boundary. Keep personal and comp
 
 Desktop recovery includes unsent drafts by default. Set
 `[slack.desktop].include_drafts = false` to exclude future draft ingestion;
-drafts already archived remain unchanged.
+drafts already archived remain unchanged. Set `[sync].include_dms = false` to
+also exclude future desktop DM intake; unclassified cache records are omitted
+and reported. See [Desktop admission limits](docs/desktop-mode.md#excluding-direct-messages).
 
 ## Explore the archive
 

@@ -448,7 +448,15 @@ purged history.
 2. snapshot/copy source artifacts before parsing
 3. parse `storage/root-state.json`
 4. inspect IndexedDB and Local Storage artifacts
-5. ingest supported desktop-local metadata:
+5. apply `include_drafts = false`, then prepare all admitted conversation records before desktop summaries or writes:
+   - explicit `include_dms = false` requires selected native public/private channel metadata; any decoded IM/MPIM, unknown, or conflicting observation for that workspace/channel vetoes admission
+   - retain richest-state selection and legacy payload/duplicate behavior for omitted/true; preserve decoder identity evidence separately from persisted raw payloads
+   - freeze workspace/name candidates before filtering and carry each resolved owner into persistence
+   - reject otherwise retained channel/message container identity conflicts under every policy before any desktop writes
+   - under explicit `include_dms = false`, require every draft destination to pass type, workspace, and selectors and resolve to one workspace; otherwise omit the whole draft
+   - join recent/read-marker records to admitted conversations; omit unattributed download/expandable counts under explicit DM exclusion
+   - report admitted counts and bounded omission reasons, including unavailable/partial decoding; keep raw Inspect/Doctor diagnostics and independent profile/status handling
+6. ingest supported desktop-local metadata:
    - workspace/user metadata from `localConfig_v2`
    - cached channel metadata, member profiles, and channel message history from IndexedDB redux persistence blobs when `node` is available
    - cached thread roots and cached reply messages from IndexedDB redux persistence blobs when present

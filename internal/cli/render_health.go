@@ -140,10 +140,29 @@ func renderSyncBlock(w *strings.Builder, title string, value any) bool {
 		return false
 	}
 
+	var omissions []metric
+	if summary, ok := report["summary"].(map[string]any); ok {
+		if desktop, ok := summary["desktop"].(map[string]any); ok {
+			if admission, ok := desktop["admission"].(map[string]any); ok {
+				for _, reason := range []string{"dm", "unknown_conversation", "unsupported_message", "ambiguous_workspace", "out_of_scope", "unattributed_metadata", "decoder_unavailable", "decode_failures"} {
+					if intValue(admission[reason]) > 0 {
+						omissions = append(omissions, metric{strings.ReplaceAll(reason, "_", " "), shortValue(admission[reason]), ansiYellow})
+					}
+				}
+			}
+		}
+	}
 	writeTitle(w, strings.ToUpper(title))
-	w.WriteString(colorize(ansiGreen, "● Completed"))
+	if len(omissions) > 0 {
+		w.WriteString(colorize(ansiYellow, "● Completed with omissions"))
+	} else {
+		w.WriteString(colorize(ansiGreen, "● Completed"))
+	}
 	w.WriteString(colorize(ansiDim, "  local state refreshed"))
 	w.WriteByte('\n')
+	if len(omissions) > 0 {
+		writeMetricRow(w, omissions)
+	}
 
 	if status, ok := report["status"].(map[string]any); ok {
 		w.WriteByte('\n')

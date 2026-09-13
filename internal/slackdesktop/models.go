@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"strconv"
+
+	"github.com/openclaw/slacrawl/internal/admission"
 )
 
 const (
@@ -22,6 +24,7 @@ type Source struct {
 	Summary   RootStateSummary    `json:"summary"`
 	Local     LocalStorageSummary `json:"local_storage"`
 	IndexedDB IndexedDBSummary    `json:"indexeddb"`
+	Admission *AdmissionSummary   `json:"admission,omitempty"`
 	Snapshot  string              `json:"snapshot_path,omitempty"`
 }
 
@@ -30,6 +33,7 @@ type IngestOptions struct {
 	Channels        []string
 	ExcludeChannels []string
 	ExcludeDrafts   bool
+	DMPolicy        admission.DMPolicy
 }
 
 type ingestFilter struct {
