@@ -154,7 +154,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		}
 		if resp.NextCursor == "" {
 			if resp.HasMore {
-				return errors.New("conversations.history returned has_more without a continuation cursor; retry after resolving upstream pagination")
+				return errors.New("conversations.history returned has_more without a continuation cursor; scan remains incomplete; slacrawl does not support timestamp pagination")
 			}
 			break
 		}
@@ -215,7 +215,7 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 		}
 		if resp.NextCursor == "" {
 			if resp.HasMore {
-				return errors.New("conversations.replies returned has_more without a continuation cursor; retry after resolving upstream pagination")
+				return errors.New("conversations.replies returned has_more without a continuation cursor; scan remains incomplete; slacrawl does not support timestamp pagination")
 			}
 			return nil
 		}
