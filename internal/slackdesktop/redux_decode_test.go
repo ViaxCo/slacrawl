@@ -187,9 +187,11 @@ func TestExtractIndexedDBStatesCancelsHungDecoder(t *testing.T) {
 
 	orig := reduxDecoderScript
 	t.Cleanup(func() { reduxDecoderScript = orig })
-	reduxDecoderScript = "setTimeout(function () {}, 1e9)"
-
 	root := t.TempDir()
+	ready := filepath.Join(root, "decoder-ready")
+	readyJSON, err := json.Marshal(ready)
+	require.NoError(t, err)
+	reduxDecoderScript = fmt.Sprintf("require('fs').writeFileSync(%s, 'ready'); setTimeout(function () {}, 1e9)", readyJSON)
 	writeBlob(t, root, "hang-a", serializeReduxFixture(t, "T111", "U111"))
 	writeBlob(t, root, "hang-b", serializeReduxFixture(t, "T222", "U222"))
 
@@ -201,7 +203,10 @@ func TestExtractIndexedDBStatesCancelsHungDecoder(t *testing.T) {
 		done <- err
 	}()
 
-	time.Sleep(80 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(ready)
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond, "decoder did not start")
 	cancel()
 
 	select {

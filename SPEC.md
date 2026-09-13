@@ -45,8 +45,8 @@ Out of scope for V1:
 - schema: single-workspace default, multi-workspace-ready
 - search: FTS5 first, embeddings later
 - source precedence: user-token API, then bot-token API and slack-export imports, then desktop-local cache; external providers must use a numeric rank greater than `2`, and equal ranks may replace
-- files: metadata only in DB for V1
-- future file-blob backup must store Git-share media as gzip-compressed files, import those files back into raw local cache layout, and keep legacy raw-media import compatibility
+- files: metadata in SQLite, opt-in blob downloads in the local cache
+- Git sharing includes eligible cached public-channel media in its raw cache layout; a future compressed-media format must retain raw-media import compatibility
 - desktop-local source: supported Slack Desktop cache paths on macOS and Linux
 
 ## Local Environment Contract
@@ -84,7 +84,9 @@ Tables:
 - `channels`
 - `users`
 - `messages`
+- `message_files`
 - `message_events`
+- `message_event_heads`
 - `sync_state`
 - `message_mentions`
 - `embedding_jobs`
@@ -423,10 +425,10 @@ purged history.
 1. clone or open the configured share repo
 2. read `manifest.json`
 3. skip import when the manifest generation timestamp matches the last imported manifest
-4. otherwise clear canonical tables and import the sharded compressed JSONL snapshot
+4. otherwise merge the sharded compressed JSONL snapshot by stable identity; clear snapshot tables only for explicit restore
 5. rebuild FTS rows locally
 6. record last import timestamps in `sync_state`
-7. future file/media blobs must be exported as gzip-compressed share files, restored to raw local cache files during import, and keep legacy raw-media import compatibility
+7. copy eligible cached media when enabled, verify its hashes, and preserve destination-only media during routine merges
 
 ### Desktop-local sync
 
@@ -444,73 +446,24 @@ purged history.
    - custom-status state
    - IndexedDB object store inventory for drift detection
 
-## Recommended Go Package Layout
+## Go Package Layout
 
 ```text
 cmd/slacrawl/
 internal/cli/
 internal/config/
+internal/importer/
+internal/mcpclient/
+internal/media/
 internal/provider/
+internal/report/
 internal/share/
 internal/slackapi/
 internal/slackdesktop/
+internal/slackmcp/
 internal/store/
+internal/store/sqlc/      # query and schema inputs
+internal/store/storedb/   # generated sqlc wrappers
 internal/search/
 internal/syncer/
-internal/embed/
 ```
-
-## Milestones
-
-### Milestone 0
-
-- spec and contributor docs
-- schema contract
-- desktop reverse-engineering fixture plan
-
-### Milestone 1
-
-- config loader
-- `init`
-- `doctor`
-- `status`
-- DB open + migrations
-
-### Milestone 2
-
-- workspace metadata sync
-- channel sync
-- user sync
-- message backfill
-- FTS indexing
-
-### Milestone 3
-
-- thread coverage
-- search
-- sql
-- users
-- channels
-- messages
-- mentions
-
-### Milestone 4
-
-- desktop-local adapter hardening
-- source reconciliation
-
-### Milestone 5
-
-- `tail`
-- reconnect logic
-- repair loop
-
-## What The Repo Must Eventually Contain
-
-- this spec
-- README
-- CONTRIBUTING guide
-- config sample
-- schema and migration files
-- CLI contract in code
-- tests for config, search, API sync, and desktop-local parsing

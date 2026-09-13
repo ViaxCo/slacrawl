@@ -12,7 +12,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/slack-go/slack"
@@ -121,7 +120,6 @@ func (e *Export) Messages(channelName string) iter.Seq2[MessageEnvelope, error] 
 				files = append(files, name)
 			}
 		}
-		sort.Strings(files)
 
 		for _, name := range files {
 			fullPath := path.Join(channelName, name)

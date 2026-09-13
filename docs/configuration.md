@@ -391,7 +391,7 @@ stale_after = "15m"
 Behavior:
 
 - `publish` exports gzipped JSONL table shards plus `manifest.json` into `repo_path`
-- current snapshots contain metadata tables only; future file/media blobs must be gzip-compressed in the share repo, with raw-media import kept for backward compatibility
+- snapshots include eligible cached public-channel media by default; table shards are gzip-compressed and media files retain their raw cache layout
 - `subscribe` writes a git-reader config, disables Slack API and desktop sources for that config, clones the repo, and imports the snapshot
 - pass `--db` to `subscribe` when you want the reader archive to use a non-default SQLite file
 - `update` pulls and imports only when the manifest changed

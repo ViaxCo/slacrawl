@@ -79,19 +79,16 @@ func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts
 	summary := Summary{}
 	includeDMs := cfg.IncludeDMsResolved(tokens.User != "")
 	apiClient := slackapi.NewWithOptions(tokens, opts.APIURL, opts.HTTPClient).WithIncludeDMs(includeDMs).WithLogger(opts.Logger)
+	apiOptions := slackapi.SyncOptions{
+		WorkspaceID: opts.WorkspaceID, Channels: opts.Channels,
+		ExcludeChannels: opts.ExcludeChannels, Since: opts.Since,
+		Full: opts.Full, LatestOnly: opts.LatestOnly,
+		Concurrency: opts.Concurrency, AutoJoin: opts.AutoJoin,
+	}
 
 	switch opts.Source {
 	case SourceAPI:
-		return summary, apiClient.Sync(ctx, st, slackapi.SyncOptions{
-			WorkspaceID:     opts.WorkspaceID,
-			Channels:        opts.Channels,
-			ExcludeChannels: opts.ExcludeChannels,
-			Since:           opts.Since,
-			Full:            opts.Full,
-			LatestOnly:      opts.LatestOnly,
-			Concurrency:     opts.Concurrency,
-			AutoJoin:        opts.AutoJoin,
-		})
+		return summary, apiClient.Sync(ctx, st, apiOptions)
 	case SourceDesktop:
 		return syncDesktop(ctx, cfg, st, opts)
 	case SourceMCP:
@@ -111,16 +108,7 @@ func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts
 		summary.MCP = &mcpSummary
 		return summary, err
 	case SourceAll:
-		if err := apiClient.Sync(ctx, st, slackapi.SyncOptions{
-			WorkspaceID:     opts.WorkspaceID,
-			Channels:        opts.Channels,
-			ExcludeChannels: opts.ExcludeChannels,
-			Since:           opts.Since,
-			Full:            opts.Full,
-			LatestOnly:      opts.LatestOnly,
-			Concurrency:     opts.Concurrency,
-			AutoJoin:        opts.AutoJoin,
-		}); err != nil {
+		if err := apiClient.Sync(ctx, st, apiOptions); err != nil {
 			return summary, err
 		}
 		return syncDesktop(ctx, cfg, st, desktopOptionsForSourceAll(opts))

@@ -32,9 +32,8 @@ Desktop mode is still partial in a few areas:
 - attachment blobs are not downloaded
 - background file/media caches are not indexed as searchable attachments
 
-When file/blob backup is implemented, Git-share media must be stored as
-gzip-compressed snapshot files and imported back into the raw local cache layout
-with backward compatibility for older raw media entries.
+Git sharing can back up media already downloaded through the Slack API. Desktop
+ingestion itself does not download blobs. See [Git archive sharing](git-archive-sharing.md).
 
 ## Path Detection
 
