@@ -41,6 +41,9 @@ Override the config with the global `--config <path>` flag. Database, cache, and
 
 `sync` is incremental by default. `--full` deliberately removes the local history cursor; `--latest-only` skips channels that do not already have local history.
 
+`sync --since` accepts a finite Slack timestamp or RFC3339 time. Invalid numeric
+values such as `NaN` and infinity fail before opening the archive.
+
 ```sh
 slacrawl sync --source bot
 slacrawl sync --source bot --latest-only --with-media
@@ -109,6 +112,9 @@ slacrawl analytics trends --weeks 8
 ```
 
 Analytics commands accept workspace filters; digest and trends also accept channel filters.
+
+`analytics digest --help`, `analytics quiet --help`, and `analytics trends --help`
+work before configuration has been created and also when the config is malformed.
 
 ## Retention
 

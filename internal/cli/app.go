@@ -104,7 +104,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	case "digest":
 		return normalizeCommandHelp(a.runDigest(ctx, configPath, rest[1:], outputFormat))
 	case "analytics":
-		return a.runAnalytics(ctx, configPath, rest[1:], outputFormat)
+		return normalizeCommandHelp(a.runAnalytics(ctx, configPath, rest[1:], outputFormat))
 	case "publish":
 		return normalizeCommandHelp(a.runPublish(ctx, configPath, rest[1:], outputFormat))
 	case "subscribe":
