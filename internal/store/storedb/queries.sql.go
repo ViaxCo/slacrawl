@@ -1213,34 +1213,36 @@ func (q *Queries) MarkMessageDeleted(ctx context.Context, arg MarkMessageDeleted
 const renameChannel = `-- name: RenameChannel :exec
 update channels
 set name = ?, updated_at = ?
-where id = ?
+where id = ? and workspace_id = ?
 `
 
 type RenameChannelParams struct {
-	Name      string `json:"name"`
-	UpdatedAt string `json:"updated_at"`
-	ID        string `json:"id"`
+	Name        string `json:"name"`
+	UpdatedAt   string `json:"updated_at"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) RenameChannel(ctx context.Context, arg RenameChannelParams) error {
-	_, err := q.db.ExecContext(ctx, renameChannel, arg.Name, arg.UpdatedAt, arg.ID)
+	_, err := q.db.ExecContext(ctx, renameChannel, arg.Name, arg.UpdatedAt, arg.ID, arg.WorkspaceID)
 	return err
 }
 
 const setChannelArchived = `-- name: SetChannelArchived :exec
 update channels
 set is_archived = ?, updated_at = ?
-where id = ?
+where id = ? and workspace_id = ?
 `
 
 type SetChannelArchivedParams struct {
-	IsArchived int64  `json:"is_archived"`
-	UpdatedAt  string `json:"updated_at"`
-	ID         string `json:"id"`
+	IsArchived  int64  `json:"is_archived"`
+	UpdatedAt   string `json:"updated_at"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) SetChannelArchived(ctx context.Context, arg SetChannelArchivedParams) error {
-	_, err := q.db.ExecContext(ctx, setChannelArchived, arg.IsArchived, arg.UpdatedAt, arg.ID)
+	_, err := q.db.ExecContext(ctx, setChannelArchived, arg.IsArchived, arg.UpdatedAt, arg.ID, arg.WorkspaceID)
 	return err
 }
 

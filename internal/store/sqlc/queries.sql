@@ -381,12 +381,12 @@ order by c.id asc;
 -- name: RenameChannel :exec
 update channels
 set name = ?, updated_at = ?
-where id = ?;
+where id = ? and workspace_id = ?;
 
 -- name: SetChannelArchived :exec
 update channels
 set is_archived = ?, updated_at = ?
-where id = ?;
+where id = ? and workspace_id = ?;
 
 -- name: GetSyncState :one
 select value from sync_state

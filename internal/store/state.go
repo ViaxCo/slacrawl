@@ -191,19 +191,21 @@ order by m.ts
 	return roots, rows.Err()
 }
 
-func (s *Store) RenameChannel(ctx context.Context, channelID string, name string) error {
+func (s *Store) RenameChannel(ctx context.Context, workspaceID, channelID, name string) error {
 	return s.q.RenameChannel(ctx, storedb.RenameChannelParams{
-		Name:      name,
-		UpdatedAt: formatDBTime(time.Now().UTC()),
-		ID:        channelID,
+		Name:        name,
+		UpdatedAt:   formatDBTime(time.Now().UTC()),
+		ID:          channelID,
+		WorkspaceID: workspaceID,
 	})
 }
 
-func (s *Store) SetChannelArchived(ctx context.Context, channelID string, archived bool) error {
+func (s *Store) SetChannelArchived(ctx context.Context, workspaceID, channelID string, archived bool) error {
 	return s.q.SetChannelArchived(ctx, storedb.SetChannelArchivedParams{
-		IsArchived: boolInt(archived),
-		UpdatedAt:  formatDBTime(time.Now().UTC()),
-		ID:         channelID,
+		IsArchived:  boolInt(archived),
+		UpdatedAt:   formatDBTime(time.Now().UTC()),
+		ID:          channelID,
+		WorkspaceID: workspaceID,
 	})
 }
 
