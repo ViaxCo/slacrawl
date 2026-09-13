@@ -700,12 +700,20 @@ func joinScopes(scopes map[string]struct{}) string {
 	return strings.Join(out, ",")
 }
 
-func (c *Client) userAuthAvailable(ctx context.Context) bool {
+func (c *Client) userAuthAvailable(ctx context.Context, workspaceID string) (bool, error) {
 	if c.user == nil {
-		return false
+		return false, nil
 	}
-	_, err := c.authTest(ctx, c.user)
-	return err == nil
+	auth, err := c.authTest(ctx, c.user)
+	if err != nil {
+		return false, nil
+	}
+	// Invalid optional auth keeps bot-only coverage; valid auth from another
+	// workspace must stop before its replies can be stored under this workspace.
+	if _, err := authenticatedWorkspaceID(auth, workspaceID); err != nil {
+		return false, fmt.Errorf("user token: %w", err)
+	}
+	return true, nil
 }
 
 func authErrorReason(err error) string {

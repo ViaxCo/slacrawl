@@ -145,7 +145,11 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 	diag.AppTailAvailable = c.tokens.App != ""
 
 	if c.user != nil {
-		if _, err := c.authTest(ctx, c.user); err == nil {
+		userAuth, err := c.authTest(ctx, c.user)
+		if err == nil {
+			_, err = authenticatedWorkspaceID(userAuth, resp.TeamID)
+		}
+		if err == nil {
 			diag.UserAuthAvailable = true
 			diag.ThreadCoverage = "full"
 			if c.includeDMs {
@@ -172,6 +176,10 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	if err != nil {
 		return err
 	}
+	userRepliesAvailable, err := c.userAuthAvailable(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
 
 	now := c.now()
 	if err := st.UpsertWorkspace(ctx, store.Workspace{
@@ -183,7 +191,6 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	}); err != nil {
 		return err
 	}
-	userRepliesAvailable := c.userAuthAvailable(ctx)
 	threadRepliesSkipped := newThreadSkipTracker()
 
 	channels, err := c.fetchChannels(ctx, workspaceID)
