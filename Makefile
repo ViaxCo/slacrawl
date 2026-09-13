@@ -3,7 +3,7 @@ COMPLETION_DIR ?= dist/completions
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test fmt fmt-check lint tidy-check smoke check run generate-sqlc completion completion-bash completion-zsh snapshot release release-snapshot clean
+.PHONY: help build test test-race fmt fmt-check lint vet vulncheck deadcode workflow-lint tidy-check smoke check run generate-sqlc completion completion-bash completion-zsh snapshot release release-snapshot clean
 
 help:
 	@printf '%s\n' \
@@ -11,6 +11,7 @@ help:
 		'  help              Print available targets (default).' \
 		'  build             Build the CLI into $(BINARY).' \
 		'  test              Run the full Go test suite.' \
+		'  test-race         Run the full suite with the race detector.' \
 		'  fmt               Apply Go formatting.' \
 		'  lint              Run vet, vulnerability, and dead-code checks.' \
 		'  check             Run every local gate enforced by CI.' \
@@ -28,6 +29,9 @@ build:
 test:
 	GOWORK=off go test -count=1 ./...
 
+test-race:
+	GOWORK=off go test -race -count=1 ./...
+
 fmt:
 	gofmt -w cmd internal
 
@@ -36,9 +40,18 @@ fmt-check:
 	changed="$$(gofmt -l .)"; \
 	if [ -n "$$changed" ]; then printf 'gofmt wants changes in:\n%s\n' "$$changed"; exit 1; fi
 
-lint:
+lint: vet vulncheck deadcode workflow-lint
+
+vet:
 	GOWORK=off go vet ./...
+
+vulncheck:
 	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+workflow-lint:
+	GOWORK=off go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+deadcode:
 	@set -e; \
 	output_file="$$(mktemp)"; \
 	trap 'rm -f "$$output_file"' EXIT; \
@@ -55,7 +68,7 @@ smoke:
 	binary="$$tmpdir/slacrawl"; \
 	trap 'rm -rf "$$tmpdir"' EXIT; \
 	GOWORK=off go build -ldflags "-X github.com/openclaw/slacrawl/internal/cli.version=ci" -o "$$binary" ./cmd/slacrawl; \
-	output="$$("$$binary" --help 2>&1 || true)"; \
+	output="$$("$$binary" --help 2>&1)"; \
 	printf '%s\n' "$$output"; \
 	printf '%s' "$$output" | grep -q 'Usage of slacrawl:'; \
 	printf '%s' "$$output" | grep -q metadata; \
@@ -69,7 +82,7 @@ smoke:
 	tui_output="$$("$$binary" --config "$$tmpdir/slacrawl.toml" tui --json --limit 1)"; \
 	printf '%s' "$$tui_output" | grep -q '^\['
 
-check: tidy-check fmt-check lint test smoke snapshot
+check: tidy-check fmt-check lint test-race smoke snapshot
 
 run:
 	go run ./cmd/slacrawl $(ARGS)
