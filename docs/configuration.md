@@ -569,8 +569,9 @@ token_env = "SLACK_USER_TOKEN"
 API sync and periodic tail repair follow every nonempty history/replies cursor,
 even when a page is short or empty. After writing a valid page and handling its
 scheduled threads, a terminal `has_more = true` without a continuation cursor
-stops the scan with an error. Resolve the upstream pagination problem before
-retrying; slacrawl does not substitute timestamp pagination.
+stops the scan with an error. slacrawl does not support timestamp pagination
+to continue without a cursor. Unchanged responses leave the same interval
+pending on retry.
 
 History `is_limited = true` is retained across accessible pages. Once those
 pages have been traversed, the scan reports that completeness of the requested

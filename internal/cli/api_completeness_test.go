@@ -28,8 +28,8 @@ func TestAPIHistoryCompletenessFromCLI(t *testing.T) {
 	const priorLatest = "1709900000.000000"
 	const attemptedOldest = "1709896400.000000"
 	const parentTS = "1710000001.000000"
-	const historyError = "conversations.history returned has_more without a continuation cursor; retry after resolving upstream pagination"
-	const repliesError = "conversations.replies returned has_more without a continuation cursor; retry after resolving upstream pagination"
+	const historyError = "conversations.history returned has_more without a continuation cursor; scan remains incomplete; slacrawl does not support timestamp pagination"
+	const repliesError = "conversations.replies returned has_more without a continuation cursor; scan remains incomplete; slacrawl does not support timestamp pagination"
 	const limitedError = "Slack reported a history/message limit; completeness of the requested interval is uncertified; review workspace history availability"
 	for _, tc := range []struct {
 		name, wantError string
