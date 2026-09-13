@@ -153,6 +153,10 @@ func (c *Client) repairWorkspace(ctx context.Context, st *store.Store, workspace
 	if c.bot == nil {
 		return errors.New("SLACK_BOT_TOKEN is required for repair")
 	}
+	userRepliesAvailable, err := c.userAuthAvailable(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
 	channels, err := c.fetchChannels(ctx, workspaceID)
 	if err != nil {
 		return err
@@ -163,7 +167,7 @@ func (c *Client) repairWorkspace(ctx context.Context, st *store.Store, workspace
 	// would strand its pending interval after a partially committed attempt.
 	if err := c.syncChannels(ctx, st, workspaceID, channels, SyncOptions{
 		enforceRetention: true,
-	}, now, c.userAuthAvailable(ctx), threadRepliesSkipped); err != nil {
+	}, now, userRepliesAvailable, threadRepliesSkipped); err != nil {
 		return err
 	}
 	if threadRepliesSkipped.Skipped() {
