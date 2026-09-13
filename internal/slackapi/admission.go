@@ -3,6 +3,7 @@ package slackapi
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/slack-go/slack"
 
@@ -57,6 +58,9 @@ func validateMessagePage(messages []rawConversationMessage, channelID string) er
 	for _, message := range messages {
 		if err := validateMessageChannel(message.Message, channelID); err != nil {
 			return err
+		}
+		if strings.TrimSpace(message.Message.Timestamp) == "" {
+			return errors.New("message is missing a timestamp")
 		}
 	}
 	return nil
