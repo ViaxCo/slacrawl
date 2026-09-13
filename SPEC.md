@@ -421,10 +421,20 @@ Share config:
 6. retain existing priority, retention, request defaults, and payload projections
    for omitted/true; return fixed omission counts and preserve earlier successful
    history commits if a later request fails
+7. require explicit `ok=true` on native history/replies under every DM policy;
+   retain response `has_more`/nonblank next-cursor and `is_limited` facts before
+   local filtering, accumulating them across later successes and empty results
+8. process valid bounded writes, but return a fixed incomplete-coverage error
+   before final MCP workspace freshness if any native history/replies response reports more pages
+   or a Slack history/message limit; concrete errors win and the prior complete
+   freshness row remains unchanged, while metadata/message-derived cursors may change
 
 Configured workspace identity without returned context remains operator-bound,
 not authenticated proof. Existing reference history pagination and MCP coverage
 limits remain; no existing rows are purged and no export certification is implied.
+`is_limited` denotes Slack's documented free-workspace message limit, not every
+access/retention restriction. This is visible partial coverage, not pagination,
+atomic sync, or resumable backfill; native tool arguments and text responses stay unchanged.
 
 ### External provider sync
 

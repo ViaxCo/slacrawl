@@ -68,6 +68,10 @@ Every source feeds the same SQLite archive and search index.
 
 Treat one config and database as one visibility boundary. Keep personal and company archives in separate configs, database paths, and share remotes. See [Configuration](docs/configuration.md) for tokens, multiple workspaces, MCP, external providers, media caching, and source precedence; see [Desktop mode](docs/desktop-mode.md) for local-cache coverage and limitations.
 
+Native MCP history/replies responses that report more pages or Slack history/message limits
+retain valid fetched writes but stop with an error before advancing successful
+sync state. See [native response coverage](docs/configuration.md#native-response-coverage).
+
 Desktop recovery includes unsent drafts by default. Set
 `[slack.desktop].include_drafts = false` to exclude future draft ingestion;
 drafts already archived remain unchanged. Set `[sync].include_dms = false` to

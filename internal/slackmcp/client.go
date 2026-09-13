@@ -59,12 +59,25 @@ type channelPage struct {
 	ChannelName string
 	Messages    []MessageRecord
 	NextCursor  string
+	coverage    messageCoverage
 }
 
 type threadPage struct {
 	Parent     *MessageRecord
 	Replies    []MessageRecord
 	NextCursor string
+	coverage   messageCoverage
+}
+
+// Coverage is response evidence, not persisted message data or a reusable cursor.
+type messageCoverage struct {
+	more    bool
+	limited bool
+}
+
+func (c *messageCoverage) include(next messageCoverage) {
+	c.more = c.more || next.more
+	c.limited = c.limited || next.limited
 }
 
 func New(ctx context.Context, cfg config.MCPConfig, httpClient *http.Client) (*Client, error) {

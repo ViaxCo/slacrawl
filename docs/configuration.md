@@ -225,7 +225,7 @@ ID is not sent to custom origins; configure a dedicated `account_id_env` when
 the custom server needs one. Explicit custom-server tokens and stdio remain
 supported.
 
-`max_pages` bounds each users, channels, channel-history, and thread pagination loop; hitting the bound returns an error instead of silently accepting an incomplete page set. The Codex HTTP connector accepts at most 20 channel or user search results per request. With `include_dms` omitted/true, explicit channel IDs avoid global channel and user enumeration. Normal MCP sync overlaps the latest stored message timestamp per channel by one hour and rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply; `--full` removes the local channel cursor, while `--latest-only` skips channels with no local history. MCP is an explicit source and is not included in `--source all`.
+`max_pages` bounds the text connector's users, channels, channel-history, and thread pagination loops and the native reference adapter's users/channels loops; hitting the bound returns an error instead of silently accepting an incomplete page set. Native history/replies tools do not accept pagination arguments. The Codex HTTP connector accepts at most 20 channel or user search results per request. With `include_dms` omitted/true, explicit channel IDs avoid global channel and user enumeration. Normal MCP sync overlaps the latest stored message timestamp per channel by one hour and rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply; `--full` removes the local channel cursor, while `--latest-only` skips channels with no local history. MCP is an explicit source and is not included in `--source all`.
 
 The text connector's channel search response may omit privacy metadata. With `include_dms` omitted/true, those channels remain locally searchable with kind `mcp_channel`, recording unknown classification. Legacy `publish` still includes these archive rows; that kind is not an export privacy filter.
 
@@ -246,6 +246,34 @@ max_pages = 250
 The subprocess receives a minimal environment plus known Slack/Codex token variables and any names listed in `env_allowlist`; secrets are not passed through TOML fields. The reference server exposes public or explicitly configured channels and does not paginate channel history. Therefore each sync imports only the latest `page_size` messages returned by `slack_get_channel_history`; `--since` filters that fetched window locally and `--full` cannot extend the server's history window. Channel and user listing still paginate normally. The npm package is deprecated and its upstream repository is archived, but this adapter supports its published tool contract.
 
 Tool discovery selects either the Codex Slack connector contract or the reference `slack_list_channels`, `slack_get_channel_history`, `slack_get_thread_replies`, and `slack_get_users` contract.
+
+### Native response coverage
+
+Under every DM policy, native history and replies require `ok=true` before
+processing that response. A missing or false value stops the sync; earlier
+committed batches remain. The text connector's response contract is unchanged.
+
+Native `has_more=true` or a nonblank `response_metadata.next_cursor` reports
+additional pages. The reference tools cannot request those pages. Slacrawl
+processes valid fetched messages and later selected conversations, then returns
+an incomplete-history error instead of printing completion or advancing the
+successful MCP workspace sync record. Use `--source api` for paginated backfill.
+The flag survives local timestamp filtering and empty thread results; a later
+successful response cannot clear it. Concrete request, identity, or storage
+errors take precedence.
+
+`is_limited=true` reports a separate Slack history/message limit. Slack documents
+this flag for earlier messages beyond a free workspace's message limit; it does
+not detect every access or retention restriction. Slacrawl preserves the same
+successful-sync record and asks the operator to review workspace history
+availability. API pagination cannot restore messages Slack does not expose.
+
+These checks preserve valid writes, not whole-sync atomicity. Channel metadata
+and message-derived incremental cursors may change even when the old successful
+workspace sync record remains. No opaque cursor is stored or printed, and the
+checks do not establish complete history or resumable backfill. See Slack's
+[history](https://docs.slack.dev/reference/methods/conversations.history/) and
+[replies](https://docs.slack.dev/reference/methods/conversations.replies/) contracts.
 
 ### MCP direct-message policy
 
