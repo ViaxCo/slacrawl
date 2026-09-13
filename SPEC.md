@@ -493,6 +493,18 @@ Share config:
    before final MCP workspace freshness if any native history/replies response reports more pages
    or a Slack history/message limit; concrete errors win and the prior complete
    freshness row remains unchanged, while metadata/message-derived cursors may change
+9. with empty Since and a thread tool, preserve retained reply hints before history
+   writes and save new page hints atomically with their message batches; drain
+   selected jobs in timestamp order and retire only the matching live generation
+   after complete replies; incomplete history still prevents workspace freshness
+10. with explicit Since, including Full with Since, use only returned-history
+    thread roots without reading or changing ordinary pending work; without a
+    thread tool, existing selected pending work fails actionably after history
+    writes, while no-pending behavior remains unchanged
+11. check generation and live ownership before and after every native or text
+    thread request, before each parent/reply transaction and at completion;
+    revoked work discards uncommitted materialization and stops pagination,
+    preserving earlier commits and any newer job
 
 Configured workspace identity without returned context remains operator-bound,
 not authenticated proof. Existing reference history pagination and MCP coverage

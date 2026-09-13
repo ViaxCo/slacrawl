@@ -275,6 +275,36 @@ checks do not establish complete history or resumable backfill. See Slack's
 [history](https://docs.slack.dev/reference/methods/conversations.history/) and
 [replies](https://docs.slack.dev/reference/methods/conversations.replies/) contracts.
 
+### Retained MCP threads
+
+Ordinary MCP sync and `--full` without `--since` save eligible retained roots
+before history writes can remove their reply hints. New history hints are saved
+with their message batch. The local replies queue survives request failures,
+incomplete native replies and process restarts; it does not store a server
+cursor or extend the native server's history window.
+
+Explicit `--since`, including `--full --since`, fetches threads only for roots
+in the returned history. It leaves the ordinary queue and older retained roots
+untouched. Channel selection and DM admission still determine which
+conversations can be read.
+
+A connector without a thread tool keeps its existing behavior when no selected
+work is pending. Existing pending work instead produces an actionable error
+after valid history writes, preserves the old successful workspace record and
+requires a connector with thread support before retrying.
+
+Each thread request and write checks the queued generation and live parent.
+Deletion or renewal stops stale pagination and discards the response after the
+in-flight request returns; it does not immediately cancel that request or undo
+earlier committed history or parent writes. Another writer's renewed work can
+remain pending even when the current sync records successful freshness.
+
+Complete replies retire their matching job even if the enclosing history is
+incomplete. History coverage still prevents successful workspace freshness;
+incomplete replies keep their job. Local tombstone, purge and share lifecycle
+rules are shared with [retained API work](#retained-api-threads). Neither queue
+certifies complete Slack capture or export safety.
+
 ### MCP direct-message policy
 
 `[sync].include_dms = false` applies to both `--source mcp` and `connector`.
@@ -655,8 +685,9 @@ does not discover hidden deletion events; see Slack's
 Missing reply metadata is not deletion. The local jobs are excluded from Git
 share export/import and freshness timestamps; archive source entry counts still
 include them. A full restore clears local work along with replaced archive rows.
-This API change does not add MCP backlog processing or certify complete Slack
-capture; MCP scope handling is a separate change.
+MCP uses the same local work lifecycle with its own
+[reply and scope rules](#retained-mcp-threads). This does not certify complete
+Slack capture.
 
 ### API history completeness
 
