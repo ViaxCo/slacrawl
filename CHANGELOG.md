@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Honor explicit `sync.include_dms = false` in Socket Mode tailing before message, deletion, or channel metadata writes. Untyped events require conversation read access; lookup failures stop tailing without acknowledging the event. Keep omitted/true DM defaults and restrict channel metadata updates to their owning workspace.
+
 - Enforce `sync.include_dms = false` before API sync persists conversation metadata or messages; reject unknown conversation types under this policy and mismatched channel identities under every policy. Existing rows and other ingestion sources are unchanged.
 
 - Report canceled concurrent API syncs as failures while preserving completed writes and the original worker error when it cancels sibling requests.

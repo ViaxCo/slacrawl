@@ -468,14 +468,16 @@ enabled = false
 token_env = "SLACK_USER_TOKEN"
 ```
 
-### API direct-message policy
+### API and tail direct-message policy
 
-`[sync].include_dms` defaults to whether a user token is configured. Set it to
-`false` to exclude IM and MPIM conversations from API sync before channel
-metadata, history checkpoints, or messages are written.
+For API sync, `[sync].include_dms` defaults to whether a user token is configured.
+Set it to `false` to exclude IM and MPIM conversations before channel metadata,
+history checkpoints, or messages are written.
 Under this explicit exclusion, a selected conversation without a proven public
 or private channel type fails the sync instead of being treated as complete.
-Channel allow-lists and excluded names still apply before this check.
+API sync channel allow-lists and excluded names still apply before this check.
+Periodic tail repair lists public/private channels and shares this explicit
+exclusion check, but does not discover DMs or carry API sync channel selectors.
 
 All API policies reject missing conversation IDs, conflicting context workspace
 IDs, and mismatched channel IDs in typed latest-message, history, or reply
@@ -483,11 +485,33 @@ payloads. A rejected page is not written; earlier pages and unfinished coverage
 remain available for retry. Slack Connect authors and conversation hosts may
 belong to other workspaces and do not trigger this check.
 
-This controls future API intake only. It does not purge archived DMs, filter
-Socket Mode events or periodic tail repair, or change desktop, MCP, provider,
-or import intake.
-It does not certify the archive or a Git share as safe to publish; admitted
-messages can still contain sensitive text and file metadata.
+For live Socket Mode events, omitted/true keeps accepting delivered DMs even
+without a user token. Explicit `false` skips `im`, `mpim`, and the retired
+workspace-app `app_home` DM event type before content normalization or writes,
+then acknowledges the intentional skip. Native `channel` and `group` message
+events need no extra request. Missing or unrecognized types, including ordinary
+edit/delete envelopes, and rename/archive/unarchive events require a fresh
+[`conversations.info`](https://docs.slack.dev/reference/methods/conversations.info/)
+lookup with the bot token. Grant the relevant `channels:read`, `groups:read`,
+`im:read`, or `mpim:read` access. Unknown/conflicting results, identity mismatches,
+and failed lookups stop tailing without acknowledging that event; correct the
+access/configuration problem before restarting.
+
+These lookups run before ACK and use the existing rate-limit retry behavior.
+They can delay ACKs beyond Slack's delivery deadline; no prompt-ACK guarantee
+is made for events requiring lookup. Results are not cached, and the returned
+conversation and its latest message are not stored. Channel metadata updates
+only affect existing rows in the authenticated workspace; missing or foreign
+rows are intentional no-ops under every policy. Retained message channel IDs
+must agree with the envelope, including nested edited/deleted/root messages.
+Slack Connect event/author workspace IDs and differing event/message timestamps
+are not conversation identity conflicts.
+
+This controls future API/tail intake only. It does not purge archived DMs or
+change desktop, MCP, provider, or import intake. It does not certify the archive
+or a Git share as safe to publish: admitted messages can contain sensitive text
+and file metadata, and a current channel type does not establish that its
+history lacks messages from a converted group DM.
 
 ## Desktop Source
 

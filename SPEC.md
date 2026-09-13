@@ -290,6 +290,11 @@ Requirements:
 - reconnect automatically
 - write checkpoints
 - periodic incremental repair sync
+- preserve delivered DM events when `include_dms` is omitted/true; explicit false skips native IM/MPIM/app_home messages before normalization or persistence and acknowledges the skip
+- under explicit false, resolve missing/unknown message types and channel metadata events with uncached bot `conversations.info`; require exact ID, matching explicit context workspace, and a known native type; failed/unknown lookups return an error without ACK
+- validate retained nested message channel IDs before normalization under every policy; Slack Connect outer/author workspace IDs and differing event/message timestamps are not conflicts
+- restrict rename/archive/unarchive writes by workspace and channel ID; missing/foreign rows are intentional no-ops
+- lookups and rate-limit retries precede ACK and can delay it; current channel type is not proof of DM-free historical content
 
 ### `watch`
 

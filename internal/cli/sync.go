@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/media"
 	"github.com/openclaw/slacrawl/internal/slackapi"
@@ -158,7 +159,7 @@ func (a *App) runTail(ctx context.Context, configPath string, args []string) err
 		targets = []string{coalesce(*workspaceID, cfg.WorkspaceID)}
 	}
 	if len(targets) == 1 {
-		return slackapi.NewWithOptions(cfg.ResolveTokensForWorkspace(targets[0]), a.apiURL, a.httpClient).Tail(ctx, st, targets[0], repairDuration)
+		return slackapi.NewWithOptions(cfg.ResolveTokensForWorkspace(targets[0]), a.apiURL, a.httpClient).WithDMPolicy(admission.FromConfig(cfg.Sync.IncludeDMs)).Tail(ctx, st, targets[0], repairDuration)
 	}
 	return a.runTailTargets(ctx, st, cfg, targets, repairDuration)
 }
@@ -317,7 +318,7 @@ func (a *App) runTailTargets(ctx context.Context, st *store.Store, cfg config.Co
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := slackapi.NewWithOptions(cfg.ResolveTokensForWorkspace(workspaceID), a.apiURL, a.httpClient).Tail(ctx, st, workspaceID, repairEvery)
+			err := slackapi.NewWithOptions(cfg.ResolveTokensForWorkspace(workspaceID), a.apiURL, a.httpClient).WithDMPolicy(admission.FromConfig(cfg.Sync.IncludeDMs)).Tail(ctx, st, workspaceID, repairEvery)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				errCh <- fmt.Errorf("tail %s: %w", workspaceID, err)
 				cancel()
