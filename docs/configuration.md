@@ -564,6 +564,33 @@ enabled = false
 token_env = "SLACK_USER_TOKEN"
 ```
 
+### API history completeness
+
+API sync and periodic tail repair follow every nonempty history/replies cursor,
+even when a page is short or empty. After writing a valid page and handling its
+scheduled threads, a terminal `has_more = true` without a continuation cursor
+stops the scan with an error. Resolve the upstream pagination problem before
+retrying; slacrawl does not substitute timestamp pagination.
+
+History `is_limited = true` is retained across accessible pages. Once those
+pages have been traversed, the scan reports that completeness of the requested
+interval is uncertified. Slack defines this flag for earlier messages beyond
+the free-workspace message limit. It does not establish that a particular
+bounded interval is missing messages or detect every access/retention limit;
+narrowing `--since` is not a completeness bypass.
+
+These checks apply under every DM policy. Valid fetched rows remain stored,
+but the previous coverage `Latest` and `Complete` stay unchanged, the attempted
+lower bound remains in `Pending`, and ordinary workspace success does not
+advance. A corrected retry resumes that pending interval and can complete it.
+Concrete request, validation, write, and cancellation failures keep their
+existing errors. One-message capability probes remain independent of scan
+completion.
+
+See Slack's [history contract](https://docs.slack.dev/reference/methods/conversations.history/#message-types),
+[replies pagination](https://docs.slack.dev/reference/methods/conversations.replies/#pagination),
+and [cursor pagination guidance](https://docs.slack.dev/apis/web-api/pagination/).
+
 ### API and tail direct-message policy
 
 For API sync, `[sync].include_dms` defaults to whether a user token is configured.

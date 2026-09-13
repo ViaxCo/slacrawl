@@ -108,6 +108,8 @@ slacrawl sync --source bot
 
 Use `--latest-only` to update only channels that already have local history, `tail` for Socket Mode events, or `watch` for recurring desktop-cache refreshes. Ordinary incremental sync preserves retention cutoffs; `--full`, an older explicit `--since`, desktop ingestion, or imports can deliberately restore older records.
 
+API sync retains valid fetched pages but reports an error when Slack still signals more results without a continuation cursor, or reports a history/message limit. The attempted interval stays pending instead of advancing successful coverage. See [API history completeness](docs/configuration.md#api-history-completeness).
+
 ## Share an archive
 
 One machine can publish compressed, git-backed snapshots while other machines subscribe and query locally without Slack credentials. Routine updates merge safely and preserve destination-only rows; exact replacement requires `update --restore`.
