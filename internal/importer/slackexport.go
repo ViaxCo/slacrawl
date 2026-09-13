@@ -41,7 +41,11 @@ func Open(path string) (*Export, error) {
 		return nil, err
 	}
 	if info.IsDir() {
-		return &Export{fs: os.DirFS(path)}, nil
+		root, err := os.OpenRoot(path)
+		if err != nil {
+			return nil, err
+		}
+		return &Export{fs: root.FS(), closer: root}, nil
 	}
 	if strings.EqualFold(filepath.Ext(path), ".zip") {
 		reader, err := zip.OpenReader(path)
