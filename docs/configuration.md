@@ -473,8 +473,10 @@ token_env = "SLACK_USER_TOKEN"
 For API sync, `[sync].include_dms` defaults to whether a user token is configured.
 Set it to `false` to exclude IM and MPIM conversations before channel metadata,
 history checkpoints, or messages are written.
-Under this explicit exclusion, a selected conversation without a proven public
-or private channel type fails the sync instead of being treated as complete.
+Explicit `is_im`/`is_mpim` flags take exclusion precedence even when other
+channel flags are present.
+For other selected conversations, missing or conflicting native channel flags
+fail the sync instead of being treated as complete.
 API sync channel allow-lists and excluded names still apply before this check.
 Periodic tail repair lists public/private channels and shares this explicit
 exclusion check, but does not discover DMs or carry API sync channel selectors.
@@ -493,9 +495,11 @@ events need no extra request. Missing or unrecognized types, including ordinary
 edit/delete envelopes, and rename/archive/unarchive events require a fresh
 [`conversations.info`](https://docs.slack.dev/reference/methods/conversations.info/)
 lookup with the bot token. Grant the relevant `channels:read`, `groups:read`,
-`im:read`, or `mpim:read` access. Unknown/conflicting results, identity mismatches,
-and failed lookups stop tailing without acknowledging that event; correct the
-access/configuration problem before restarting.
+`im:read`, or `mpim:read` access. Lookup failures and identity mismatches stop
+tailing without acknowledging that event. After identity validation, explicit
+`is_im`/`is_mpim` flags cause an intentional skip and ACK even when other channel
+flags are present. Otherwise, unknown/conflicting channel flags stop tailing
+without ACK; correct the access/configuration problem before restarting.
 
 These lookups run before ACK and use the existing rate-limit retry behavior.
 They can delay ACKs beyond Slack's delivery deadline; no prompt-ACK guarantee
