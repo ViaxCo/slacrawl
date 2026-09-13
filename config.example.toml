@@ -36,6 +36,7 @@ token_env = "SLACK_USER_TOKEN"
 [slack.desktop]
 enabled = true
 path = ""
+# include_drafts = true # set false to skip unsent drafts during sync and watch
 
 [slack.mcp]
 enabled = true

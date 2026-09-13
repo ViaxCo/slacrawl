@@ -477,6 +477,21 @@ Behavior:
 - `enabled = true` turns on desktop sync support
 - `path = ""` auto-detects the supported macOS or Linux Slack Desktop path
 - `path = "/custom/path"` overrides detection
+- `include_drafts` defaults to `true`; set it to `false` to exclude unsent drafts
+  from desktop/wiretap sync, `watch`, and the desktop phase of `sync --source all`
+  or `hybrid`
+
+```toml
+[slack.desktop]
+enabled = true
+include_drafts = false
+```
+
+Excluded drafts do not create messages, channel hints, event history, search
+entries, or draft counts in sync output. Desktop snapshots still read the local
+cache. This setting does not delete drafts already archived, filter DMs, or
+sanitize Git snapshots; use a separate empty database when starting an archive
+that must never contain drafts.
 
 To disable desktop ingestion completely:
 

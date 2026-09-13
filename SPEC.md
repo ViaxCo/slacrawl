@@ -322,6 +322,9 @@ Credential model:
 - optional user token: `xoxp-`
 - each token source can be enabled or disabled independently
 - desktop source can be enabled or disabled independently
+- `[slack.desktop].include_drafts` defaults to `true`; explicit `false` excludes
+  draft-derived state from desktop/wiretap sync, watch, and all/hybrid sync
+  before persistence, without deleting drafts already archived
 - blank desktop path means auto-detect the supported macOS or Linux Slack path
 - optional `[[workspaces]]` entries can override bot/app/user token env vars per workspace
 - workspace token lookup should default to `SLACK_<WORKSPACE_ID>_BOT_TOKEN`, `SLACK_<WORKSPACE_ID>_APP_TOKEN`, and `SLACK_<WORKSPACE_ID>_USER_TOKEN`
@@ -440,7 +443,7 @@ purged history.
    - workspace/user metadata from `localConfig_v2`
    - cached channel metadata, member profiles, and channel message history from IndexedDB redux persistence blobs when `node` is available
    - cached thread roots and cached reply messages from IndexedDB redux persistence blobs when present
-   - draft bodies and thread draft destinations
+   - draft bodies and thread draft destinations, unless `include_drafts = false`
    - recent-channel hints
    - `conversations.mark` read markers
    - custom-status state
