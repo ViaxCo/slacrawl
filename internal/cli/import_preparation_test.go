@@ -605,3 +605,154 @@ func TestImportCaseInsensitiveIdentityOccurrences(t *testing.T) {
 		}
 	}
 }
+
+func TestImportCatalogOwnershipBeforeWrites(t *testing.T) {
+	type testCase struct {
+		name, policy, entity, userID string
+		dry                          bool
+	}
+	cases := []testCase{}
+	for _, policy := range []string{"omitted", "false", "true"} {
+		for _, entity := range []string{"channel", "user"} {
+			cases = append(cases, testCase{name: policy + "/" + entity, policy: policy, entity: entity, userID: "UCOLLISION"})
+		}
+	}
+	for _, entity := range []string{"channel", "user"} {
+		cases = append(cases, testCase{name: "dry/" + entity, policy: "false", entity: entity, userID: "UCOLLISION", dry: true})
+	}
+	cases = append(cases,
+		testCase{name: "empty-user", policy: "false", entity: "user"},
+		testCase{name: "whitespace-user", policy: "false", entity: "user", userID: " "},
+	)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, configPath := importAdmissionConfig(t, tc.policy)
+			st := importCatalogStore(t, cfg.DBPath)
+			now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			if tc.entity == "channel" {
+				require.NoError(t, st.UpsertChannel(context.Background(), store.Channel{ID: "CCOLLISION", WorkspaceID: "TFOREIGN", Name: "prior", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
+			} else {
+				require.NoError(t, st.UpsertUser(context.Background(), store.User{ID: tc.userID, WorkspaceID: "TFOREIGN", Name: "prior", RawJSON: "{}", UpdatedAt: now}))
+			}
+			require.NoError(t, st.Close())
+			before := importAdmissionSnapshot(t, cfg.DBPath)
+			require.Empty(t, before["messages"])
+			users, err := json.Marshal([]map[string]string{{"id": "UNEW", "name": "would write first"}, {"id": tc.userID, "name": "incoming"}})
+			require.NoError(t, err)
+			source := importAdmissionExport(t, "zip", map[string]string{
+				"channels.json": `[{"id":"CNEW","name":"new"},{"id":"CCOLLISION","name":"collision"}]`,
+				"users.json":    string(users),
+				"new/1.json":    `[{"ts":"1","text":"would write"}]`,
+			})
+			args := []string{"--config", configPath, "--json", "import", source, "--workspace", "TEXPORT"}
+			if tc.dry {
+				args = append(args, "--dry-run")
+			} else if tc.policy == "false" && tc.entity == "channel" {
+				args = append(args, "--force")
+			}
+			var output bytes.Buffer
+			app := &App{Stdout: &output, Stderr: &output}
+			err = app.Run(context.Background(), args)
+			require.EqualError(t, err, "import catalog identity belongs to another workspace")
+			require.Empty(t, output.String())
+			require.Equal(t, before, importAdmissionSnapshot(t, cfg.DBPath))
+			for _, identity := range []string{"CCOLLISION", "UCOLLISION", "TFOREIGN"} {
+				require.NotContains(t, output.String()+err.Error(), identity)
+			}
+		})
+	}
+}
+
+func TestImportCatalogOwnershipCompatibleIdentities(t *testing.T) {
+	cfg, configPath := importAdmissionConfig(t, "false")
+	st := importCatalogStore(t, cfg.DBPath)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+	for _, id := range []string{"UKEEP", "", " "} {
+		require.NoError(t, st.UpsertUser(ctx, store.User{ID: id, WorkspaceID: "TEXPORT", Name: "prior", RawJSON: "{}", UpdatedAt: now}))
+	}
+	require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "CKEEP", WorkspaceID: "TEXPORT", Name: "prior", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "DEXCLUDED", WorkspaceID: "TFOREIGN", Name: "prior DM", Kind: "im", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, st.Close())
+	before := importAdmissionSnapshot(t, cfg.DBPath)
+	source := importAdmissionExport(t, "zip", map[string]string{
+		"channels.json":   `[{"id":"CKEEP","name":"kept"},{"id":"CNEW","name":"new"}]`,
+		"dms.json":        `[{"id":"DEXCLUDED","name":"excluded"}]`,
+		"users.json":      `[{"id":"UKEEP","name":"updated"},{"id":"UNEW","name":"new"},{"id":"","name":"empty"},{"id":" ","name":"whitespace"}]`,
+		"kept/1.json":     `[{"ts":"1","text":"same owner"}]`,
+		"new/1.json":      `[{"ts":"1","text":"new owner"}]`,
+		"excluded/1.json": "excluded body must not be decoded",
+	})
+	var output bytes.Buffer
+	app := &App{Stdout: &output, Stderr: &output}
+	require.NoError(t, app.Run(ctx, []string{"--config", configPath, "--json", "import", source, "--workspace", "TEXPORT"}))
+	var report ImportReport
+	require.NoError(t, json.Unmarshal(output.Bytes(), &report))
+	require.Equal(t, 2, report.Messages)
+	require.Equal(t, 2, report.Channels)
+	require.Equal(t, 4, report.Users)
+	require.Equal(t, 1, report.OmittedDM)
+	after := importAdmissionSnapshot(t, cfg.DBPath)
+	channels := map[string]map[string]any{}
+	for _, row := range after["channels"] {
+		channels[row["id"].(string)] = row
+	}
+	for _, pair := range [][2]string{{"CKEEP", "kept"}, {"CNEW", "new"}} {
+		require.Contains(t, channels, pair[0])
+		require.Equal(t, pair[0], channels[pair[0]]["id"])
+		require.Equal(t, "TEXPORT", channels[pair[0]]["workspace_id"])
+		require.Equal(t, pair[1], channels[pair[0]]["name"])
+		require.Equal(t, "public_channel", channels[pair[0]]["kind"])
+		require.Equal(t, 1, importAdmissionCount(after["messages"], pair[0]))
+	}
+	users := map[string]string{}
+	for _, row := range after["users"] {
+		users[row["id"].(string)] = row["name"].(string)
+	}
+	require.Equal(t, map[string]string{"UKEEP": "updated", "UNEW": "new", "": "empty", " ": "whitespace"}, users)
+	var excluded map[string]any
+	for _, prior := range before["channels"] {
+		if prior["id"] == "DEXCLUDED" {
+			excluded = prior
+		}
+	}
+	require.NotNil(t, excluded)
+	require.Contains(t, channels, "DEXCLUDED")
+	require.Equal(t, excluded, channels["DEXCLUDED"])
+}
+
+func TestImportCatalogOwnershipLookupErrors(t *testing.T) {
+	for _, entity := range []string{"channel", "user"} {
+		t.Run(entity, func(t *testing.T) {
+			cfg, _ := importAdmissionConfig(t, "omitted")
+			st := importCatalogStore(t, cfg.DBPath)
+			defer st.Close()
+			files := map[string]string{"channels.json": `[{"id":"C1","name":"room"}]`}
+			if entity == "user" {
+				files = map[string]string{"channels.json": "[]", "users.json": `[{"id":"U1"}]`}
+			}
+			ex, err := importer.Open(importAdmissionExport(t, "zip", files))
+			require.NoError(t, err)
+			defer ex.Close()
+			plan, err := ex.Prepare("TEXPORT", admission.Default)
+			require.NoError(t, err)
+			require.NoError(t, validateImportMessageKeys(context.Background(), st, plan, "TEXPORT"))
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			_, _, err = runImportExecution(ctx, st, plan, "TEXPORT", true, false)
+			require.ErrorIs(t, err, context.Canceled)
+		})
+	}
+}
+
+func importCatalogStore(t *testing.T, dbPath string) *store.Store {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0700))
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	for _, id := range []string{"TEXPORT", "TFOREIGN"} {
+		require.NoError(t, st.UpsertWorkspace(context.Background(), store.Workspace{ID: id, Name: "preserved metadata", RawJSON: `{"prior":true}`, UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}))
+	}
+	return st
+}

@@ -663,6 +663,11 @@ every case-insensitive occurrence of recognized identity fields and message,
 previous_message, root, previous and catalog-only latest objects. External author teams, mentions and file-sharing references are not
 enclosing conversation identity. Missing channel identity inherits the catalog.
 
+After body validation, imports check existing workspace ownership for admitted
+channel IDs and every retained user ID before workspace, user or channel writes.
+Dry-run performs the same checks. Store write-time checks remain in place;
+the preflight does not make concurrent imports or the whole import atomic.
+
 The first body scan fixes the name-first/ID-fallback choice and records each
 file's identity and digest. Any raw row, even one without a timestamp, selects
 the name branch; only zero rows permit ID fallback. The write pass verifies and
