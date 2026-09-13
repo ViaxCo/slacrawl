@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Persist retained-thread work during ordinary API sync, including when replies are unavailable. Resume it after lost history hints, failed replies, restarts or bot-to-user changes; keep explicit Since and Tail repair scoped. Retire work only after matching-generation success or committed tombstone/purge cleanup, keep it out of Git share and freshness timestamps, and report pending API coverage as partial.
+- Persist retained-thread work during ordinary API sync, including when replies are unavailable. Resume it after lost history hints, failed replies, restarts or bot-to-user changes; keep explicit Since and Tail repair scoped. Retire work only after matching-generation success or committed tombstone/purge cleanup, cancel matching API thread skips on deletion or purge, keep work out of Git share and freshness timestamps, and report pending API coverage as partial.
 
 - Support user-only API sync across discovery, profiles, history and source-specific completion state; preserve configured-bot precedence, user-token replies and bot/app Tail requirements. Doctor now authenticates user-only credentials, keeps global coverage separate from named-workspace aggregation, and reports one ordered list of bot/user channel skips without changing stored status.
 

@@ -627,7 +627,8 @@ retained work runs after complete history traversal and before the completed his
 horizon is saved. A replies failure can therefore stop later channel or media
 work while preserving committed messages and the pending history interval.
 
-Committed parent tombstones and local purge cancel matching work. Preparation
+Committed parent tombstones and local purge cancel matching work and its API
+thread-skip record, even when the pending job is already absent. Preparation
 also reconciles tombstones already in the archive. History polling does not
 discover hidden deletion events; see Slack's
 [message contract](https://docs.slack.dev/reference/events/message/#hidden-subtypes).

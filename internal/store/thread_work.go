@@ -235,9 +235,12 @@ where workspace_id = ? and channel_id = ? and ts = ? and (trim(coalesce(deleted_
 	if !deleted {
 		return nil
 	}
+	// A skip can outlive its pending job. Cancel the existing API pipe key
+	// independently so a deleted root cannot keep coverage partial forever.
 	_, err := q.ExecContext(ctx, `delete from sync_state
-where source_name in ('api-user', 'mcp') and entity_type = ? and entity_id = ?`,
-		ThreadPendingEntityType, threadWorkKey(ThreadWork{WorkspaceID: workspaceID, ChannelID: channelID, TS: ts}))
+where (source_name in ('api-user', 'mcp') and entity_type = ? and entity_id = ?)
+   or (source_name = 'api-user' and entity_type = 'thread_skip' and entity_id = ?)`,
+		ThreadPendingEntityType, threadWorkKey(ThreadWork{WorkspaceID: workspaceID, ChannelID: channelID, TS: ts}), workspaceID+"|"+channelID+"|"+ts)
 	return err
 }
 

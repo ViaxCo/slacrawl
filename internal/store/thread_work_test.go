@@ -87,6 +87,8 @@ func TestThreadPreparationReconcilesStoredTombstones(t *testing.T) {
 				_, err := st.PrepareThreadWork(ctx, source, "T1", "C1")
 				require.NoError(t, err)
 			}
+			skipKey := "T1|C1|" + msg.TS
+			beforeSkips := seedThreadWorkSkipFixtures(t, st, skipKey)
 			// A share merge can write tombstones directly. Preparation must
 			// reconcile those stored markers before attempting replies.
 			query := "update messages set deleted_ts='1710000002.000000'"
@@ -99,6 +101,7 @@ func TestThreadPreparationReconcilesStoredTombstones(t *testing.T) {
 			require.NoError(t, err)
 			require.Empty(t, queued)
 			assertBatchCount(t, st, "select count(*) from sync_state where entity_type='thread_pending_v1'", 0)
+			requireThreadWorkSkips(t, st, beforeSkips, skipKey)
 		})
 	}
 }
@@ -214,7 +217,7 @@ func TestThreadWorkRejectsInconsistentParents(t *testing.T) {
 }
 
 func TestThreadWorkDeletionLifecycle(t *testing.T) {
-	for _, mode := range []string{"batch", "standalone", "losing", "resurrected", "collision", "rollback", "retention-skipped", "subtype-batch", "subtype-standalone"} {
+	for _, mode := range []string{"batch", "standalone", "standalone-no-pending", "losing", "resurrected", "collision", "rollback", "skip-rollback", "retention-skipped", "subtype-batch", "subtype-standalone"} {
 		t.Run(mode, func(t *testing.T) {
 			st := openBatchTestStore(t)
 			ctx := context.Background()
@@ -232,6 +235,9 @@ func TestThreadWorkDeletionLifecycle(t *testing.T) {
 			}
 			key := threadWorkKey(ThreadWork{WorkspaceID: "T1", ChannelID: "C1", TS: msg.TS})
 			for _, source := range []string{"api-user", "mcp", "other"} {
+				if mode == "standalone-no-pending" && source != "other" {
+					continue
+				}
 				require.NoError(t, st.SetSyncState(ctx, source, ThreadPendingEntityType, key, "pending"))
 			}
 			write := MessageWrite{Message: deletion}
@@ -249,6 +255,9 @@ func TestThreadWorkDeletionLifecycle(t *testing.T) {
 			case "rollback":
 				_, err := st.DB().ExecContext(ctx, `create trigger reject_thread_delete before delete on sync_state when old.entity_type='thread_pending_v1' begin select raise(abort,'synthetic_retire_failure'); end`)
 				require.NoError(t, err)
+			case "skip-rollback":
+				_, err := st.DB().ExecContext(ctx, `create trigger reject_skip_delete before delete on sync_state when old.source_name='api-user' and old.entity_type='thread_skip' begin select raise(abort,'synthetic_skip_retire_failure'); end`)
+				require.NoError(t, err)
 			case "retention-skipped":
 				opts := PurgeOptions{Before: now.Add(10 * time.Second), Delete: true, WorkspaceID: "T1"}
 				_, err := st.PurgeMessages(ctx, opts)
@@ -258,8 +267,20 @@ func TestThreadWorkDeletionLifecycle(t *testing.T) {
 				}
 				batch.Messages[0].EnforceRetention = true
 			}
+			// Seed after the setup purge: a skipped deletion must preserve a
+			// skip created later, independent of whether a pending row exists.
+			skipKey := "T1|C1|" + msg.TS
+			beforeSkips := seedThreadWorkSkipFixtures(t, st, skipKey)
+			beforeRollback := map[string][]map[string]any{}
+			if mode == "rollback" || mode == "skip-rollback" {
+				for _, table := range []string{"messages", "message_events", "message_event_heads", "message_files", "message_mentions", "message_fts", "sync_state"} {
+					rows, err := st.QueryReadOnly(ctx, "select * from "+table)
+					require.NoError(t, err)
+					beforeRollback[table] = rows
+				}
+			}
 			var err error
-			if mode == "standalone" {
+			if mode == "standalone" || mode == "standalone-no-pending" {
 				err = st.MarkMessageDeleted(ctx, deletion, nil)
 			} else if mode == "subtype-standalone" {
 				err = st.UpsertMessage(ctx, deletion, nil)
@@ -268,15 +289,27 @@ func TestThreadWorkDeletionLifecycle(t *testing.T) {
 			}
 			if mode == "rollback" {
 				require.ErrorContains(t, err, "synthetic_retire_failure")
+			} else if mode == "skip-rollback" {
+				require.ErrorContains(t, err, "synthetic_skip_retire_failure")
 			} else {
 				require.NoError(t, err)
 			}
-			wins := mode == "batch" || mode == "standalone" || mode == "subtype-batch" || mode == "subtype-standalone"
+			wins := mode == "batch" || mode == "standalone" || mode == "standalone-no-pending" || mode == "subtype-batch" || mode == "subtype-standalone"
+			if wins {
+				requireThreadWorkSkips(t, st, beforeSkips, skipKey)
+			} else {
+				requireThreadWorkSkips(t, st, beforeSkips)
+			}
+			for table, before := range beforeRollback {
+				after, err := st.QueryReadOnly(ctx, "select * from "+table)
+				require.NoError(t, err)
+				require.Equal(t, before, after, table)
+			}
 			assertBatchCount(t, st, "select count(*) from sync_state where entity_type='thread_pending_v1' and source_name in ('api-user','mcp')", map[bool]int64{true: 0, false: 2}[wins])
 			assertBatchCount(t, st, "select count(*) from sync_state where source_name='other'", 1)
 			if mode != "retention-skipped" {
 				assertBatchCount(t, st, "select count(*) from messages where trim(coalesce(deleted_ts,''))<>'' or subtype='message_deleted'", map[bool]int64{true: 1, false: 0}[wins])
-				assertBatchCount(t, st, "select count(*) from message_files where deleted_at is null", map[bool]int64{true: 0, false: 1}[mode == "standalone"])
+				assertBatchCount(t, st, "select count(*) from message_files where deleted_at is null", map[bool]int64{true: 0, false: 1}[mode == "standalone" || mode == "standalone-no-pending"])
 				requireMessageFTSParity(t, st)
 			}
 		})
@@ -309,24 +342,73 @@ func TestThreadWorkPurgeAndFreshness(t *testing.T) {
 	status, err = st.Status(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "2020-01-01T00:00:00Z", status.LastSyncAt.Format(time.RFC3339))
+	// A second selected root has an old skip but no pending row. Purge must
+	// retire it too, without treating unrelated skips as orphan cleanup.
+	noJob := batchMessage("C1", "1710000002.000000", "T1", "parent without pending work", now)
+	require.NoError(t, st.UpsertMessage(ctx, noJob, nil))
+	firstKey, secondKey := "T1|C1|1710000001.000000", "T1|C1|"+noJob.TS
+	seedThreadWorkSkipFixtures(t, st, firstKey)
+	require.NoError(t, st.SetSyncState(ctx, "api-user", "thread_skip", secondKey, "skip without pending work"))
+	require.NoError(t, st.SetSyncState(ctx, "api-user", "thread_skip", "T2|C2|1710000001.000000", "other workspace skip"))
+	beforeSkips := threadWorkSkipRows(t, st)
 	opts := PurgeOptions{Before: now.Add(10 * time.Second), WorkspaceID: "T1"}
 	_, err = st.PurgeMessages(ctx, opts)
 	require.NoError(t, err)
 	assertBatchCount(t, st, "select count(*) from sync_state where entity_type='thread_pending_v1'", 4)
+	requireThreadWorkSkips(t, st, beforeSkips)
 	_, err = st.DB().ExecContext(ctx, `create trigger reject_purge before delete on messages begin select raise(abort,'synthetic_purge_failure'); end`)
 	require.NoError(t, err)
 	opts.Delete = true
 	_, err = st.PurgeMessages(ctx, opts)
 	require.ErrorContains(t, err, "synthetic_purge_failure")
 	assertBatchCount(t, st, "select count(*) from sync_state where entity_type='thread_pending_v1'", 4)
+	requireThreadWorkSkips(t, st, beforeSkips)
 	_, err = st.DB().ExecContext(ctx, "drop trigger reject_purge")
 	require.NoError(t, err)
 	_, err = st.PurgeMessages(ctx, opts)
 	require.NoError(t, err)
 	assertBatchCount(t, st, "select count(*) from sync_state where entity_type='thread_pending_v1'", 2)
+	requireThreadWorkSkips(t, st, beforeSkips, firstKey, secondKey)
 	remaining, err := st.PendingThreadWork(ctx, "api-user", "T2", "C2")
 	require.NoError(t, err)
 	require.Len(t, remaining, 1)
+}
+
+func seedThreadWorkSkipFixtures(t *testing.T, st *Store, key string) []map[string]any {
+	t.Helper()
+	for _, row := range []SyncStateRow{
+		{SourceName: "api-user", EntityType: "thread_skip", EntityID: key},
+		{SourceName: "api-user", EntityType: "thread_skip", EntityID: "TOTHER|C1|1710000001.000000"},
+		{SourceName: "api-user", EntityType: "thread_skip", EntityID: "T1|COTHER|1710000001.000000"},
+		{SourceName: "api-user", EntityType: "thread_skip", EntityID: "T1|C1|1710000100.000000"},
+		{SourceName: "mcp", EntityType: "thread_skip", EntityID: key},
+		{SourceName: "api-user", EntityType: "channel_skip", EntityID: key},
+	} {
+		require.NoError(t, st.SetSyncState(context.Background(), row.SourceName, row.EntityType, row.EntityID, "retained skip"))
+	}
+	return threadWorkSkipRows(t, st)
+}
+
+func threadWorkSkipRows(t *testing.T, st *Store) []map[string]any {
+	t.Helper()
+	rows, err := st.QueryReadOnly(context.Background(), "select * from sync_state where entity_type in ('thread_skip','channel_skip') order by source_name,entity_type,entity_id")
+	require.NoError(t, err)
+	return rows
+}
+
+func requireThreadWorkSkips(t *testing.T, st *Store, before []map[string]any, removed ...string) {
+	t.Helper()
+	want := make([]map[string]any, 0, len(before))
+	for _, row := range before {
+		remove := false
+		for _, key := range removed {
+			remove = remove || row["source_name"] == "api-user" && row["entity_type"] == "thread_skip" && row["entity_id"] == key
+		}
+		if !remove {
+			want = append(want, row)
+		}
+	}
+	require.Equal(t, want, threadWorkSkipRows(t, st), "preserve all unrelated skip fields, including updated_at")
 }
 
 func TestThreadWorkGuardPrecedesAllBatchWrites(t *testing.T) {

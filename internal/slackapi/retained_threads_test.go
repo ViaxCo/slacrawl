@@ -180,6 +180,7 @@ func TestTailDeletionRetiresPendingThread(t *testing.T) {
 		_, err := st.PrepareThreadWork(ctx, source, "T123", "C123")
 		require.NoError(t, err)
 	}
+	require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|C123|1710000001.000000", "missing_scope"))
 	client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot"}, func(r *http.Request, _ url.Values) (any, error) {
 		t.Fatalf("typed event should not make an API request: %s", r.URL.Path)
 		return nil, nil
@@ -196,6 +197,17 @@ func TestTailDeletionRetiresPendingThread(t *testing.T) {
 	rows, err := st.QueryReadOnly(ctx, "select ts,deleted_ts from messages")
 	require.NoError(t, err)
 	require.Equal(t, []map[string]any{{"ts": "1710000001.000000", "deleted_ts": "1710000001.000000"}}, rows)
+	skips, err := st.ListSyncState(ctx, SourceUser, "thread_skip", 20)
+	require.NoError(t, err)
+	require.Empty(t, skips)
+	ordinary := primaryOwnerClient(t, config.Tokens{User: "fixture-user"}, func(r *http.Request, _ url.Values) (any, error) {
+		require.NotEqual(t, "/conversations.replies", r.URL.Path, "a tombstoned root must not be fetched to clear a stale skip")
+		return primaryOwnerResponse(r.URL.Path), nil
+	})
+	require.NoError(t, ordinary.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"}))
+	status, err := st.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "full", status.ThreadState)
 }
 
 func TestRetainedThreadRespectsDMExclusion(t *testing.T) {
