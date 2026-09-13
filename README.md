@@ -75,6 +75,10 @@ Every source feeds the same SQLite archive and search index.
 
 Treat one config and database as one visibility boundary. Keep personal and company archives in separate configs, database paths, and share remotes. See [Configuration](docs/configuration.md) for tokens, multiple workspaces, MCP, external providers, media caching, and source precedence; see [Desktop mode](docs/desktop-mode.md) for local-cache coverage and limitations.
 
+External provider v1 sync rejects `[sync].include_dms = false` before reading its
+checkpoint or launching the adapter. Use API sync or a supported Slack workspace
+JSON export when excluding DMs. Omitted/true retain provider intake behavior.
+
 Native MCP history/replies responses that report more pages or Slack history/message limits
 retain valid fetched writes but stop with an error before advancing successful
 sync state. See [native response coverage](docs/configuration.md#native-response-coverage).
