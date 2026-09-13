@@ -426,7 +426,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 				tracker.Finish(err)
 				return err
 			default:
-				if ctx.Err() != nil && !errors.Is(ctx.Err(), context.Canceled) {
+				if ctx.Err() != nil {
 					tracker.Finish(ctx.Err())
 					return ctx.Err()
 				}
@@ -444,7 +444,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 		tracker.Finish(err)
 		return err
 	default:
-		if ctx.Err() != nil && !errors.Is(ctx.Err(), context.Canceled) {
+		if ctx.Err() != nil {
 			tracker.Finish(ctx.Err())
 			return ctx.Err()
 		}
