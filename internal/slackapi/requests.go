@@ -33,6 +33,8 @@ type rawConversationMessage struct {
 
 type conversationHistoryPage struct {
 	Messages   []rawConversationMessage
+	HasMore    bool
+	IsLimited  bool
 	NextCursor string
 }
 
@@ -45,6 +47,7 @@ type conversationRepliesPage struct {
 type rawConversationHistoryResponse struct {
 	slack.SlackResponse
 	HasMore          bool   `json:"has_more"`
+	IsLimited        bool   `json:"is_limited"`
 	PinCount         int    `json:"pin_count"`
 	Latest           string `json:"latest"`
 	ResponseMetaData struct {
@@ -76,7 +79,12 @@ func (c *Client) getConversationHistory(ctx context.Context, token string, param
 		if err != nil {
 			return nil, err
 		}
-		return &conversationHistoryPage{Messages: messages, NextCursor: resp.ResponseMetaData.NextCursor}, nil
+		return &conversationHistoryPage{
+			Messages:   messages,
+			HasMore:    resp.HasMore,
+			IsLimited:  resp.IsLimited,
+			NextCursor: resp.ResponseMetaData.NextCursor,
+		}, nil
 	})
 }
 

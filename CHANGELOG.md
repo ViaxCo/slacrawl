@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep API history intervals pending when a terminal history/replies page reports more results without a continuation cursor, or any accessible history page reports a history/message limit. Preserve valid writes and previous successful coverage, follow available cursors, and retry the same pending interval after correction. Periodic repair shares these checks; capability probes remain usable.
+
 - Honor explicit `sync.include_dms = false` for Slack workspace JSON export imports before archive initialization. Reserve all conversation locators, omit DM bodies, and reject unqualified types, duplicate JSON keys, or identity conflicts. Check existing channel/user ownership before metadata writes under every policy. Verify a prepared file plan before writes, preserve committed batches on later file changes, and make dry-run use an existing archive read-only without initialization or repair. Existing DMs are not purged; omitted/true retain DM inclusion.
 
 - Reject API history/replies pages with missing or blank top-level message timestamps before page writes or thread work, including periodic repair. Keep earlier pages and the pending retry interval; valid native parent echoes remain supported.
