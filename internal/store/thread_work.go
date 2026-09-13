@@ -79,6 +79,37 @@ from messages where channel_id = ? and ts = ?`, channelID, work.TS).Scan(&owner,
 		}
 		byTS[work.TS] = work
 	}
+	// A sliced sync can leave a skip without a job, then a share merge can
+	// tombstone its parent. Validate pending parents first so reconciliation
+	// cannot hide malformed work; only selected, owned tombstones qualify.
+	rows, err := dbtx.QueryContext(ctx, `select m.ts from messages m
+where m.workspace_id = ? and m.channel_id = ? and coalesce(m.thread_ts, '') in ('', m.ts)
+  and (trim(coalesce(m.deleted_ts, '')) <> '' or m.subtype = 'message_deleted')
+  and exists (select 1 from sync_state s where s.source_name = 'api-user' and s.entity_type = 'thread_skip'
+    and s.entity_id = m.workspace_id || '|' || m.channel_id || '|' || m.ts)`, workspaceID, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var tombstones []string
+	for rows.Next() {
+		var ts string
+		if err := rows.Scan(&ts); err != nil {
+			return nil, err
+		}
+		tombstones = append(tombstones, ts)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for _, ts := range tombstones {
+		if err := retireThreadWork(ctx, dbtx, workspaceID, channelID, ts); err != nil {
+			return nil, err
+		}
+	}
 	roots, err := channelThreadRoots(ctx, dbtx, workspaceID, channelID)
 	if err != nil {
 		return nil, err
@@ -235,8 +266,12 @@ where workspace_id = ? and channel_id = ? and ts = ? and (trim(coalesce(deleted_
 	if !deleted {
 		return nil
 	}
-	// A skip can outlive its pending job. Cancel the existing API pipe key
-	// independently so a deleted root cannot keep coverage partial forever.
+	return retireThreadWork(ctx, q, workspaceID, channelID, ts)
+}
+
+// Call only after an owned deletion or authoritative tombstone check in the
+// same transaction. A matching skip can outlive both consumers' pending jobs.
+func retireThreadWork(ctx context.Context, q storedb.DBTX, workspaceID, channelID, ts string) error {
 	_, err := q.ExecContext(ctx, `delete from sync_state
 where (source_name in ('api-user', 'mcp') and entity_type = ? and entity_id = ?)
    or (source_name = 'api-user' and entity_type = 'thread_skip' and entity_id = ?)`,

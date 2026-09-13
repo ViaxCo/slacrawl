@@ -232,6 +232,9 @@ where workspace_id = ? and channel_id = ? and ts = ? and source_name = ?
 `, workspaceID, channelID, ts, sourceName); err != nil {
 		return false, err
 	}
+	if err := retireThreadWork(ctx, dbtx, workspaceID, channelID, ts); err != nil {
+		return false, err
+	}
 	if err := commit(); err != nil {
 		return false, err
 	}

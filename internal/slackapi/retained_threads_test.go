@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/openclaw/slacrawl/internal/config"
+	"github.com/openclaw/slacrawl/internal/share"
 	"github.com/openclaw/slacrawl/internal/store"
 )
 
@@ -208,6 +210,87 @@ func TestTailDeletionRetiresPendingThread(t *testing.T) {
 	status, err := st.Status(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "full", status.ThreadState)
+}
+
+func TestOrdinarySyncReconcilesMergedTombstoneSkips(t *testing.T) {
+	for _, marker := range []string{"deleted_ts", "subtype"} {
+		t.Run(marker, func(t *testing.T) {
+			ctx := context.Background()
+			st := mustStore(t)
+			defer func() { require.NoError(t, st.Close()) }()
+			const ts = "1710000001.000000"
+			const skipQuery = "select * from sync_state where source_name='api-user' and entity_type='thread_skip'"
+			first, replies := true, 0
+			now := time.Unix(1710000200, 0).UTC()
+			client := primaryOwnerClient(t, config.Tokens{User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
+				if first && r.URL.Path == "/conversations.history" {
+					return map[string]any{"ok": true, "messages": []any{map[string]any{"ts": ts, "channel": "C123", "thread_ts": ts, "reply_count": 1, "text": "parent"}}}, nil
+				}
+				if r.URL.Path == "/conversations.replies" {
+					replies++
+					require.True(t, first, "ordinary reconciliation must not fetch a stored tombstone")
+					require.Equal(t, ts, form.Get("ts"))
+					return map[string]any{"ok": false, "error": "missing_scope"}, nil
+				}
+				return primaryOwnerResponse(r.URL.Path), nil
+			})
+			client.now = func() time.Time { return now }
+			// Current-history replies can record a skip during a sliced sync,
+			// which deliberately creates no ordinary pending job.
+			require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123", Since: "1710000000.000000"}))
+			require.Equal(t, 1, replies)
+			first = false
+			before, err := st.QueryReadOnly(ctx, skipQuery)
+			require.NoError(t, err)
+			require.Len(t, before, 1)
+			pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+			require.NoError(t, err)
+			require.Empty(t, pending)
+			status, err := st.Status(ctx)
+			require.NoError(t, err)
+			require.Equal(t, "partial", status.ThreadState)
+
+			donor := mustStore(t)
+			defer func() { require.NoError(t, donor.Close()) }()
+			require.NoError(t, donor.UpsertWorkspace(ctx, store.Workspace{ID: "T123", Name: "Fixture", RawJSON: "{}", UpdatedAt: now}))
+			require.NoError(t, donor.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Name: "fixture", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
+			deleted := store.Message{WorkspaceID: "T123", ChannelID: "C123", TS: ts, ThreadTS: ts, SourceName: SourceUser, SourceRank: 1, RawJSON: "{}", UpdatedAt: now.Add(time.Second)}
+			if marker == "deleted_ts" {
+				deleted.DeletedTS = "1710000201.000000"
+			} else {
+				deleted.Subtype = "message_deleted"
+			}
+			require.NoError(t, donor.UpsertMessage(ctx, deleted, nil))
+			opts := share.Options{RepoPath: filepath.Join(t.TempDir(), "share")}
+			_, err = share.Export(ctx, donor, opts)
+			require.NoError(t, err)
+			_, err = share.Import(ctx, st, opts)
+			require.NoError(t, err)
+			rows, err := st.QueryReadOnly(ctx, "select coalesce(deleted_ts,'') as deleted_ts,coalesce(subtype,'') as subtype,reply_count from messages")
+			require.NoError(t, err)
+			require.Equal(t, []map[string]any{{"deleted_ts": deleted.DeletedTS, "subtype": deleted.Subtype, "reply_count": int64(0)}}, rows)
+			for _, scoped := range []SyncOptions{
+				{WorkspaceID: "T123", Since: "1710000000.000000"},
+				{WorkspaceID: "T123", Channels: []string{"COTHER"}},
+			} {
+				require.NoError(t, client.Sync(ctx, st, scoped))
+				after, err := st.QueryReadOnly(ctx, skipQuery)
+				require.NoError(t, err)
+				require.Equal(t, before, after, "sliced or unselected sync cannot reconcile ordinary work")
+			}
+			require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"}))
+			after, err := st.QueryReadOnly(ctx, skipQuery)
+			require.NoError(t, err)
+			require.Empty(t, after)
+			pending, err = st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+			require.NoError(t, err)
+			require.Empty(t, pending)
+			require.Equal(t, 1, replies)
+			status, err = st.Status(ctx)
+			require.NoError(t, err)
+			require.Equal(t, "full", status.ThreadState)
+		})
+	}
 }
 
 func TestRetainedThreadRespectsDMExclusion(t *testing.T) {

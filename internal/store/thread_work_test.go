@@ -74,7 +74,7 @@ func TestThreadRootEvidence(t *testing.T) {
 }
 
 func TestThreadPreparationReconcilesStoredTombstones(t *testing.T) {
-	for _, marker := range []string{"deleted_ts", "subtype"} {
+	for _, marker := range []string{"deleted_ts", "subtype", "deleted_ts-no-pending", "subtype-no-pending", "skip-rollback"} {
 		t.Run(marker, func(t *testing.T) {
 			st := openBatchTestStore(t)
 			ctx := context.Background()
@@ -83,25 +83,36 @@ func TestThreadPreparationReconcilesStoredTombstones(t *testing.T) {
 			msg := batchMessage("C1", "1710000001.000000", "T1", "parent", now)
 			msg.ReplyCount = 1
 			require.NoError(t, st.UpsertMessage(ctx, msg, nil))
-			for _, source := range []string{"api-user", "mcp"} {
-				_, err := st.PrepareThreadWork(ctx, source, "T1", "C1")
-				require.NoError(t, err)
+			if marker == "deleted_ts" || marker == "subtype" {
+				for _, source := range []string{"api-user", "mcp"} {
+					_, err := st.PrepareThreadWork(ctx, source, "T1", "C1")
+					require.NoError(t, err)
+				}
 			}
 			skipKey := "T1|C1|" + msg.TS
 			beforeSkips := seedThreadWorkSkipFixtures(t, st, skipKey)
 			// A share merge can write tombstones directly. Preparation must
 			// reconcile those stored markers before attempting replies.
-			query := "update messages set deleted_ts='1710000002.000000'"
-			if marker == "subtype" {
-				query = "update messages set subtype='message_deleted'"
+			query := "update messages set deleted_ts='1710000002.000000', reply_count=0"
+			if marker == "subtype" || marker == "subtype-no-pending" {
+				query = "update messages set subtype='message_deleted', reply_count=0"
 			}
 			_, err := st.DB().ExecContext(ctx, query)
 			require.NoError(t, err)
+			if marker == "skip-rollback" {
+				_, err := st.DB().ExecContext(ctx, `create trigger reject_skip_reconcile before delete on sync_state when old.entity_type='thread_skip' begin select raise(abort,'synthetic_skip_reconcile_failure'); end`)
+				require.NoError(t, err)
+			}
 			queued, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
-			require.NoError(t, err)
+			if marker == "skip-rollback" {
+				require.ErrorContains(t, err, "synthetic_skip_reconcile_failure")
+				requireThreadWorkSkips(t, st, beforeSkips)
+			} else {
+				require.NoError(t, err)
+				requireThreadWorkSkips(t, st, beforeSkips, skipKey)
+			}
 			require.Empty(t, queued)
 			assertBatchCount(t, st, "select count(*) from sync_state where entity_type='thread_pending_v1'", 0)
-			requireThreadWorkSkips(t, st, beforeSkips, skipKey)
 		})
 	}
 }
@@ -127,6 +138,32 @@ func TestThreadWorkKeysKeepWorkspaceAndChannelSeparate(t *testing.T) {
 	require.NotEqual(t, keys[0], keys[1])
 	_, err := st.PrepareThreadWork(ctx, "api-user", "T", "C")
 	require.True(t, IsWorkspaceCollision(err, "channel"))
+}
+
+func TestThreadSkipReconciliationStaysWithinOwnedRoots(t *testing.T) {
+	ctx := context.Background()
+	st := openBatchTestStore(t)
+	now := time.Unix(1710000000, 0).UTC()
+	seedBatchCatalog(t, st, "T1", "C1", "U1", now)
+	seedBatchCatalog(t, st, "T1", "C2", "U2", now)
+	for _, tc := range []struct{ workspace, channel, ts, thread, deleted string }{
+		{"T1", "C1", "1", "", "2"},
+		{"T1", "C1", "2", "", ""},
+		{"T1", "C1", "3", "absent-root", "4"},
+		{"TOTHER", "C1", "4", "", "5"},
+		{"T1", "C2", "5", "", "6"},
+	} {
+		msg := batchMessage(tc.channel, tc.ts, tc.workspace, "fixture", now)
+		msg.ThreadTS, msg.DeletedTS = tc.thread, tc.deleted
+		require.NoError(t, st.UpsertMessage(ctx, msg, nil))
+		require.NoError(t, st.SetSyncState(ctx, "api-user", "thread_skip", tc.workspace+"|"+tc.channel+"|"+tc.ts, "old skip"))
+	}
+	require.NoError(t, st.SetSyncState(ctx, "api-user", "thread_skip", "T1|C1|absent", "no deletion evidence"))
+	before := threadWorkSkipRows(t, st)
+	work, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+	require.NoError(t, err)
+	require.Empty(t, work)
+	requireThreadWorkSkips(t, st, before, "T1|C1|1")
 }
 
 func TestThreadWorkPageAtomicity(t *testing.T) {
@@ -198,6 +235,11 @@ func TestThreadWorkRejectsInconsistentParents(t *testing.T) {
 				}
 				require.NoError(t, st.UpsertMessage(ctx, msg, nil))
 			}
+			deleted := batchMessage("C1", "1710000010.000000", "T1", "stored tombstone", now)
+			deleted.Subtype = "message_deleted"
+			require.NoError(t, st.UpsertMessage(ctx, deleted, nil))
+			skipKey := "T1|C1|" + deleted.TS
+			beforeSkips := seedThreadWorkSkipFixtures(t, st, skipKey)
 			if mode == "canceled" {
 				canceled, cancel := context.WithCancel(ctx)
 				cancel()
@@ -212,6 +254,7 @@ func TestThreadWorkRejectsInconsistentParents(t *testing.T) {
 			value, err := st.GetSyncState(context.Background(), work.SourceName, ThreadPendingEntityType, threadWorkKey(work))
 			require.NoError(t, err)
 			require.Equal(t, "unchanged", value)
+			requireThreadWorkSkips(t, st, beforeSkips)
 		})
 	}
 }
@@ -372,6 +415,98 @@ func TestThreadWorkPurgeAndFreshness(t *testing.T) {
 	remaining, err := st.PendingThreadWork(ctx, "api-user", "T2", "C2")
 	require.NoError(t, err)
 	require.Len(t, remaining, 1)
+}
+
+func TestPhysicalDeleteRetiresThreadWork(t *testing.T) {
+	for _, mode := range []string{"matched", "skip-only", "wrong-source", "wrong-workspace", "missing", "rollback"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			st := openBatchTestStore(t)
+			now := time.Unix(1710000000, 0).UTC()
+			seedBatchCatalog(t, st, "T1", "C1", "U1", now)
+			msg := batchMessage("C1", "1710000001.000000", "T1", "parent", now)
+			msg.ReplyCount = 1
+			msg.Files = []MessageFile{{FileID: "F1", Name: "parent-file", RawJSON: "{}"}}
+			require.NoError(t, st.UpsertMessage(ctx, msg, []Mention{{Type: "user", TargetID: "U1"}}))
+			if mode != "skip-only" {
+				for _, source := range []string{"api-user", "mcp"} {
+					work, err := st.PrepareThreadWork(ctx, source, "T1", "C1")
+					require.NoError(t, err)
+					require.Len(t, work, 1)
+				}
+			}
+			key := threadWorkKey(ThreadWork{WorkspaceID: "T1", ChannelID: "C1", TS: msg.TS})
+			for _, work := range []ThreadWork{
+				{SourceName: "other", WorkspaceID: "T1", ChannelID: "C1", TS: msg.TS},
+				{SourceName: "api-user", WorkspaceID: "T2", ChannelID: "C1", TS: msg.TS},
+				{SourceName: "mcp", WorkspaceID: "T1", ChannelID: "C2", TS: msg.TS},
+				{SourceName: "api-user", WorkspaceID: "T1", ChannelID: "C1", TS: "1710000002.000000"},
+			} {
+				require.NoError(t, st.SetSyncState(ctx, work.SourceName, ThreadPendingEntityType, threadWorkKey(work), "unrelated generation"))
+			}
+			skipKey := "T1|C1|" + msg.TS
+			beforeSkips := seedThreadWorkSkipFixtures(t, st, skipKey)
+			before := map[string][]map[string]any{}
+			for _, table := range []string{"messages", "message_events", "message_event_heads", "message_files", "message_mentions", "message_fts", "embedding_jobs", "sync_state"} {
+				rows, err := st.QueryReadOnly(ctx, "select * from "+table)
+				require.NoError(t, err)
+				before[table] = rows
+			}
+			workspace, source, ts := "T1", msg.SourceName, msg.TS
+			switch mode {
+			case "wrong-source":
+				source = "api-user"
+			case "wrong-workspace":
+				workspace = "TOTHER"
+			case "missing":
+				ts = "1710000099.000000"
+			case "rollback":
+				_, err := st.DB().ExecContext(ctx, `create trigger reject_physical_retirement before delete on sync_state when old.source_name='api-user' and old.entity_type='thread_skip' begin select raise(abort,'synthetic_physical_retirement_failure'); end`)
+				require.NoError(t, err)
+			}
+			removed, err := st.DeleteMessageBySource(ctx, workspace, "C1", ts, source)
+			if mode == "rollback" {
+				require.ErrorContains(t, err, "synthetic_physical_retirement_failure")
+			} else {
+				require.NoError(t, err)
+			}
+			wins := mode == "matched" || mode == "skip-only"
+			require.Equal(t, wins, removed)
+			if !wins {
+				for table, rows := range before {
+					after, err := st.QueryReadOnly(ctx, "select * from "+table)
+					require.NoError(t, err)
+					require.Equal(t, rows, after, table)
+				}
+				return
+			}
+			requireThreadWorkSkips(t, st, beforeSkips, skipKey)
+			var want []map[string]any
+			for _, row := range before["sync_state"] {
+				ownedJob := (row["source_name"] == "api-user" || row["source_name"] == "mcp") && row["entity_type"] == ThreadPendingEntityType && row["entity_id"] == key
+				ownedSkip := row["source_name"] == "api-user" && row["entity_type"] == "thread_skip" && row["entity_id"] == skipKey
+				if !ownedJob && !ownedSkip {
+					want = append(want, row)
+				}
+			}
+			after, err := st.QueryReadOnly(ctx, "select * from sync_state")
+			require.NoError(t, err)
+			require.Equal(t, want, after)
+			for table := range before {
+				if table != "sync_state" {
+					assertBatchCount(t, st, "select count(*) from "+table, 0)
+				}
+			}
+			// The unrelated C1 job has a different root and remains deliberately
+			// invalid. Remove only that fixture row before testing a fresh Prepare.
+			require.NoError(t, st.DeleteSyncState(ctx, "api-user", ThreadPendingEntityType, threadWorkKey(ThreadWork{WorkspaceID: "T1", ChannelID: "C1", TS: "1710000002.000000"})))
+			for _, source := range []string{"api-user", "mcp"} {
+				work, err := st.PrepareThreadWork(ctx, source, "T1", "C1")
+				require.NoError(t, err)
+				require.Empty(t, work, "physical deletion cannot leave an orphaned job")
+			}
+		})
+	}
 }
 
 func seedThreadWorkSkipFixtures(t *testing.T, st *Store, key string) []map[string]any {
