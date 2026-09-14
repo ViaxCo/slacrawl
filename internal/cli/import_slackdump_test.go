@@ -187,7 +187,7 @@ func assertSlackdumpImportSnapshot(t *testing.T, snapshot map[string][]map[strin
 		require.Equal(t, want[0], row["text"])
 		norm := want[0]
 		if want[1] == "" {
-			require.Nil(t, row["thread_ts"])
+			require.Equal(t, "", row["thread_ts"])
 		} else {
 			require.Equal(t, want[1], row["thread_ts"])
 			if want[1] != row["ts"] {
@@ -197,8 +197,8 @@ func assertSlackdumpImportSnapshot(t *testing.T, snapshot map[string][]map[strin
 		require.Equal(t, norm, row["normalized_text"])
 		require.Equal(t, int64(2), row["source_rank"])
 		require.Equal(t, "slack-export", row["source_name"])
-		require.Nil(t, row["deleted_ts"])
-		require.Nil(t, row["subtype"])
+		require.Equal(t, "", row["deleted_ts"])
+		require.Equal(t, "", row["subtype"])
 		if key == "CPUBLIC|"+parent {
 			require.Equal(t, int64(2), row["reply_count"])
 			require.Equal(t, "1767312000.000001", row["latest_reply"])
