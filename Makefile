@@ -67,7 +67,8 @@ smoke:
 	tmpdir="$$(mktemp -d)"; \
 	binary="$$tmpdir/slacrawl"; \
 	trap 'rm -rf "$$tmpdir"' EXIT; \
-	GOWORK=off go build -ldflags "-X github.com/openclaw/slacrawl/internal/cli.version=ci" -o "$$binary" ./cmd/slacrawl; \
+	export SLACRAWL_NO_UPDATE_CHECK=1; \
+	GOWORK=off go build -buildvcs=true -ldflags "-X github.com/openclaw/slacrawl/internal/cli.version=ci" -o "$$binary" ./cmd/slacrawl; \
 	output="$$("$$binary" --help 2>&1)"; \
 	printf '%s\n' "$$output"; \
 	printf '%s' "$$output" | grep -q 'Usage of slacrawl:'; \
@@ -80,7 +81,17 @@ smoke:
 	status_output="$$("$$binary" --config "$$tmpdir/slacrawl.toml" status --json)"; \
 	printf '%s' "$$status_output" | grep -q '"databases"'; \
 	tui_output="$$("$$binary" --config "$$tmpdir/slacrawl.toml" tui --json --limit 1)"; \
-	printf '%s' "$$tui_output" | grep -q '^\['
+	printf '%s' "$$tui_output" | grep -q '^\['; \
+	revision="$$(git rev-parse --verify HEAD)"; \
+	"$$binary" --config "$$tmpdir/slacrawl.toml" --json import testdata/slackdump/f7319928/database/export --workspace TTEST; \
+	umask 077; \
+	printf '%s\n' '{"workspace_id":"TTEST","workspace_label":"smoke","channels":[{"channel_id":"CPUBLIC","label":"public"}],"messages":[{"channel_id":"CPUBLIC","ts":"1767312000.000002","text":{"mode":"keep","replacement":null}}]}' > "$$tmpdir/selection.json"; \
+	"$$binary" --json export prepare --db "$$tmpdir/slacrawl.db" --selection "$$tmpdir/selection.json" --out "$$tmpdir/plan.json"; \
+	grep -Fq "\"producer_revision\":\"$$revision\"" "$$tmpdir/plan.json"; \
+	"$$binary" --json export build --db "$$tmpdir/slacrawl.db" --plan "$$tmpdir/plan.json" --out "$$tmpdir/projection"; \
+	test -s "$$tmpdir/projection/manifest.json"; \
+	printf '%s\n' '{"channel_id":"CPUBLIC","ts":"1767312000.000002","user_id":"UME","text":"slackdump-public-standalone","thread_ts":"","edited_ts":""}' | cmp - "$$tmpdir/projection/messages.jsonl"; \
+	"$$binary" --json export verify --db "$$tmpdir/slacrawl.db" --plan "$$tmpdir/plan.json" --dir "$$tmpdir/projection"
 
 check: tidy-check fmt-check lint test-race smoke snapshot
 

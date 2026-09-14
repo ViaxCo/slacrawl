@@ -151,6 +151,7 @@ Threads are retained or removed as a unit based on the parent timestamp. See [Re
 | Ingest and refresh | `sync`, `import`, `tail`, `watch`, `files` |
 | Browse and query | `search`, `tui`, `messages`, `mentions`, `users`, `channels`, `sql` |
 | Reports | `report`, `digest`, `analytics` |
+| Offline projections | `export prepare`, `export build`, `export verify` |
 | Git snapshots | `publish`, `subscribe`, `update` |
 | Automation | `metadata`, `completion` |
 
