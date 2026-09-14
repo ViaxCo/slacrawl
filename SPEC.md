@@ -512,9 +512,14 @@ unchanged. API history continues to own its separate requested horizon.
    replies distinct from the parent;
    check native explicit channel/context/thread fields before filtering/conversion;
    nested metadata and catalog latest-message timestamps remain optional
-6. retain existing priority, retention, request defaults, and payload projections
+6. retain existing priority, retention, request defaults, and message projections
    for omitted/true; return fixed omission counts and preserve earlier successful
-   history commits if a later request fails
+   history commits if a later request fails. For new native channel rows, retain
+   the exact delivered channel object, including missing/duplicate fields and
+   unknown identity evidence, without its catalog envelope or other objects.
+   Human-text records and direct-ID stubs keep their existing archived JSON.
+   Insert-only channel metadata preserves every existing row, including older
+   lossy MCP records; routine sync does not repair their missing native evidence
 7. require explicit `ok=true` on native history/replies under every DM policy;
    retain response `has_more`/nonblank next-cursor and `is_limited` facts before
    local filtering, accumulating them across later successes and empty results
@@ -624,8 +629,10 @@ profile and unselected rows are not part of the selection.
 Selected channels must have a recognized stored public kind, no stored private
 flag, and retained native `is_channel=true` with explicit false private/group/IM/
 MPIM flags. Reject malformed, duplicated or conflicting recognized identity/type
-fields. Missing native evidence, including archived MCP channel records that
-omit these flags, cannot qualify. Drafts and deleted messages are ineligible.
+fields. Missing native evidence, including older MCP rows and human-text/direct-ID
+records that omit these flags, cannot qualify. Newly inserted native MCP rows
+retain the delivered object, but cannot supply evidence absent from that object.
+Drafts and deleted messages are ineligible.
 Replies require their selected eligible root in the same channel; selection
 never adds parents, profiles or other rows implicitly.
 
