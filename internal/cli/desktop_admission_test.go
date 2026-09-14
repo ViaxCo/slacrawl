@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/syndtr/goleveldb/leveldb"
 
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/store"
@@ -261,4 +262,68 @@ func writeDesktopDMBlob(t *testing.T, root, workspace string, value any) {
 	dir := filepath.Join(root, "IndexedDB", "https_app.slack.com_0.indexeddb.blob")
 	require.NoError(t, os.MkdirAll(dir, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, workspace), payload, 0o600))
+}
+
+func TestDesktopReadMarkersAcrossCLIPaths(t *testing.T) {
+	for _, route := range []struct {
+		name       string
+		args       []string
+		workspaces int
+	}{
+		{"desktop", []string{"sync", "--source", "desktop"}, 2},
+		{"wiretap", []string{"sync", "--source", "wiretap"}, 2},
+		{"watch", []string{"watch", "--desktop-every", "1h"}, 2},
+		{"all", []string{"sync", "--source", "all"}, 2},
+		{"hybrid", []string{"sync", "--source", "hybrid", "--workspace", "T1"}, 1},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			cfg, path := desktopDMConfig(t, "", "false")
+			db, err := leveldb.OpenFile(filepath.Join(cfg.Slack.Desktop.Path, "Local Storage", "leveldb"), nil)
+			require.NoError(t, err)
+			for _, marker := range []struct{ workspace, channel, ts string }{{"T1", "CDRAFTONLY", "11"}, {"T2", "CPUBLIC2", "22"}} {
+				body, err := json.Marshal(map[string]any{"mark": map[string]any{"method": "conversations.mark", "args": map[string]any{"channel": marker.channel, "ts": marker.ts}}})
+				require.NoError(t, err)
+				require.NoError(t, db.Put([]byte("_https://app.slack.compersist-v1::"+marker.workspace+"::U1::persistedApiCalls"), body, nil))
+			}
+			require.NoError(t, db.Close())
+			beforeConfig, err := os.ReadFile(path)
+			require.NoError(t, err)
+			st, err := store.Open(cfg.DBPath)
+			require.NoError(t, err)
+			require.NoError(t, st.SetSyncState(context.Background(), "desktop", "read_marker", "CDRAFTONLY", "historical"))
+			legacy := apiKeyRows(t, st, "select * from sync_state where source_name='desktop' and entity_type='read_marker'")
+			require.NoError(t, st.Close())
+			server := newCLIFanoutSlackServer(t, map[string]string{"xoxb-draft-one": "T1", "xoxb-draft-two": "T2"})
+			defer server.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var stdout, stderr bytes.Buffer
+			app := &App{Stdout: &stdout, Stderr: &stderr, apiURL: server.URL + "/", httpClient: server.Client()}
+			if route.name == "watch" {
+				app.Stdout = &cancelAfterWrite{Writer: &stdout, cancel: cancel}
+			}
+			err = app.Run(ctx, append([]string{"--config", path, "--json"}, route.args...))
+			if route.name == "watch" {
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				require.NoError(t, err)
+			}
+			st, err = store.OpenReadOnly(cfg.DBPath)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, st.Close()) }()
+			expected := []map[string]any{{"entity_id": "[\"T1\",\"CDRAFTONLY\"]", "value": "11"}}
+			if route.workspaces == 2 {
+				expected = append(expected, map[string]any{"entity_id": "[\"T2\",\"CPUBLIC2\"]", "value": "22"})
+			}
+			require.Equal(t, expected, apiKeyRows(t, st, "select entity_id,value from sync_state where source_name='desktop' and entity_type='read_marker_v1' order by entity_id"))
+			require.Equal(t, legacy, apiKeyRows(t, st, "select * from sync_state where source_name='desktop' and entity_type='read_marker'"))
+			count, err := st.GetSyncState(context.Background(), "desktop", "local_storage", "read_marker_count")
+			require.NoError(t, err)
+			require.Equal(t, fmt.Sprint(route.workspaces), count)
+			require.Contains(t, stdout.String(), "read_marker_count")
+			afterConfig, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, beforeConfig, afterConfig)
+		})
+	}
 }

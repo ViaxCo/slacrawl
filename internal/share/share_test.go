@@ -1606,3 +1606,58 @@ func seedStore(t *testing.T, path string) *store.Store {
 	require.NoError(t, s.SetSyncState(ctx, "api-bot", "workspace", "T1", now.Format(time.RFC3339Nano)))
 	return s
 }
+
+func TestDesktopReadMarkerSnapshotCompatibility(t *testing.T) {
+	for _, mode := range []string{"empty-merge", "local-conflict-merge", "restore"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			source := seedStore(t, filepath.Join(dir, "source.db"))
+			defer func() { require.NoError(t, source.Close()) }()
+			for _, marker := range [][3]string{
+				{"read_marker", "C1", "legacy-channel"},
+				{"read_marker", "[\"T1\",\"C1\"]", "legacy-json-looking-channel"},
+				{"read_marker_v1", "[\"T1\",\"C1\"]", "123"},
+				{"read_marker_v1", "[\"T2\",\"C1\"]", "456"},
+			} {
+				require.NoError(t, source.SetSyncState(ctx, "desktop", marker[0], marker[1], marker[2]))
+			}
+			markers := func(st *store.Store) []map[string]any {
+				rows, err := st.QueryReadOnly(ctx, "select * from sync_state where source_name='desktop' and entity_type in ('read_marker','read_marker_v1') order by entity_type,entity_id")
+				require.NoError(t, err)
+				return rows
+			}
+			expected := markers(source)
+			opts := Options{RepoPath: filepath.Join(dir, "share")}
+			_, err := Export(ctx, source, opts)
+			require.NoError(t, err)
+			require.Equal(t, expected, markers(source))
+			reader, err := store.Open(filepath.Join(dir, "reader.db"))
+			require.NoError(t, err)
+			defer func() { require.NoError(t, reader.Close()) }()
+			if mode != "empty-merge" {
+				require.NoError(t, reader.SetSyncState(ctx, "desktop", "read_marker", "C1", "local-legacy"))
+				require.NoError(t, reader.SetSyncState(ctx, "desktop", "read_marker_v1", "[\"T1\",\"C1\"]", "999"))
+			}
+			if mode == "restore" {
+				require.NoError(t, reader.SetSyncState(ctx, "desktop", "read_marker_v1", "[\"T9\",\"C9\"]", "extra"))
+				_, err = Restore(ctx, reader, opts)
+			} else {
+				if mode == "local-conflict-merge" {
+					// Generic snapshot merge keeps local conflicts in both
+					// namespaces; it neither attributes nor rewrites legacy keys.
+					for _, local := range markers(reader) {
+						for i, incoming := range expected {
+							if local["entity_type"] == incoming["entity_type"] && local["entity_id"] == incoming["entity_id"] {
+								expected[i] = local
+							}
+						}
+					}
+				}
+				_, err = Import(ctx, reader, opts)
+			}
+			require.NoError(t, err)
+			require.Equal(t, expected, markers(reader))
+		})
+	}
+}

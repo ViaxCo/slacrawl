@@ -1138,6 +1138,11 @@ across desktop/wiretap, watch, and all/hybrid. Metadata and admission counts may
 still refresh; drafts have separate retention behavior. See
 [Retention after purge](desktop-mode.md#retention-after-purge).
 
+New read-marker checkpoints use workspace/channel tuple keys in
+`desktop/read_marker_v1`; legacy channel-only rows remain untouched.
+See [Read-marker checkpoint identity](desktop-mode.md#read-marker-checkpoint-identity)
+for scalar values, user/call aggregation and snapshot compatibility.
+
 ```toml
 [slack.desktop]
 enabled = true

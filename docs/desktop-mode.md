@@ -59,9 +59,9 @@ raw cache diagnostics; member profiles and custom statuses remain independent
 metadata and are not anonymized by this policy.
 
 This admission policy does not purge previously archived rows or certify
-historical DM-origin content. Persistent channel hints and read-marker keys
-retain their existing identity model. Neither an admitted current channel type
-nor these controls certify a safe export.
+historical DM-origin content. Persistent channel hints retain their existing
+identity model. Neither an admitted current channel type nor these controls
+certify a safe export.
 
 ## Retention After Purge
 
@@ -78,6 +78,28 @@ sync. Workspace/channel/profile metadata, inventory and checkpoints may still
 refresh. Admission counts describe prepared input, not newly inserted rows.
 Draft retention remains separate; this sent-message rule does not prevent
 purged drafts from returning.
+
+## Read-Marker Checkpoint Identity
+
+New intake stores read markers in `sync_state` with source `desktop`, entity
+type `read_marker_v1`, and a compact JSON `[workspace_id,channel_id]` key. The
+workspace is the owner resolved during admission, which can differ from the
+persisted call's workspace. The value remains the original timestamp string.
+
+Users and persisted calls within the same workspace/channel still overwrite
+one shared value in ingestion order. Calls from an unsorted map have no
+guaranteed winner; this is neither a maximum timestamp nor per-user read state.
+
+Legacy `read_marker` channel-only rows remain historical evidence. New intake
+does not read, attribute, migrate, update or delete them. SQL consumers of new
+markers must use the versioned namespace and tuple key. Channel metadata cannot
+safely identify the owner of an old marker.
+
+Both namespaces retain normal snapshot behavior: export carries them, merge
+keeps existing local conflicts, and Restore replaces rows from the snapshot.
+Message purge does not clear these markers. Marker counts still describe
+admitted calls, and writes keep their existing contribution to archive freshness;
+neither counts nor markers certify historical message coverage.
 
 ## What It Does Not Yet Cover
 

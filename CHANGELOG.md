@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep Desktop read-marker checkpoints separate by resolved workspace and channel in a versioned namespace. Preserve scalar timestamps and existing user/call aggregation; leave legacy channel-only rows untouched without guessing ownership or changing channel hints.
+
 - Apply current purge retention floors to sent Redux messages across desktop/wiretap, watch and all/hybrid ingestion. Keep purged messages and replies to expired roots from returning through cache replay, including cache prepared before purge, while preserving exact existing-row updates and source priority. Draft retention remains separate.
 
 - Require present arrays in native MCP channel, user, history and reply responses before accepting the page. Missing/null collections cannot certify empty completion; explicit empty arrays remain valid. Preserve earlier writes, pending retry work and existing error/success policies.
