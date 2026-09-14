@@ -235,8 +235,9 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	}
 
 	var (
-		users    []slack.User
-		userByID map[string]slack.User
+		users             []slack.User
+		userByID          map[string]slack.User
+		dmCatalogComplete bool
 	)
 	if c.dmPolicy.Enabled(c.tokens.User != "") && userRepliesAvailable && c.user != nil {
 		users, err = c.getUsers(ctx, source.historyClient)
@@ -248,9 +249,10 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 			userByID[user.ID] = user
 		}
 
-		dms, err := c.fetchDMs(ctx, workspaceID)
+		dms, err := c.fetchDMs(ctx, workspaceID, threadRepliesSkipped)
 		if err != nil {
 			if isMissingScopeError(err) {
+				threadRepliesSkipped.RecordOmission()
 				if setErr := st.SetSyncState(ctx, SourceUser, "dms", workspaceID, "missing_scope"); setErr != nil {
 					return setErr
 				}
@@ -258,6 +260,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 				return err
 			}
 		} else {
+			dmCatalogComplete = true
 			selectedDMs := make([]slack.Channel, 0, len(dms))
 			for _, channel := range dms {
 				if len(allow) > 0 {
@@ -298,8 +301,10 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	}
 
 	threadCoverage := "partial"
-	if userRepliesAvailable && !threadRepliesSkipped.Skipped() {
-		if opts.Full && len(opts.Channels) == 0 {
+	if userRepliesAvailable && !threadRepliesSkipped.Skipped() && !threadRepliesSkipped.Omitted() {
+		// Only an unrestricted scan of both catalogs can retire unknown legacy
+		// skips. Scoped runs still clear individual successfully completed threads.
+		if opts.Full && opts.Since == "" && len(opts.Channels) == 0 && len(excluded) == 0 && dmCatalogComplete {
 			if err := st.DeleteAPIThreadSkipsIfNoPending(ctx, workspaceID); err != nil {
 				return err
 			}

@@ -13,6 +13,7 @@ import (
 	"github.com/slack-go/slack/slackevents"
 	"github.com/stretchr/testify/require"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/share"
 	"github.com/openclaw/slacrawl/internal/store"
@@ -961,6 +962,9 @@ func TestRetainedThreadRevocationDuringHTTP(t *testing.T) {
 				if r.URL.Path == "/conversations.history" && mode == "history-delete" {
 					deleteRoot()
 				}
+				if r.URL.Path == "/conversations.list" && form.Get("types") == "im,mpim" {
+					return map[string]any{"ok": true, "channels": []any{}}, nil
+				}
 				if r.URL.Path != "/conversations.replies" {
 					return primaryOwnerResponse(r.URL.Path), nil
 				}
@@ -994,6 +998,9 @@ func TestRetainedThreadRevocationDuringHTTP(t *testing.T) {
 				return payload, nil
 			})
 			full := mode == "renewed-full" || mode == "complete-full"
+			if full {
+				client.WithDMPolicy(admission.Include)
+			}
 			require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123", Full: full}))
 			require.Equal(t, map[bool]int{true: 0, false: 1}[mode == "history-delete"], calls)
 			pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
@@ -1079,6 +1086,9 @@ order by entity_type, entity_id`
 			case "/auth.test":
 				return map[string]any{"ok": true, "team_id": workspaceID, "team": "Fixture"}, nil
 			case "/conversations.list":
+				if form.Get("types") == "im,mpim" {
+					return map[string]any{"ok": true, "channels": []any{}}, nil
+				}
 				return map[string]any{"ok": true, "channels": []any{map[string]any{"id": workspaceID + "C", "name": "fixture", "is_channel": true}}}, nil
 			case "/conversations.history":
 				require.Equal(t, workspaceID+"C", form.Get("channel"))
@@ -1095,7 +1105,7 @@ order by entity_type, entity_id`
 			default:
 				return primaryOwnerResponse(r.URL.Path), nil
 			}
-		})
+		}).WithDMPolicy(admission.Include)
 	}
 	require.NoError(t, clientFor("T1").Sync(ctx, st, SyncOptions{WorkspaceID: "T1", Full: true}))
 	t1Skips, err := st.QueryReadOnly(ctx, "select * from sync_state where source_name='api-user' and entity_type='thread_skip' and entity_id like 'T1|%'")

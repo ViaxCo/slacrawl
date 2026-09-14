@@ -17,7 +17,7 @@ func conversationKind(channel slack.Channel) admission.Kind {
 	}).Kind()
 }
 
-func (c *Client) admitChannels(workspaceID string, channels []slack.Channel) ([]slack.Channel, error) {
+func (c *Client) admitChannels(workspaceID string, channels []slack.Channel, skips *threadSkipTracker) ([]slack.Channel, error) {
 	admitted := make([]slack.Channel, 0, len(channels))
 	for _, channel := range channels {
 		if channel.ID == "" {
@@ -31,6 +31,7 @@ func (c *Client) admitChannels(workspaceID string, channels []slack.Channel) ([]
 			if kind == admission.Unknown {
 				return nil, fmt.Errorf("channel %s has unknown or conflicting conversation type with include_dms=false", channel.ID)
 			}
+			skips.RecordOmission()
 			continue
 		}
 		if channel.Latest != nil {

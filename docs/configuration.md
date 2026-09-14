@@ -723,12 +723,25 @@ preparation and concurrent-sync fairness remain follow-up work.
 
 Successful replies retire only the generation that was processed. Retained
 requests and writes recheck that generation and the parent's live ownership;
-deletion or renewal during a request discards its stale response. Full cleanup
+deletion or renewal during a request discards its stale response. Bulk retirement
+of unrelated legacy thread skips requires Full with no `--since`, no channel
+allow-list and no effective channel exclusions, after DM enumeration completes
+with DMs enabled and no conversation or message work omitted. Full cleanup also
 keeps thread-skip records while API replies work in that workspace is still
-pending; another workspace's pending work does not block cleanup. Remaining
-retained work runs after complete history traversal and before the completed history
-horizon is saved. A replies failure can therefore stop later channel or media
-work while preserving committed messages and the pending history interval.
+pending; another workspace's pending work does not block cleanup. Successful
+individual replies still clear their own skip
+during scoped runs. Remaining retained work runs after complete history traversal
+and before the completed history horizon is saved. A replies failure can therefore
+stop later channel or media work while preserving committed messages and the
+pending history interval.
+
+DM catalog filtering or missing scope, admission drops, recoverable history skips,
+and channel or message ownership collisions keep this sync's recorded thread
+coverage partial. A later successful channel does not erase that omission. Scoped
+runs retain unvisited diagnostics; successful scoped replies still clear their
+own skips. This does not add durable collision retry jobs or guarantee a later
+Doctor capability probe will report the same coverage.
+Static scope restrictions alone retain the existing scoped coverage behavior.
 
 Committed parent tombstones, message removal through the store, and local purge
 cancel matching work and its API thread-skip record, even when the pending job

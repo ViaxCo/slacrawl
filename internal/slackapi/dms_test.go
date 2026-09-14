@@ -18,7 +18,7 @@ import (
 
 func TestFetchDMsReturnsNilWhenUserClientMissing(t *testing.T) {
 	client := New(config.Tokens{Bot: "xoxb-test"})
-	dms, err := client.fetchDMs(context.Background(), "T123")
+	dms, err := client.fetchDMs(context.Background(), "T123", nil)
 	require.NoError(t, err)
 	require.Nil(t, dms)
 }
@@ -40,7 +40,7 @@ func TestFetchDMsHappyPath(t *testing.T) {
 	client := NewWithOptions(config.Tokens{User: "xoxp-test"}, server.URL+"/", server.Client())
 	client.sleep = func(context.Context, time.Duration) error { return nil }
 
-	dms, err := client.fetchDMs(context.Background(), "T123")
+	dms, err := client.fetchDMs(context.Background(), "T123", nil)
 	require.NoError(t, err)
 	require.Len(t, dms, 3)
 	require.Equal(t, "T123", seenTeamID)
@@ -69,7 +69,7 @@ func TestFetchDMsHandlesPagination(t *testing.T) {
 	client := NewWithOptions(config.Tokens{User: "xoxp-test"}, server.URL+"/", server.Client())
 	client.sleep = func(context.Context, time.Duration) error { return nil }
 
-	dms, err := client.fetchDMs(context.Background(), "T123")
+	dms, err := client.fetchDMs(context.Background(), "T123", nil)
 	require.NoError(t, err)
 	require.Len(t, dms, 2)
 	require.Equal(t, 2, calls)
@@ -90,7 +90,7 @@ func TestFetchDMsRejectsRepeatedCursor(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := client.fetchDMs(ctx, "T123")
+	_, err := client.fetchDMs(ctx, "T123", nil)
 	require.ErrorContains(t, err, `conversations.list repeated cursor "stuck"`)
 	require.Equal(t, 2, calls)
 }
@@ -120,7 +120,7 @@ func TestFetchDMsRetriesOnRateLimit(t *testing.T) {
 	client := NewWithOptions(config.Tokens{User: "xoxp-test"}, server.URL+"/", server.Client())
 	client.sleep = func(context.Context, time.Duration) error { return nil }
 
-	dms, err := client.fetchDMs(context.Background(), "T123")
+	dms, err := client.fetchDMs(context.Background(), "T123", nil)
 	require.NoError(t, err)
 	require.Len(t, dms, 1)
 	require.Equal(t, 2, calls)

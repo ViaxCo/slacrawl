@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve legacy API thread-skip diagnostics during bounded or incomplete Full syncs. Require unrestricted channel and DM traversal before bulk cleanup, retain the atomic pending-work guard, and record current-sync partial coverage when admission, scope access or ownership collisions omit work. Successful individual replies still clear their own skips.
+
 - Add internal capture of exact independently verified projection bytes, so later consumers can use immutable manifest/message contents without reopening changed files. Return no usable snapshot on failure; retain the receipt-only verifier path and existing content/publication limits.
 
 - Add offline `export prepare`, `export build` and `export verify` commands with explicit archive and private selection/plan paths. Bind preparation/building to a clean embedded Git revision, recheck current source bindings before building or verifying, and emit only counts or observed-byte receipts. Keep private plans separate from the two-file artifact; no config loading, automatic imports, release checks, Slack or Git publishing runs on this path.
