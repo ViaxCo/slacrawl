@@ -949,6 +949,16 @@ observations, not content approval or publication authority.
    - custom-status state
    - IndexedDB object store inventory for drift detection
 
+Sent Redux message writes enforce the strongest current global, workspace, or
+channel retention floor inside each batch transaction, including the final
+partial batch. A reply uses its parent timestamp; a message at the cutoff is
+eligible. An exact existing row below the floor remains eligible for updates
+under source-priority rules. Preparing cache data before a purge does not freeze
+the retention decision. This shared write path covers desktop/wiretap, watch,
+and all/hybrid desktop ingestion. Metadata, inventory and checkpoints may
+refresh even when sent messages are omitted; admission counts describe prepared
+input, not inserted rows. Draft retention remains a separate boundary.
+
 ## Go Package Layout
 
 ```text

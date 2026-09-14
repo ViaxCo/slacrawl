@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Apply current purge retention floors to sent Redux messages across desktop/wiretap, watch and all/hybrid ingestion. Keep purged messages and replies to expired roots from returning through cache replay, including cache prepared before purge, while preserving exact existing-row updates and source priority. Draft retention remains separate.
+
 - Require present arrays in native MCP channel, user, history and reply responses before accepting the page. Missing/null collections cannot certify empty completion; explicit empty arrays remain valid. Preserve earlier writes, pending retry work and existing error/success policies.
 
 - Give scoped MCP replies shared thread generations before requests. Renew only eligible returned roots, reject superseded parent/reply writes, retire complete or empty work conditionally, and retain failed selected work while preserving unselected backlog and API jobs.

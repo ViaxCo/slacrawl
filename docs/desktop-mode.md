@@ -58,11 +58,26 @@ Node prevents positive cached-channel classification. `doctor` continues to show
 raw cache diagnostics; member profiles and custom statuses remain independent
 metadata and are not anonymized by this policy.
 
-Previously archived rows are not purged. Desktop retention-floor enforcement is
-separate work; this admission policy does not prevent purged history from
-returning or certify historical DM-origin content. Persistent channel hints and
-read-marker keys also retain their existing identity model. Neither an admitted
-current channel type nor these controls certify a safe export.
+This admission policy does not purge previously archived rows or certify
+historical DM-origin content. Persistent channel hints and read-marker keys
+retain their existing identity model. Neither an admitted current channel type
+nor these controls certify a safe export.
+
+## Retention After Purge
+
+Sent messages recovered from Redux caches honor the current global, workspace,
+and channel retention floors when each message batch is written. Replaying a
+cache cannot reinsert a purged sent message below the strongest applicable
+floor, including when cache preparation happened before the purge. Replies use
+their parent timestamp; a newer reply to an expired root is also omitted.
+Messages at the cutoff remain eligible. An exact message row already present
+below the floor can still receive updates under the usual source-priority rules.
+
+This applies to desktop/wiretap sync, `watch`, and the desktop phase of all/hybrid
+sync. Workspace/channel/profile metadata, inventory and checkpoints may still
+refresh. Admission counts describe prepared input, not newly inserted rows.
+Draft retention remains separate; this sent-message rule does not prevent
+purged drafts from returning.
 
 ## What It Does Not Yet Cover
 

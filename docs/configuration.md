@@ -1133,6 +1133,11 @@ counts explain partial intake. Existing archived rows, independent profiles,
 and custom statuses remain. See [Desktop DM exclusion](desktop-mode.md#excluding-direct-messages)
 for classification, decode coverage, and retained-history limits.
 
+Sent Redux messages honor current purge retention floors at batch write time
+across desktop/wiretap, watch, and all/hybrid. Metadata and admission counts may
+still refresh; drafts have separate retention behavior. See
+[Retention after purge](desktop-mode.md#retention-after-purge).
+
 ```toml
 [slack.desktop]
 enabled = true
