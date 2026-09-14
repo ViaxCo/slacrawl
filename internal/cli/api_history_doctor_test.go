@@ -55,6 +55,10 @@ func TestDoctorRetainedAPIHistory(t *testing.T) {
 				if !tc.namedPartial {
 					t.Setenv("SLACRAWL_COVERAGE_NAMED_USER", "fixture-named-user")
 					rolesWant = append(rolesWant, "fixture-named-user")
+				} else if !tc.globalPartial {
+					// Empty named credentials fall back to the global user token,
+					// whose workspace mismatch keeps named auth unavailable.
+					rolesWant = append(rolesWant, "fixture-global-user")
 				}
 			}
 			require.NoError(t, cfg.Save(path))
@@ -125,8 +129,16 @@ func TestDoctorRetainedAPIHistory(t *testing.T) {
 							require.Equal(t, tc.reason, diag["thread_coverage_reason"])
 						}
 						if tc.named {
-							named := report["workspace_api"].([]any)[0].(map[string]any)["slack_api"].(map[string]any)
+							namedReport := report["workspace_api"].([]any)[0].(map[string]any)
+							named := namedReport["slack_api"].(map[string]any)
 							require.Equal(t, map[bool]string{true: "partial", false: "full"}[tc.namedPartial], named["thread_coverage"])
+							require.Equal(t, !tc.namedPartial, named["user_auth_available"])
+							require.Equal(t, !tc.namedPartial || !tc.globalPartial, namedReport["tokens"].(map[string]any)["user_set"])
+							if tc.namedPartial && !tc.globalPartial {
+								require.Equal(t, "authenticated workspace TGLOBAL does not match requested workspace TNAMED", named["user_auth_error"])
+							} else {
+								require.NotContains(t, named, "user_auth_error")
+							}
 							require.NotContains(t, named, "thread_coverage_reason")
 						}
 						if !tc.missingDB {
