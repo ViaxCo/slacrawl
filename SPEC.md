@@ -897,6 +897,16 @@ mutation invalidates that observation. This is not lifetime DM-origin proof,
 content review, producer authentication, or a commit/push authorization gate.
 No Git integration or schema change is part of this profile.
 
+`CaptureProjection` uses the same verifier to return an opaque snapshot only
+after all checks, checked closes and the final context check succeed. `Contents`
+returns the exact accepted manifest and message bytes as immutable strings with
+a value copy of the receipt; the zero snapshot is unusable. It retains no
+expected-input references or artifact paths and never reopens the files. Later
+file or input changes cannot alter the captured bytes. Capture memory grows with
+the explicitly expected verified content; receipt-only `VerifyProjection` adds
+no full encoded-message buffer. Capture grants no additional content or
+publication authority and adds no CLI or Git operation.
+
 ### Offline export commands
 
 `export prepare --db PATH --selection PATH --out PRIVATE_PLAN`,
