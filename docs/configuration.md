@@ -280,19 +280,26 @@ checks do not establish complete history or resumable backfill. See Slack's
 With a thread tool, ordinary MCP sync and `--full` without `--since` save
 eligible retained roots before history writes can remove their reply hints.
 New hints and work identified by archived replies are saved with their message
-batch, even if a later batch fails. The local replies queue survives
-request failures, incomplete native replies and process restarts; it does not
-store a server cursor or extend the native server's history window.
+batch, even if a later batch fails. If admitted history revives a parent after
+its work was canceled, that transaction saves a new job without replacing any
+newer generation. The local replies queue survives request failures, incomplete
+native replies and process restarts; it does not store a server cursor or extend
+the native server's history window.
 
 Explicit `--since`, including `--full --since`, fetches threads only for roots
-in the returned history. It leaves the ordinary queue and older retained roots
-untouched. Channel selection and DM admission still determine which
-conversations can be read.
+themselves returned in history. A returned root can qualify through an archived
+child even when its reply count is absent. A returned child alone does not add
+an older, unreturned parent. This leaves the ordinary queue and unreturned
+retained roots untouched. Channel selection and DM admission still determine
+which conversations can be read.
 
-A connector without a thread tool keeps its existing behavior when no selected
-work is pending. Existing pending work instead produces an actionable error
-after valid history writes, preserves the old successful workspace record and
-requires a connector with thread support before retrying.
+During ordinary sync, a connector without a thread tool reconciles selected
+stored tombstones after valid history writes, including tombstones merged from
+a share. This cleanup neither creates nor renews jobs. If live work remains,
+sync returns an actionable error, preserves the old successful workspace record
+and requires a connector with thread support before retrying. With no pending
+work, the existing behavior remains. Explicit Since does not inspect or clean
+the ordinary queue.
 
 Each thread request and write checks the queued generation and live parent.
 Deletion or renewal stops stale pagination and discards the response after the

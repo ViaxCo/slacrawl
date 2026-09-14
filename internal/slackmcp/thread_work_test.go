@@ -314,6 +314,94 @@ begin update sync_state set value='new-generation' where source_name='mcp' and e
 	require.Equal(t, []map[string]any{{"ts": "1710000000.000001", "text": "renewed parent"}}, rows, "retain the committed parent, discard its stale child")
 }
 
+// Compose the real materialize/Prepare/write boundaries with two Store handles.
+// A history RPC callback is before Prepare in MCP and cannot model this race.
+func TestMCPAdmittedRevivalRequeuesCanceledWork(t *testing.T) {
+	for _, mode := range []string{"hint", "duplicate-hint", "child", "renewed"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "archive.db")
+			st, err := store.Open(path)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, st.Close()) }()
+			other, err := store.Open(path)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, other.Close()) }()
+			now := time.Unix(1710000000, 0).UTC()
+			parent := store.Message{WorkspaceID: "TLOCAL", ChannelID: "C123", TS: "1710000001.000000", Text: "root", NormalizedText: "root", ReplyCount: 1, SourceName: SourceName, SourceRank: SourceRank, RawJSON: "{}", UpdatedAt: now}
+			require.NoError(t, st.UpsertWorkspace(ctx, store.Workspace{ID: "TLOCAL", Name: "fixture", RawJSON: "{}", UpdatedAt: now}))
+			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "TLOCAL", Name: "fixture", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
+			require.NoError(t, st.UpsertMessage(ctx, parent, nil))
+			require.NoError(t, st.SetSyncState(ctx, SourceName, "workspace", "TLOCAL", "prior-success"))
+			prepared, err := st.PrepareThreadWork(ctx, SourceName, "TLOCAL", "C123")
+			require.NoError(t, err)
+			require.Len(t, prepared, 1)
+			materialized := MessageRecord{ChannelID: "C123", TS: parent.TS, Text: "revived root", ReplyCount: 1}
+			deleted := parent
+			deleted.DeletedTS = "1710000009.000000"
+			require.NoError(t, other.MarkMessageDeleted(ctx, deleted, nil))
+			pending, err := st.PendingThreadWork(ctx, SourceName, "TLOCAL", "C123")
+			require.NoError(t, err)
+			require.Empty(t, pending)
+			if mode == "renewed" {
+				require.NoError(t, other.UpsertMessage(ctx, parent, nil))
+				_, err := other.PrepareThreadWork(ctx, SourceName, "TLOCAL", "C123")
+				require.NoError(t, err)
+			}
+			before, err := st.QueryReadOnly(ctx, "select * from sync_state order by entity_type,entity_id")
+			require.NoError(t, err)
+			batch := store.WriteBatch{Messages: []store.MessageWrite{toMessageWrite("TLOCAL", materialized, false, now)},
+				PendingThreads:  []store.ThreadWork{{SourceName: SourceName, WorkspaceID: "TLOCAL", ChannelID: "C123", TS: parent.TS}},
+				ThreadDiscovery: &store.ThreadWorkDiscovery{SourceName: SourceName, WorkspaceID: "TLOCAL", ChannelID: "C123", KnownWork: map[string]store.ThreadWork{parent.TS: prepared[0]}}}
+			if mode == "duplicate-hint" {
+				materialized.ReplyCount = 0
+				batch.Messages = append(batch.Messages, toMessageWrite("TLOCAL", materialized, false, now))
+			} else if mode == "child" {
+				materialized.ReplyCount = 0
+				batch.Messages[0] = toMessageWrite("TLOCAL", materialized, false, now)
+				child := MessageRecord{ChannelID: "C123", TS: "1710000002.000000", ThreadTS: parent.TS, Text: "child"}
+				batch.Messages = append(batch.Messages, toMessageWrite("TLOCAL", child, false, now))
+				batch.PendingThreads = nil
+			}
+			written, err := st.ApplyWriteBatch(ctx, batch)
+			require.NoError(t, err)
+			calls := 0
+			client := &Client{mcp: threadWorkSession(func(_ context.Context, _ string, _ map[string]any) (string, error) {
+				calls++
+				return "{\"ok\":true,\"messages\":[]}", nil
+			})}
+			tools := toolset{provider: providerReference, readThread: "slack_get_thread_replies"}
+			stale, err := syncThread(ctx, st, client, tools, "TLOCAL", "C123", parent.TS, false, now, &prepared[0])
+			require.NoError(t, err)
+			require.True(t, stale.revoked)
+			require.Zero(t, calls)
+			if mode == "renewed" {
+				require.Empty(t, written.PendingThreads)
+				after, err := st.QueryReadOnly(ctx, "select * from sync_state order by entity_type,entity_id")
+				require.NoError(t, err)
+				require.Equal(t, before, after, "do not adopt or renew another writer's generation")
+			} else {
+				require.Len(t, written.PendingThreads, 1)
+				work := written.PendingThreads[0]
+				require.NotEqual(t, prepared[0].Generation, work.Generation)
+				result, err := syncThread(ctx, st, client, tools, "TLOCAL", "C123", parent.TS, false, now, &work)
+				require.NoError(t, err)
+				require.False(t, result.revoked)
+				require.Equal(t, 1, calls)
+				completed, err := st.CompleteThreadWork(ctx, work, "")
+				require.NoError(t, err)
+				require.True(t, completed)
+				pending, err = st.PendingThreadWork(ctx, SourceName, "TLOCAL", "C123")
+				require.NoError(t, err)
+				require.Empty(t, pending)
+			}
+			freshness, err := st.GetSyncState(ctx, SourceName, "workspace", "TLOCAL")
+			require.NoError(t, err)
+			require.Equal(t, "prior-success", freshness, "this composed owner proof does not run full Sync")
+		})
+	}
+}
+
 type threadWorkSession func(context.Context, string, map[string]any) (string, error)
 
 func (threadWorkSession) Initialize(context.Context) error                    { return nil }

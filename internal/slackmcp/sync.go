@@ -134,7 +134,6 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 
 		ordinaryThreads := opts.Since == "" && tools.readThread != ""
 		pendingThreads := map[string]store.ThreadWork{}
-		knownThreads := map[string]struct{}{}
 		if ordinaryThreads {
 			work, err := st.PrepareThreadWork(ctx, SourceName, workspaceID, channel.ID)
 			if err != nil {
@@ -142,15 +141,15 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			}
 			for _, item := range work {
 				pendingThreads[item.TS] = item
-				knownThreads[item.TS] = struct{}{}
 			}
 		}
 		threadRoots := map[string]struct{}{}
+		var returnedTS []string
 		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, min(len(channelResult.Messages), maxMessageBatchSize))}
 		if ordinaryThreads {
 			// Keep admitted child evidence with its history batch even if a later
 			// batch fails before retained-root discovery can run.
-			batch.ThreadDiscovery = &store.ThreadWorkDiscovery{SourceName: SourceName, WorkspaceID: workspaceID, ChannelID: channel.ID, ExcludedTS: knownThreads}
+			batch.ThreadDiscovery = &store.ThreadWorkDiscovery{SourceName: SourceName, WorkspaceID: workspaceID, ChannelID: channel.ID, KnownWork: pendingThreads}
 		}
 		writeHistoryBatch := func() error {
 			result, err := st.ApplyWriteBatch(ctx, batch)
@@ -160,20 +159,20 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			summary.Messages += result.MessagesWritten
 			for _, work := range result.PendingThreads {
 				pendingThreads[work.TS] = work
-				knownThreads[work.TS] = struct{}{}
 			}
 			batch.Messages = batch.Messages[:0]
 			batch.PendingThreads = batch.PendingThreads[:0]
 			return nil
 		}
 		for _, message := range channelResult.Messages {
+			if !ordinaryThreads && tools.readThread != "" {
+				returnedTS = append(returnedTS, message.TS)
+			}
 			batch.Messages = append(batch.Messages, toMessageWrite(workspaceID, message, enforceRetention, now))
 			if message.ReplyCount > 0 {
 				threadRoots[message.TS] = struct{}{}
 				if ordinaryThreads {
-					if _, known := knownThreads[message.TS]; !known {
-						batch.PendingThreads = append(batch.PendingThreads, store.ThreadWork{SourceName: SourceName, WorkspaceID: workspaceID, ChannelID: channel.ID, TS: message.TS})
-					}
+					batch.PendingThreads = append(batch.PendingThreads, store.ThreadWork{SourceName: SourceName, WorkspaceID: workspaceID, ChannelID: channel.ID, TS: message.TS})
 				}
 			}
 			if len(batch.Messages) == maxMessageBatchSize {
@@ -189,7 +188,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		}
 		if tools.readThread == "" {
 			if opts.Since == "" {
-				work, err := st.PendingThreadWork(ctx, SourceName, workspaceID, channel.ID)
+				work, err := st.ReconcileThreadWork(ctx, SourceName, workspaceID, channel.ID)
 				if err != nil {
 					return summary, err
 				}
@@ -207,9 +206,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 				return summary, err
 			}
 			for _, root := range storedRoots {
-				if _, known := knownThreads[root.TS]; !known {
-					batch.PendingThreads = append(batch.PendingThreads, store.ThreadWork{SourceName: SourceName, WorkspaceID: workspaceID, ChannelID: channel.ID, TS: root.TS})
-				}
+				batch.PendingThreads = append(batch.PendingThreads, store.ThreadWork{SourceName: SourceName, WorkspaceID: workspaceID, ChannelID: channel.ID, TS: root.TS})
 			}
 			if len(batch.PendingThreads) > 0 {
 				if err := writeHistoryBatch(); err != nil {
@@ -219,6 +216,19 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			threadRoots = make(map[string]struct{}, len(pendingThreads))
 			for ts := range pendingThreads {
 				threadRoots[ts] = struct{}{}
+			}
+		} else {
+			hints := make([]string, 0, len(threadRoots))
+			for ts := range threadRoots {
+				hints = append(hints, ts)
+			}
+			roots, err := st.ReturnedThreadRoots(ctx, workspaceID, channel.ID, returnedTS, hints)
+			if err != nil {
+				return summary, persistenceError(err)
+			}
+			threadRoots = make(map[string]struct{}, len(roots))
+			for _, root := range roots {
+				threadRoots[root.TS] = struct{}{}
 			}
 		}
 		orderedRoots := make([]string, 0, len(threadRoots))
@@ -241,7 +251,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			summary.Replies += result.replies
 			coverage.include(result.coverage)
 			if work != nil && !result.coverage.more && !result.coverage.limited {
-				if err := st.CompleteThreadWork(ctx, *work, ""); err != nil {
+				if _, err := st.CompleteThreadWork(ctx, *work, ""); err != nil {
 					return summary, err
 				}
 			}

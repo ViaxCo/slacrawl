@@ -131,21 +131,74 @@ func (s *Store) PrepareThreadWork(ctx context.Context, source, workspaceID, chan
 		return nil, err
 	}
 	defer rollback()
-	owner, err := storedb.New(dbtx).GetChannelWorkspace(ctx, channelID)
+	pending, err := reconcileThreadWork(ctx, dbtx, source, workspaceID, channelID)
+	if err != nil {
+		return nil, err
+	}
+	byTS := make(map[string]ThreadWork, len(pending))
+	for _, work := range pending {
+		byTS[work.TS] = work
+	}
+	roots, err := channelThreadRoots(ctx, dbtx, workspaceID, channelID)
+	if err != nil {
+		return nil, err
+	}
+	for _, root := range roots {
+		byTS[root.TS] = ThreadWork{SourceName: source, WorkspaceID: workspaceID, ChannelID: channelID, TS: root.TS}
+	}
+	requests := make([]ThreadWork, 0, len(byTS))
+	for _, work := range byTS {
+		requests = append(requests, work)
+	}
+	sort.Slice(requests, func(i, j int) bool { return requests[i].TS < requests[j].TS })
+	queued, err := enqueueThreadWork(ctx, dbtx, requests)
+	if err != nil {
+		return nil, err
+	}
+	if err := commit(); err != nil {
+		return nil, err
+	}
+	return queued, nil
+}
+
+// ReconcileThreadWork validates and removes obsolete selected work without
+// discovering or renewing jobs. A connector without replies can decide whether
+// live work remains from the same writer snapshot that retired tombstones.
+func (s *Store) ReconcileThreadWork(ctx context.Context, source, workspaceID, channelID string) ([]ThreadWork, error) {
+	if err := validateThreadWorkSource(source); err != nil {
+		return nil, err
+	}
+	dbtx, commit, rollback, err := s.beginMessageTransaction(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback()
+	pending, err := reconcileThreadWork(ctx, dbtx, source, workspaceID, channelID)
+	if err != nil {
+		return nil, err
+	}
+	if err := commit(); err != nil {
+		return nil, err
+	}
+	return pending, nil
+}
+
+func reconcileThreadWork(ctx context.Context, q storedb.DBTX, source, workspaceID, channelID string) ([]ThreadWork, error) {
+	owner, err := storedb.New(q).GetChannelWorkspace(ctx, channelID)
 	if err != nil {
 		return nil, err
 	}
 	if owner != workspaceID {
 		return nil, &WorkspaceCollisionError{Entity: "channel", ID: channelID, ExistingWorkspaceID: owner, WorkspaceID: workspaceID}
 	}
-	pending, err := pendingThreadWork(ctx, dbtx, source, workspaceID, channelID)
+	pending, err := pendingThreadWork(ctx, q, source, workspaceID, channelID)
 	if err != nil {
 		return nil, err
 	}
-	byTS := make(map[string]ThreadWork, len(pending))
+	remaining := make([]ThreadWork, 0, len(pending))
 	for _, work := range pending {
 		var owner, threadTS, deletedTS, subtype string
-		err := dbtx.QueryRowContext(ctx, `select workspace_id, coalesce(thread_ts, ''), coalesce(deleted_ts, ''), coalesce(subtype, '')
+		err := q.QueryRowContext(ctx, `select workspace_id, coalesce(thread_ts, ''), coalesce(deleted_ts, ''), coalesce(subtype, '')
 from messages where channel_id = ? and ts = ?`, channelID, work.TS).Scan(&owner, &threadTS, &deletedTS, &subtype)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && (owner != workspaceID || (threadTS != "" && threadTS != work.TS))) {
 			return nil, errors.New("pending thread parent is missing or inconsistent; repair the archive before retrying")
@@ -154,17 +207,17 @@ from messages where channel_id = ? and ts = ?`, channelID, work.TS).Scan(&owner,
 			return nil, err
 		}
 		if strings.TrimSpace(deletedTS) != "" || subtype == "message_deleted" {
-			if err := retireDeletedThreadWork(ctx, dbtx, workspaceID, channelID, work.TS); err != nil {
+			if err := retireDeletedThreadWork(ctx, q, workspaceID, channelID, work.TS); err != nil {
 				return nil, err
 			}
 			continue
 		}
-		byTS[work.TS] = work
+		remaining = append(remaining, work)
 	}
 	// A sliced sync can leave a skip without a job, then a share merge can
 	// tombstone its parent. Validate pending parents first so reconciliation
 	// cannot hide malformed work; only selected, owned tombstones qualify.
-	rows, err := dbtx.QueryContext(ctx, `select m.ts from messages m
+	rows, err := q.QueryContext(ctx, `select m.ts from messages m
 where m.workspace_id = ? and m.channel_id = ? and coalesce(m.thread_ts, '') in ('', m.ts)
   and (trim(coalesce(m.deleted_ts, '')) <> '' or m.subtype = 'message_deleted')
   and exists (select 1 from sync_state s where s.source_name = 'api-user' and s.entity_type = 'thread_skip'
@@ -188,30 +241,11 @@ where m.workspace_id = ? and m.channel_id = ? and coalesce(m.thread_ts, '') in (
 		return nil, err
 	}
 	for _, ts := range tombstones {
-		if err := retireThreadWork(ctx, dbtx, workspaceID, channelID, ts); err != nil {
+		if err := retireThreadWork(ctx, q, workspaceID, channelID, ts); err != nil {
 			return nil, err
 		}
 	}
-	roots, err := channelThreadRoots(ctx, dbtx, workspaceID, channelID)
-	if err != nil {
-		return nil, err
-	}
-	for _, root := range roots {
-		byTS[root.TS] = ThreadWork{SourceName: source, WorkspaceID: workspaceID, ChannelID: channelID, TS: root.TS}
-	}
-	requests := make([]ThreadWork, 0, len(byTS))
-	for _, work := range byTS {
-		requests = append(requests, work)
-	}
-	sort.Slice(requests, func(i, j int) bool { return requests[i].TS < requests[j].TS })
-	queued, err := enqueueThreadWork(ctx, dbtx, requests)
-	if err != nil {
-		return nil, err
-	}
-	if err := commit(); err != nil {
-		return nil, err
-	}
-	return queued, nil
+	return remaining, nil
 }
 
 func (s *Store) PendingThreadWork(ctx context.Context, source, workspaceID, channelID string) ([]ThreadWork, error) {

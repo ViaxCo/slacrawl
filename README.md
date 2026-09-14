@@ -86,7 +86,8 @@ JSON export when excluding DMs. Omitted/true retain provider intake behavior.
 
 Ordinary MCP sync also preserves unfinished replies across history overwrites
 and restarts. Explicit `--since`, including `--full --since`, reads only threads
-in returned history and leaves older pending work alone. See
+whose roots are returned in history, including roots identified by archived
+children, and leaves older pending work alone. See
 [Retained MCP threads](docs/configuration.md#retained-mcp-threads) for missing
 thread tools, cancellation and partial-coverage behavior.
 

@@ -496,15 +496,21 @@ Share config:
 9. with empty Since and a thread tool, preserve retained reply hints before history
    writes and save new page hints atomically with their message batches; drain
    selected jobs in timestamp order and retire only the matching live generation
-   after complete replies; incomplete history still prevents workspace freshness
-10. with explicit Since, including Full with Since, use only returned-history
-    thread roots without reading or changing ordinary pending work; without a
-    thread tool, existing selected pending work fails actionably after history
-    writes, while no-pending behavior remains unchanged
+   after complete replies; admitted revival after cancellation requeues missing
+   work without replacing an extant generation; incomplete history still prevents
+   workspace freshness
+10. with explicit Since, including Full with Since, restrict roots to identities
+    themselves returned in history, using final stored ownership and reply/child
+    evidence plus positive page hints; do not follow a returned child to an
+    unreturned parent or read/change ordinary pending work
 11. check generation and live ownership before and after every native or text
     thread request, before each parent/reply transaction and at completion;
     revoked work discards uncommitted materialization and stops pagination,
     preserving earlier commits and any newer job
+12. during ordinary sync without a thread tool, validate selected pending work
+    and reconcile authoritative stored tombstones in one transaction after valid
+    history writes; do not create or renew jobs; surviving work fails actionably
+    before freshness, while no-pending behavior remains unchanged
 
 Configured workspace identity without returned context remains operator-bound,
 not authenticated proof. Existing reference history pagination and MCP coverage
