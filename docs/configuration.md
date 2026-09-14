@@ -769,6 +769,13 @@ Slack capture.
 
 ### API history completeness
 
+Native history and replies pages must report `ok: true` before any message on
+that page is admitted. Missing, null or false success with blank or absent error
+text stops sync or repair with a method-specific error. Concrete Slack errors
+keep their existing type and details; previously committed pages survive, and
+the pending interval remains available for a corrected retry. This does not
+change catalog or authentication response handling.
+
 API sync and periodic tail repair follow every nonempty history/replies cursor,
 even when a page is short or empty. After writing a valid page and handling its
 scheduled threads, a terminal `has_more = true` without a continuation cursor
@@ -788,8 +795,9 @@ but the previous coverage `Latest` and `Complete` stay unchanged, the attempted
 lower bound remains in `Pending`, and ordinary workspace success does not
 advance. A corrected retry resumes that pending interval and can complete it.
 Concrete request, validation, write, and cancellation failures keep their
-existing errors. One-message capability probes remain independent of scan
-completion.
+existing errors. One-message capability probes require successful page responses
+but remain independent of scan completion. Doctor's existing suppression of
+non-scope probe errors is unchanged.
 
 See Slack's [history contract](https://docs.slack.dev/reference/methods/conversations.history/#message-types),
 [replies pagination](https://docs.slack.dev/reference/methods/conversations.replies/#pagination),

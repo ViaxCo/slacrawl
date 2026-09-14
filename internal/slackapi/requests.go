@@ -72,7 +72,7 @@ func (c *Client) getConversationHistory(ctx context.Context, token string, param
 		if err := c.postSlackForm(ctx, token, "conversations.history", values, &resp); err != nil {
 			return nil, err
 		}
-		if err := resp.Err(); err != nil {
+		if err := conversationPageSuccess("conversations.history", resp.SlackResponse); err != nil {
 			return nil, err
 		}
 		messages, err := rawConversationMessages(resp.Messages)
@@ -95,7 +95,7 @@ func (c *Client) getConversationReplies(ctx context.Context, params *slack.GetCo
 		if err := c.postSlackForm(ctx, c.tokens.User, "conversations.replies", values, &resp); err != nil {
 			return nil, err
 		}
-		if err := resp.Err(); err != nil {
+		if err := conversationPageSuccess("conversations.replies", resp.SlackResponse); err != nil {
 			return nil, err
 		}
 		messages, err := rawConversationMessages(resp.Messages)
@@ -108,6 +108,18 @@ func (c *Client) getConversationReplies(ctx context.Context, params *slack.GetCo
 			NextCursor: resp.ResponseMetaData.NextCursor,
 		}, nil
 	})
+}
+
+func conversationPageSuccess(method string, response slack.SlackResponse) error {
+	if err := response.Err(); err != nil {
+		return err
+	}
+	// Slack's Err permits blank-error responses from non-JSON methods. Native
+	// history and replies pages must affirm success before their messages count.
+	if !response.Ok {
+		return fmt.Errorf("%s response did not report success", method)
+	}
+	return nil
 }
 
 func (c *Client) postSlackForm(ctx context.Context, token string, method string, values url.Values, target any) error {

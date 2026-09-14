@@ -1,10 +1,15 @@
 package slackapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +21,131 @@ import (
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/store"
 )
+
+func TestConversationPagesRequireExplicitSuccess(t *testing.T) {
+	for _, method := range []string{"history", "replies"} {
+		for _, status := range []struct{ name, field string }{{"missing", ""}, {"null", `"ok":null,`}, {"false", `"ok":false,`}} {
+			for _, detail := range []struct{ name, field string }{{"missing", ""}, {"null", `"error":null,`}, {"empty", `"error":"",`}, {"blank", `"error":" \t ",`}} {
+				t.Run(method+"/"+status.name+"/"+detail.name, func(t *testing.T) {
+					calls := 0
+					client := primaryOwnerClient(t, config.Tokens{User: "fixture"}, func(r *http.Request, form url.Values) (any, error) {
+						calls++
+						require.Equal(t, "/conversations."+method, r.URL.Path)
+						require.Equal(t, "fixture", form.Get("token"))
+						return json.RawMessage(`{` + status.field + detail.field + `"messages":[{"ts":"1710000000.000000","text":"rejected-page-canary"}]}`), nil
+					})
+					var err error
+					if method == "history" {
+						var page *conversationHistoryPage
+						page, err = client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123"})
+						require.Nil(t, page)
+					} else {
+						var page *conversationRepliesPage
+						page, err = client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"})
+						require.Nil(t, page)
+					}
+					require.EqualError(t, err, "conversations."+method+" response did not report success")
+					require.NotContains(t, err.Error(), "rejected-page-canary")
+					require.Equal(t, 1, calls, "a malformed success response is not rate-limited")
+				})
+			}
+		}
+		t.Run(method+"/before-message-conversion", func(t *testing.T) {
+			client := primaryOwnerClient(t, config.Tokens{User: "fixture"}, func(r *http.Request, _ url.Values) (any, error) {
+				require.Equal(t, "/conversations."+method, r.URL.Path)
+				return json.RawMessage(`{"ok":false,"messages":[42]}`), nil
+			})
+			if method == "history" {
+				page, err := client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123"})
+				require.Nil(t, page)
+				require.EqualError(t, err, "conversations.history response did not report success")
+			} else {
+				page, err := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"})
+				require.Nil(t, page)
+				require.EqualError(t, err, "conversations.replies response did not report success")
+			}
+		})
+	}
+}
+
+func TestConversationPageSuccessPreservesNativeErrors(t *testing.T) {
+	response := slack.SlackResponse{
+		Error: "missing_scope", Errors: []slack.SlackResponseErrors{{Message: new("native-detail")}},
+		ResponseMetadata: slack.ResponseMetadata{Messages: []string{"native-message"}, Warnings: []string{"native-warning"}, Cursor: "native-cursor"},
+	}
+	// Direct helper input proves metadata passthrough. Page decoding's existing
+	// response_metadata cursor field does not populate the embedded metadata.
+	require.Equal(t, response.Err(), conversationPageSuccess("conversations.history", response))
+	for _, method := range []string{"history", "replies"} {
+		t.Run(method, func(t *testing.T) {
+			client := primaryOwnerClient(t, config.Tokens{User: "fixture"}, func(r *http.Request, _ url.Values) (any, error) {
+				require.Equal(t, "/conversations."+method, r.URL.Path)
+				return json.RawMessage(`{"ok":false,"error":"missing_scope","errors":["native-detail"],"messages":[42]}`), nil
+			})
+			var err error
+			if method == "history" {
+				var page *conversationHistoryPage
+				page, err = client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123"})
+				require.Nil(t, page)
+			} else {
+				var page *conversationRepliesPage
+				page, err = client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"})
+				require.Nil(t, page)
+			}
+			var native slack.SlackErrorResponse
+			require.ErrorAs(t, err, &native)
+			require.Equal(t, "missing_scope", native.Err)
+			require.Equal(t, response.Errors, native.Errors)
+		})
+	}
+}
+
+func TestConversationPageRateLimitRetryAndCancellation(t *testing.T) {
+	for _, method := range []string{"history", "replies"} {
+		for _, canceled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/canceled=%t", method, canceled), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				calls, sleeps := 0, 0
+				client := NewWithOptions(config.Tokens{User: "fixture"}, "https://fixture.invalid/", &http.Client{Transport: primaryOwnerRoundTrip(func(r *http.Request) (*http.Response, error) {
+					calls++
+					require.NoError(t, r.ParseForm())
+					require.Equal(t, "/conversations."+method, r.URL.Path)
+					require.Equal(t, "second", r.Form.Get("cursor"))
+					if calls == 1 {
+						return &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{"Retry-After": {"2"}}, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+					}
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true,"messages":[]}`)), Request: r}, nil
+				})})
+				client.sleep = func(ctx context.Context, delay time.Duration) error {
+					sleeps++
+					require.Equal(t, 2*time.Second, delay)
+					if canceled {
+						cancel()
+					}
+					return ctx.Err()
+				}
+				var page any
+				var err error
+				if method == "history" {
+					page, err = client.getConversationHistory(ctx, "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123", Cursor: "second"})
+				} else {
+					page, err = client.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000", Cursor: "second"})
+				}
+				if canceled {
+					require.ErrorIs(t, err, context.Canceled)
+					require.Nil(t, page)
+					require.Equal(t, 1, calls)
+				} else {
+					require.NoError(t, err)
+					require.NotNil(t, page)
+					require.Equal(t, 2, calls)
+				}
+				require.Equal(t, 1, sleeps)
+			})
+		}
+	}
+}
 
 func TestCompletenessDecoderPreservesCapabilityProbes(t *testing.T) {
 	for _, method := range []string{"history", "replies"} {
@@ -36,12 +166,14 @@ func TestCompletenessDecoderPreservesCapabilityProbes(t *testing.T) {
 				// decoder directly to catch an incorrectly placed completion gate.
 				page, err := client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123", Limit: 1})
 				require.NoError(t, err)
+				require.Empty(t, page.Messages)
 				require.True(t, page.HasMore)
 				require.True(t, page.IsLimited)
 				require.Empty(t, page.NextCursor)
 			} else {
 				page, err := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000001.000000", Limit: 1})
 				require.NoError(t, err)
+				require.Empty(t, page.Messages)
 				require.True(t, page.HasMore)
 				require.Empty(t, page.NextCursor)
 			}
@@ -123,6 +255,85 @@ func TestHistoryCompletenessAcrossSources(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestHistoryPageSuccessRetriesPendingInterval(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, token string
+		tokens              config.Tokens
+		repair              bool
+	}{
+		{"bot", SourceBot, "fixture-bot", config.Tokens{Bot: "fixture-bot"}, false},
+		{"user", SourceUser, "fixture-user", config.Tokens{User: "fixture-user"}, false},
+		{"repair", SourceBot, "fixture-bot", config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := mustStore(t)
+			defer func() { require.NoError(t, st.Close()) }()
+			now := time.Unix(1710000200, 0).UTC()
+			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Name: "fixture", Kind: "public_channel", UpdatedAt: now}))
+			require.NoError(t, saveHistoryCoverage(ctx, st, tc.source, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1709900000.000000"}))
+			require.NoError(t, st.SetSyncState(ctx, tc.source, "workspace", "T123", "2020-01-01T00:00:00Z"))
+			require.NoError(t, st.SetSyncState(ctx, "doctor", "threads", "coverage", "stored-status"))
+			const progressQuery = "select * from sync_state where entity_type='workspace' or source_name='doctor' order by source_name,entity_id"
+			beforeProgress := repairKeyRows(t, st, progressQuery)
+			corrected := false
+			var cursors, oldest []string
+			var logs bytes.Buffer
+			client := primaryOwnerClient(t, tc.tokens, func(r *http.Request, form url.Values) (any, error) {
+				if r.URL.Path != "/conversations.history" {
+					return primaryOwnerResponse(r.URL.Path), nil
+				}
+				require.Equal(t, tc.token, form.Get("token"))
+				require.Equal(t, "C123", form.Get("channel"))
+				require.Equal(t, "1710000200.000000", form.Get("latest"))
+				cursors, oldest = append(cursors, form.Get("cursor")), append(oldest, form.Get("oldest"))
+				if form.Get("cursor") == "" {
+					return map[string]any{"ok": true, "messages": []any{repairKeyMessage("earlier-page", "1710000000.000000")}, "response_metadata": map[string]any{"next_cursor": "second"}}, nil
+				}
+				require.Equal(t, "second", form.Get("cursor"))
+				if !corrected {
+					return map[string]any{"messages": []any{repairKeyMessage("rejected-page-canary", "1710000002.000000")}}, nil
+				}
+				return map[string]any{"ok": true, "messages": []any{repairKeyMessage("recovered-page", "1710000002.000000")}}, nil
+			}).WithLogger(testProgressLogger(&logs))
+			client.now = func() time.Time { return now }
+			run := func() error {
+				if tc.repair {
+					return client.repairWorkspace(ctx, st, "T123")
+				}
+				return client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"})
+			}
+			runErr := run()
+			require.EqualError(t, runErr, "channel C123 history: conversations.history response did not report success")
+			require.Equal(t, []string{"", "second"}, cursors)
+			require.Equal(t, beforeProgress, repairKeyRows(t, st, progressQuery))
+			coverage, err := loadHistoryCoverage(ctx, st, tc.source, "T123", "C123", "")
+			require.NoError(t, err)
+			require.Equal(t, historyCoverage{Complete: true, Latest: "1709900000.000000", Pending: new("1709896400.000000")}, coverage)
+			require.Equal(t, []map[string]any{{"ts": "1710000000.000000", "source_name": tc.source}}, repairKeyRows(t, st, "select ts,source_name from messages order by ts"))
+			require.Equal(t, []string{"1710000000.000000|FEARLIERPAGE|earlier-page.txt|UEARLIERPAGE"}, repairKeyDerived(t, st))
+			assertAdmissionCanariesAbsent(t, st, logs.String()+runErr.Error(), "rejected-page-canary", "UREJECTEDPAGECANARY", "FREJECTEDPAGECANARY")
+			corrected = true
+			require.NoError(t, run())
+			require.Equal(t, []string{"", "second", "", "second"}, cursors)
+			require.Equal(t, []string{"1709896400.000000", "1709896400.000000", "1709896400.000000", "1709896400.000000"}, oldest)
+			coverage, err = loadHistoryCoverage(ctx, st, tc.source, "T123", "C123", "")
+			require.NoError(t, err)
+			require.Equal(t, historyCoverage{Complete: true, Latest: "1710000200.000000"}, coverage)
+			require.Equal(t, []map[string]any{{"ts": "1710000000.000000", "source_name": tc.source}, {"ts": "1710000002.000000", "source_name": tc.source}}, repairKeyRows(t, st, "select ts,source_name from messages order by ts"))
+			require.Equal(t, []string{"1710000000.000000|FEARLIERPAGE|earlier-page.txt|UEARLIERPAGE", "1710000002.000000|FRECOVEREDPAGE|recovered-page.txt|URECOVEREDPAGE"}, repairKeyDerived(t, st))
+			assertAdmissionCanariesAbsent(t, st, logs.String(), "rejected-page-canary", "UREJECTEDPAGECANARY", "FREJECTEDPAGECANARY")
+			if tc.repair {
+				require.Equal(t, beforeProgress, repairKeyRows(t, st, progressQuery))
+			} else {
+				completed, err := st.GetSyncState(ctx, tc.source, "workspace", "T123")
+				require.NoError(t, err)
+				require.Equal(t, now.Format(time.RFC3339), completed)
+			}
+		})
 	}
 }
 

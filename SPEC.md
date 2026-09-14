@@ -416,6 +416,7 @@ Share config:
     - pending jobs stay local across Git share, do not advance freshness timestamps, and keep API Doctor thread coverage partial; MCP consumption remains a separate change
     - capability-aware thread preparation and concurrent-sync fairness remain a separate follow-up; history-commit preservation does not change preparation renewal
 12. validate every message channel ID in the complete history/replies page, including nested message, previous-message, and root fields, before normalizing or writing that page; earlier pages remain resumable on failure
+   - require explicit native `ok: true` before converting history/replies messages; preserve concrete Slack errors, and reject missing/null/false success with blank or absent error text without admitting that page
    - missing message channel IDs inherit the requested conversation
    - after identity validation, require a nonblank top-level timestamp under every policy, including periodic repair; preserve accepted timestamp bytes
    - nested metadata and catalog latest-message timestamps remain optional; native replies may echo the requested parent timestamp
@@ -431,7 +432,7 @@ Share config:
     - concrete request, decoding, identity, timestamp, store, and thread failures retain precedence
 16. write successful coverage only after these checks; failures preserve valid writes, previous `Latest`/`Complete`, and attempted `Pending`, without advancing ordinary workspace success
     - a corrected retry resumes the pending interval before clearing it
-    - periodic repair uses the same scan completion rules; one-message capability probes only decode responses
+    - periodic repair uses the same scan completion rules; one-message capability probes require page success but do not certify scan completion or change which errors Doctor reports
     - existing channel skips and join attempts remain separately recorded
     - bulk retirement of legacy API thread skips requires Full with no Since, no channel allow-list and no effective exclusions, plus completed DM enumeration and no observed omissions; the atomic same-workspace pending-work guard still applies
     - DM catalog filtering or missing scope, admission drops, recoverable history skips, and channel/history/reply collisions prevent this Sync from claiming full thread coverage; successful individual replies still retire their own work and skip
