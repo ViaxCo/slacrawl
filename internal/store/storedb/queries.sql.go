@@ -137,12 +137,15 @@ func (q *Queries) CountWorkspaces(ctx context.Context) (int64, error) {
 
 const deleteAPIThreadSkipsIfNoPending = `-- name: DeleteAPIThreadSkipsIfNoPending :exec
 delete from sync_state
-where source_name = 'api-user'
-  and entity_type = 'thread_skip'
-  and entity_id like ?1
+where sync_state.source_name = 'api-user'
+  and sync_state.entity_type = 'thread_skip'
+  and sync_state.entity_id like ?1
   and not exists (
-    select 1 from sync_state where source_name = 'api-user' and entity_type = 'thread_pending_v1'
-      and json_extract(entity_id, '$[0]') = ?2
+    select 1
+    from sync_state as pending
+    where pending.source_name = 'api-user'
+      and pending.entity_type = 'thread_pending_v1'
+      and json_extract(pending.entity_id, '$[0]') = ?2
   )
 `
 

@@ -235,12 +235,15 @@ where source_name = ? and entity_type = ?;
 
 -- name: DeleteAPIThreadSkipsIfNoPending :exec
 delete from sync_state
-where source_name = 'api-user'
-  and entity_type = 'thread_skip'
-  and entity_id like sqlc.arg(entity_id_like)
+where sync_state.source_name = 'api-user'
+  and sync_state.entity_type = 'thread_skip'
+  and sync_state.entity_id like sqlc.arg(entity_id_like)
   and not exists (
-    select 1 from sync_state where source_name = 'api-user' and entity_type = 'thread_pending_v1'
-      and json_extract(entity_id, '$[0]') = sqlc.arg(workspace_id)
+    select 1
+    from sync_state as pending
+    where pending.source_name = 'api-user'
+      and pending.entity_type = 'thread_pending_v1'
+      and json_extract(pending.entity_id, '$[0]') = sqlc.arg(workspace_id)
   );
 
 -- name: CountSyncStateByType :one
