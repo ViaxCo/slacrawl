@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Require explicit native success for authentication, conversation-info lookups and join attempts. Stop failed primary auth before archive writes or Socket Mode startup, reject unsuccessful Tail lookups before writes and acknowledgement, and keep failed joins as recorded history skips. Preserve optional-user fallback policy, token routing, private auth headers and bounded rate-limit retries; reject trailing JSON and late read errors through the shared response owner.
+
 - Require explicit success on native API channel and user catalog pages before returning rows or cursors. Failed catalogs preserve earlier completed public history and final sync markers for retry. Share whole-body response validation and typed HTTP status errors with history/replies, while retaining token routing, concrete missing-scope handling and bounded rate-limit retries.
 
 - Require explicit success on native API history and replies pages before admitting messages. Reject missing, null or false success with no concrete Slack error; preserve earlier committed pages, pending retries and native errors across ordinary sync and periodic repair.

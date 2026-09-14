@@ -78,7 +78,7 @@ func TestConversationPageSuccessPreservesNativeErrors(t *testing.T) {
 	}
 	// Direct helper input proves metadata passthrough. Page decoding's existing
 	// response_metadata cursor field does not populate the embedded metadata.
-	require.Equal(t, response.Err(), nativePageSuccess("conversations.history", response))
+	require.Equal(t, response.Err(), nativeResponseSuccess("conversations.history", response))
 	for _, method := range []string{"history", "replies"} {
 		t.Run(method, func(t *testing.T) {
 			client := primaryOwnerClient(t, config.Tokens{User: "fixture"}, func(r *http.Request, _ url.Values) (any, error) {
@@ -229,9 +229,9 @@ func TestHistoryCompletenessAcrossSources(t *testing.T) {
 				}))
 				defer server.Close()
 				client := NewWithOptions(config.Tokens{Bot: SourceBot, User: SourceUser}, server.URL+"/", server.Client())
-				source := channelSyncSource{historyClient: client.bot, token: sourceName, sourceName: sourceName, sourceRank: 2}
+				source := channelSyncSource{token: sourceName, sourceName: sourceName, sourceRank: 2}
 				if sourceName == SourceUser {
-					source.historyClient, source.sourceRank = client.user, 1
+					source.sourceRank = 1
 				}
 				err := client.syncChannelMessagesWithSource(ctx, st, "T123", channel, oldest, false, now, false, source)
 				if mode == "more" {
@@ -388,7 +388,7 @@ func TestHistoryCompletenessKeepsConcreteFailures(t *testing.T) {
 			}))
 			defer server.Close()
 			client := NewWithOptions(config.Tokens{Bot: "fixture", User: "fixture-user"}, server.URL+"/", server.Client())
-			source := channelSyncSource{historyClient: client.bot, token: "fixture", sourceName: SourceBot, sourceRank: 2}
+			source := channelSyncSource{token: "fixture", sourceName: SourceBot, sourceRank: 2}
 			err := client.syncChannelMessagesWithSource(ctx, st, "T123", channel, "1709896400.000000", false, now, true, source)
 			if mode == "cancellation" {
 				require.ErrorIs(t, err, context.Canceled)
@@ -987,5 +987,210 @@ func TestEmptyCatalogSyncKeepsUserRefetch(t *testing.T) {
 			require.Equal(t, "full", coverage)
 			require.Empty(t, repairKeyRows(t, st, "select * from sync_state where entity_type='thread_skip'"))
 		})
+	}
+}
+
+func TestNativeResponsesRequireExplicitSuccess(t *testing.T) {
+	for _, method := range []string{"auth.test", "conversations.info", "conversations.join"} {
+		for _, status := range []struct{ name, field string }{{"missing", ""}, {"null", `"ok":null,`}, {"false", `"ok":false,`}} {
+			for _, detail := range []struct{ name, field string }{{"missing", ""}, {"null", `"error":null,`}, {"empty", `"error":"",`}, {"blank", `"error":" \t ",`}} {
+				t.Run(method+"/"+status.name+"/"+detail.name, func(t *testing.T) {
+					calls := 0
+					client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
+						calls++
+						require.Equal(t, "/"+method, r.URL.Path)
+						require.Equal(t, http.MethodPost, r.Method)
+						require.Equal(t, "application/x-www-form-urlencoded", r.Header.Get("Content-Type"))
+						require.Empty(t, r.Header.Get("Authorization"))
+						wantForm := url.Values{"token": {"fixture-bot"}, "channel": {"C123"}}
+						switch method {
+						case "auth.test":
+							wantForm = url.Values{"token": {"fixture-user"}}
+						case "conversations.info":
+							wantForm.Set("include_locale", "false")
+							wantForm.Set("include_num_members", "false")
+						}
+						require.Equal(t, wantForm, form)
+						return json.RawMessage(`{` + status.field + detail.field + `"team_id":"T123","team":"native-response-canary","user_id":"U123","channel":{"id":"C123","is_channel":true,"name":"native-response-canary","latest":{"text":"native-response-canary"}}}`), nil
+					})
+					err := nativeResponseCall(t, context.Background(), client, method)
+					require.EqualError(t, err, method+" response did not report success")
+					require.NotContains(t, err.Error(), "native-response-canary")
+					require.Equal(t, 1, calls)
+				})
+			}
+		}
+	}
+}
+
+func TestNativeResponsesPreserveSuccessAndErrors(t *testing.T) {
+	for _, method := range []string{"auth.test", "conversations.info", "conversations.join"} {
+		for _, success := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/success=%t", method, success), func(t *testing.T) {
+				client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, _ url.Values) (any, error) {
+					require.Equal(t, "/"+method, r.URL.Path)
+					if success {
+						// Info retains its zero Channel and join accepts a missing channel,
+						// as the SDK did. This boundary does not certify payload shape.
+						return json.RawMessage(`{"ok":true}`), nil
+					}
+					return json.RawMessage(`{"ok":false,"error":"missing_scope","errors":["native-detail"],"response_metadata":{"warnings":["native-warning"]}}`), nil
+				})
+				err := nativeResponseCall(t, context.Background(), client, method)
+				if success {
+					require.NoError(t, err)
+				} else {
+					var native slack.SlackErrorResponse
+					require.ErrorAs(t, err, &native)
+					require.Equal(t, "missing_scope", native.Err)
+					require.Equal(t, []slack.SlackResponseErrors{{Message: new("native-detail")}}, native.Errors)
+					if method == "auth.test" {
+						require.Equal(t, []string{"native-warning"}, native.ResponseMetadata.Warnings)
+					} else {
+						// These SDK-compatible DTOs own an outer response_metadata field.
+						require.Empty(t, native.ResponseMetadata)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestNativeResponseRetryAndStatus(t *testing.T) {
+	for _, method := range []string{"auth.test", "conversations.info", "conversations.join"} {
+		for _, outcome := range []string{"retry", "cancel", "status"} {
+			t.Run(method+"/"+outcome, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				calls, sleeps := 0, 0
+				client := NewWithOptions(config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, "https://fixture.invalid/", &http.Client{Transport: primaryOwnerRoundTrip(func(r *http.Request) (*http.Response, error) {
+					calls++
+					require.Equal(t, "/"+method, r.URL.Path)
+					response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: r}
+					if calls == 1 {
+						response.StatusCode = http.StatusTooManyRequests
+						response.Header.Set("Retry-After", "2")
+					}
+					if outcome == "status" {
+						response.StatusCode, response.Status = http.StatusBadGateway, "502 Bad Gateway"
+					}
+					return response, nil
+				})})
+				client.sleep = func(ctx context.Context, delay time.Duration) error {
+					sleeps++
+					require.Equal(t, 2*time.Second, delay)
+					if outcome == "cancel" {
+						cancel()
+						return ctx.Err()
+					}
+					return nil
+				}
+				err := nativeResponseCall(t, ctx, client, method)
+				switch outcome {
+				case "retry":
+					require.NoError(t, err)
+					require.Equal(t, 2, calls)
+					require.Equal(t, 1, sleeps)
+				case "cancel":
+					require.ErrorIs(t, err, context.Canceled)
+					require.Equal(t, 1, calls)
+					require.Equal(t, 1, sleeps)
+				case "status":
+					var status slack.StatusCodeError
+					require.ErrorAs(t, err, &status)
+					require.Equal(t, slack.StatusCodeError{Code: 502, Status: "502 Bad Gateway"}, status)
+					require.Equal(t, 1, calls)
+					require.Zero(t, sleeps)
+				}
+			})
+		}
+	}
+}
+
+func TestNativeResponsesValidateWholeBody(t *testing.T) {
+	for _, method := range []string{"auth.test", "conversations.info", "conversations.join"} {
+		for _, failure := range []string{"trailing-json", "read-error"} {
+			t.Run(method+"/"+failure, func(t *testing.T) {
+				readErr := errors.New("synthetic native response read failure")
+				calls := 0
+				client := NewWithOptions(config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, "https://fixture.invalid/", &http.Client{Transport: primaryOwnerRoundTrip(func(r *http.Request) (*http.Response, error) {
+					calls++
+					require.Equal(t, "/"+method, r.URL.Path)
+					payload := `{"ok":true,"team_id":"T123","team":"native-body-canary","channel":{"id":"C123","is_channel":true,"name":"native-body-canary"}}`
+					var body io.Reader = strings.NewReader(payload + ` {"ok":true}`)
+					if failure == "read-error" {
+						body = io.MultiReader(strings.NewReader(payload), iotest.ErrReader(readErr))
+					}
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(body), Request: r}, nil
+				})})
+				err := nativeResponseCall(t, context.Background(), client, method)
+				if failure == "read-error" {
+					require.ErrorIs(t, err, readErr)
+				} else {
+					var syntax *json.SyntaxError
+					require.ErrorAs(t, err, &syntax)
+				}
+				require.NotContains(t, err.Error(), "native-body-canary")
+				require.Equal(t, 1, calls)
+			})
+		}
+	}
+}
+
+func TestNativeAuthHeadersArePrivateCopies(t *testing.T) {
+	headers := http.Header{"X-Fixture-Header": {"private-header-canary"}}
+	client := NewWithOptions(config.Tokens{Bot: "fixture-bot"}, "https://fixture.invalid/", &http.Client{Transport: primaryOwnerRoundTrip(func(r *http.Request) (*http.Response, error) {
+		require.NoError(t, r.ParseForm())
+		require.Equal(t, url.Values{"token": {"selected-auth-token"}}, r.Form)
+		return &http.Response{StatusCode: http.StatusOK, Header: headers, Body: io.NopCloser(strings.NewReader(`{"ok":true,"team_id":"T123","user_id":"U123","team":"fixture","bot_id":"B123","url":"https://fixture.invalid/","enterprise_id":"E123"}`)), Request: r}, nil
+	})})
+	auth, err := client.authTest(context.Background(), "selected-auth-token")
+	require.NoError(t, err)
+	require.Equal(t, &slack.AuthTestResponse{TeamID: "T123", UserID: "U123", Team: "fixture", BotID: "B123", URL: "https://fixture.invalid/", EnterpriseID: "E123", Header: headers}, auth)
+	headers["X-Fixture-Header"][0] = "changed"
+	require.Equal(t, "private-header-canary", auth.Header.Get("X-Fixture-Header"))
+	auth.Header.Set("X-Other", "auth-owned")
+	require.Empty(t, headers.Get("X-Other"))
+	encoded, err := json.Marshal(auth)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "private-header-canary")
+	require.NotContains(t, string(encoded), "auth-owned")
+	require.NotContains(t, string(encoded), "Header")
+}
+
+func TestNativeConversationInfoRequiresChannel(t *testing.T) {
+	client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot"}, func(*http.Request, url.Values) (any, error) {
+		t.Fatal("empty channel must not reach HTTP")
+		return nil, nil
+	})
+	channel, err := client.getConversationInfo(context.Background(), "")
+	require.Nil(t, channel)
+	require.EqualError(t, err, "ChannelID must be defined")
+}
+
+func nativeResponseCall(t *testing.T, ctx context.Context, client *Client, method string) error {
+	t.Helper()
+	switch method {
+	case "auth.test":
+		response, err := client.authTest(ctx, client.tokens.User)
+		if err != nil {
+			require.Nil(t, response)
+		} else {
+			require.NotNil(t, response)
+		}
+		return err
+	case "conversations.info":
+		response, err := client.getConversationInfo(ctx, "C123")
+		if err != nil {
+			require.Nil(t, response)
+		} else {
+			require.NotNil(t, response)
+		}
+		return err
+	case "conversations.join":
+		return client.joinConversation(ctx, "C123")
+	default:
+		t.Fatalf("unexpected native method %q", method)
+		return nil
 	}
 }

@@ -61,7 +61,6 @@ type SyncOptions struct {
 
 type Client struct {
 	bot          *slack.Client
-	user         *slack.Client
 	tokens       config.Tokens
 	appToken     string
 	apiURL       string
@@ -93,23 +92,16 @@ func NewWithOptions(tokens config.Tokens, apiURL string, httpClient *http.Client
 		client.apiURL = apiURL
 	}
 
-	buildOptions := func(includeAppToken bool) []slack.Option {
+	if tokens.Bot != "" {
 		var options []slack.Option
 		if apiURL != "" {
 			options = append(options, slack.OptionAPIURL(apiURL))
 		}
 		options = append(options, slack.OptionHTTPClient(httpClient))
-		if includeAppToken && tokens.App != "" {
+		if tokens.App != "" {
 			options = append(options, slack.OptionAppLevelToken(tokens.App))
 		}
-		return options
-	}
-
-	if tokens.Bot != "" {
-		client.bot = slack.New(tokens.Bot, buildOptions(true)...)
-	}
-	if tokens.User != "" {
-		client.user = slack.New(tokens.User, buildOptions(false)...)
+		client.bot = slack.New(tokens.Bot, options...)
 	}
 	client.socketModeFn = func(api *slack.Client) socketModeRunner {
 		return managedSocketMode{client: socketmode.New(api)}
@@ -135,7 +127,7 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 		ThreadCoverage: "partial",
 	}
 	if c.bot != nil {
-		resp, err := c.authTest(ctx, c.bot)
+		resp, err := c.authTest(ctx, c.tokens.Bot)
 		if err != nil {
 			return diag, err
 		}
@@ -144,8 +136,8 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 		diag.AppTailAvailable = c.tokens.App != ""
 	}
 
-	if c.user != nil {
-		userAuth, err := c.authTest(ctx, c.user)
+	if c.tokens.User != "" {
+		userAuth, err := c.authTest(ctx, c.tokens.User)
 		if err == nil {
 			_, err = authenticatedWorkspaceID(userAuth, diag.BotAuthTeamID)
 		}
@@ -169,19 +161,19 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	opts.ordinarySync = true
 	// Selection is invocation-local: Tail and its repair path still own the bot.
 	source := channelSyncSource{
-		historyClient: c.bot, token: c.tokens.Bot, sourceName: SourceBot,
+		token: c.tokens.Bot, sourceName: SourceBot,
 		sourceRank: 2, allowJoin: syncAutoJoin(opts),
 	}
-	if source.historyClient == nil {
+	if source.token == "" {
 		source = channelSyncSource{
-			historyClient: c.user, token: c.tokens.User, sourceName: SourceUser, sourceRank: 1,
+			token: c.tokens.User, sourceName: SourceUser, sourceRank: 1,
 		}
 	}
-	if source.historyClient == nil {
+	if source.token == "" {
 		return errors.New("SLACK_BOT_TOKEN or SLACK_USER_TOKEN is required for api sync")
 	}
 
-	auth, err := c.authTest(ctx, source.historyClient)
+	auth, err := c.authTest(ctx, source.token)
 	if err != nil {
 		return err
 	}
@@ -240,7 +232,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		userByID          map[string]slack.User
 		dmCatalogComplete bool
 	)
-	if c.dmPolicy.Enabled(c.tokens.User != "") && userRepliesAvailable && c.user != nil {
+	if c.dmPolicy.Enabled(c.tokens.User != "") && userRepliesAvailable && c.tokens.User != "" {
 		users, err = c.getUsers(ctx, source.token)
 		if err != nil {
 			return err
@@ -276,7 +268,6 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 				selectedDMs = append(selectedDMs, channel)
 			}
 			if err := c.syncChannelsWithSource(ctx, st, workspaceID, selectedDMs, opts, now, userRepliesAvailable, channelSyncSource{
-				historyClient:    c.user,
 				token:            c.tokens.User,
 				sourceName:       SourceUser,
 				sourceRank:       1,
@@ -361,12 +352,6 @@ func (c *Client) fetchChannelsWithToken(ctx context.Context, token string, works
 	}
 }
 
-func (c *Client) authTest(ctx context.Context, client *slack.Client) (*slack.AuthTestResponse, error) {
-	return retry(ctx, c.sleep, 3, func() (*slack.AuthTestResponse, error) {
-		return client.AuthTestContext(ctx)
-	})
-}
-
 func authenticatedWorkspaceID(auth *slack.AuthTestResponse, requested string) (string, error) {
 	authTeamID := strings.TrimSpace(auth.TeamID)
 	requested = strings.TrimSpace(requested)
@@ -377,17 +362,6 @@ func authenticatedWorkspaceID(auth *slack.AuthTestResponse, requested string) (s
 		return requested, nil
 	}
 	return authTeamID, nil
-}
-
-func (c *Client) joinConversation(ctx context.Context, channelID string) error {
-	if c.bot == nil {
-		return errors.New("SLACK_BOT_TOKEN is required for join")
-	}
-	_, err := retry(ctx, c.sleep, 3, func() (struct{}, error) {
-		_, _, _, err := c.bot.JoinConversationContext(ctx, channelID)
-		return struct{}{}, err
-	})
-	return err
 }
 
 func retry[T any](ctx context.Context, sleeper func(context.Context, time.Duration) error, attempts int, fn func() (T, error)) (T, error) {

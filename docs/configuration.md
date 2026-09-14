@@ -783,11 +783,30 @@ Empty successful catalogs remain valid, including the existing second user
 fetch when enabled-DM sync receives an empty user result.
 
 Catalog responses now use the same whole-body reader as history/replies, rejecting
-trailing JSON and read errors after a valid object. Non-200 responses from these
-four methods use SDK status errors; bounded retries remain limited to rate limits
-with Retry-After. This validation does not certify collection presence or complete
-payload shape, and does not change authentication, conversation-info, join or
-Doctor probe-error handling.
+trailing JSON and read errors after a valid object. Non-200 responses use SDK
+status errors; bounded retries remain limited to rate limits with Retry-After.
+This validation does not certify collection presence or complete payload shape,
+or change Doctor probe-error handling.
+
+### API authentication, lookups and joins
+
+`auth.test`, `conversations.info` and `conversations.join` must report `ok: true`
+before slacrawl uses their decoded results. Missing, null or false success with
+no concrete Slack error now fails with a method-specific error. These methods
+also reject trailing JSON and read errors after an otherwise valid object.
+Concrete Slack errors, typed HTTP status errors and bounded rate-limit retries
+keep their existing handling. Success-flag validation does not certify workspace
+identity or the rest of the payload shape.
+
+A failed primary authentication stops sync before archive writes; a configured
+bot never falls back to the user token on failure. Failed optional user auth
+still allows bot history, with replies unavailable. Doctor returns bot-auth
+failures and reports user-auth failures as unavailable. Tail rejects failed bot
+auth before starting Socket Mode, and an unsuccessful lookup for an untyped
+event stops tailing without writes or acknowledgement. A failed join remains a
+recorded, nonfatal history skip: sync can finish with partial coverage, but does
+not retry history as though the join succeeded. Doctor's suppression of non-scope
+capability-probe errors is unchanged.
 
 ### API history completeness
 
@@ -795,8 +814,7 @@ Native history and replies pages must report `ok: true` before any message on
 that page is admitted. Missing, null or false success with blank or absent error
 text stops sync or repair with a method-specific error. Concrete Slack errors
 keep their existing type and details; previously committed pages survive, and
-the pending interval remains available for a corrected retry. This does not
-change authentication response handling.
+the pending interval remains available for a corrected retry.
 
 API sync and periodic tail repair follow every nonempty history/replies cursor,
 even when a page is short or empty. After writing a valid page and handling its

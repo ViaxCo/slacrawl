@@ -10,7 +10,7 @@ import (
 )
 
 func (c *Client) fetchDMs(ctx context.Context, workspaceID string, skips *threadSkipTracker) ([]slack.Channel, error) {
-	if c.user == nil {
+	if c.tokens.User == "" {
 		return nil, nil
 	}
 

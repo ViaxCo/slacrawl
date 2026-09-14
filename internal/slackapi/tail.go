@@ -21,7 +21,7 @@ func (c *Client) Tail(ctx context.Context, st *store.Store, workspaceID string, 
 		return errors.New("SLACK_APP_TOKEN is required for tail")
 	}
 
-	auth, err := c.authTest(ctx, c.bot)
+	auth, err := c.authTest(ctx, c.tokens.Bot)
 	if err != nil {
 		return err
 	}

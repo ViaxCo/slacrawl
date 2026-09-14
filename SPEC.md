@@ -451,10 +451,28 @@ Existing concrete missing-scope handling remains unchanged.
 
 Catalogs share the history/replies whole-body reader: trailing JSON and a read
 error after a valid object are rejected. Non-200 responses use the SDK's typed
-status error on all four methods; only rate limits with Retry-After use the
-existing bounded retry policy. Typed catalog decoding still precedes success
-validation; this does not certify collection presence or complete payload shape,
-change authentication/info/join handling, or expose suppressed Doctor probe errors.
+status error; only rate limits with Retry-After use the existing bounded retry
+policy. Typed catalog decoding still precedes success validation; this does not
+certify collection presence or complete payload shape, or expose suppressed
+Doctor probe errors.
+
+Authentication, conversation-info lookups and join attempts use the same native
+response owner. Each must report `ok: true` before its decoded result can be used;
+concrete Slack errors retain precedence over a missing/false success flag. These
+methods also reject trailing JSON and read errors after a valid object, retain
+typed HTTP status errors, and retry only rate limits with Retry-After. Typed
+payload decoding precedes success validation; success alone does not qualify
+workspace identity or other payload shape.
+
+Sync authenticates its selected primary token before archive writes, without
+falling back from a failed configured bot to a user token. Invalid optional user
+auth still permits bot history with partial reply coverage. Doctor treats failed
+bot auth as fatal and failed user auth as unavailable; Tail authenticates its bot
+before constructing Socket Mode. Untyped Tail lookups must succeed before type
+admission, writes or acknowledgement. Failed joins remain recorded, nonfatal
+history skips; only a successful join permits the history retry. Auth response
+headers remain private cloned metadata, excluded from archived JSON. Socket Mode
+still owns the bot SDK client; HTTP operations use explicit token strings.
 
 ### Slack export import
 

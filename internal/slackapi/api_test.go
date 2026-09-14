@@ -3,6 +3,7 @@ package slackapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -1645,7 +1646,7 @@ func TestSyncChannelUsesInclusiveRetentionFloor(t *testing.T) {
 		false,
 		now,
 		false,
-		channelSyncSource{historyClient: client.bot, token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
+		channelSyncSource{token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
 	)
 	require.NoError(t, err)
 	require.Equal(t, floor, gotOldest)
@@ -1694,7 +1695,7 @@ func TestExplicitSinceDoesNotScanRetainedThreadRoots(t *testing.T) {
 		true,
 		now,
 		true,
-		channelSyncSource{historyClient: client.bot, token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
+		channelSyncSource{token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
 	)
 	require.NoError(t, err)
 	require.Zero(t, replyCalls)
@@ -1953,7 +1954,7 @@ func TestSyncChannelHistoryRejectsRepeatedCursor(t *testing.T) {
 		false,
 		now,
 		false,
-		channelSyncSource{historyClient: client.bot, token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
+		channelSyncSource{token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
 	)
 	require.ErrorContains(t, err, `conversations.history repeated cursor "stuck"`)
 	require.Equal(t, 2, calls)
@@ -2088,4 +2089,135 @@ func TestGetUsersRetriesOnlyRateLimitedPage(t *testing.T) {
 	require.Equal(t, []slack.User{{ID: "U1"}, {ID: "U2"}}, users)
 	require.Equal(t, []string{"", "page2", "page2"}, cursors)
 	require.Equal(t, []time.Duration{time.Second}, delays)
+}
+
+func TestDoctorRequiresNativeAuthSuccess(t *testing.T) {
+	for _, role := range []string{"bot", "optional-user", "user-only"} {
+		t.Run(role, func(t *testing.T) {
+			tokens := config.Tokens{Bot: "fixture-bot", User: "fixture-user", App: "fixture-app"}
+			if role == "user-only" {
+				tokens.Bot = ""
+			}
+			var calls []string
+			client := primaryOwnerClient(t, tokens, func(r *http.Request, form url.Values) (any, error) {
+				require.Equal(t, "/auth.test", r.URL.Path, "failed auth must not reach DM probes")
+				calls = append(calls, form.Get("token"))
+				if role != "bot" && form.Get("token") == "fixture-bot" {
+					return primaryOwnerResponse(r.URL.Path), nil
+				}
+				return json.RawMessage(`{"ok":false,"team_id":"T123","team":"rejected-auth-canary","user_id":"U123"}`), nil
+			}).WithDMPolicy(admission.Include)
+			diag, err := client.Doctor(context.Background())
+			require.Equal(t, "partial", diag.ThreadCoverage)
+			require.False(t, diag.UserAuthAvailable)
+			require.False(t, diag.DMsIncluded)
+			require.Empty(t, diag.DMsMissingScope)
+			if role == "bot" {
+				require.EqualError(t, err, "auth.test response did not report success")
+				require.Equal(t, []string{"fixture-bot"}, calls)
+				require.Empty(t, diag.BotAuthTeamID)
+				require.False(t, diag.AppTailAvailable)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "auth.test response did not report success", diag.UserAuthError)
+				if role == "optional-user" {
+					require.Equal(t, []string{"fixture-bot", "fixture-user"}, calls)
+					require.Equal(t, "T123", diag.BotAuthTeamID)
+					require.True(t, diag.AppTailAvailable)
+				} else {
+					require.Equal(t, []string{"fixture-user"}, calls)
+					require.Empty(t, diag.BotAuthTeamID)
+					require.False(t, diag.AppTailAvailable)
+				}
+			}
+			encoded, marshalErr := json.Marshal(diag)
+			require.NoError(t, marshalErr)
+			require.NotContains(t, string(encoded), "rejected-auth-canary")
+		})
+	}
+}
+
+func TestOptionalNativeAuthFailureKeepsBotHistory(t *testing.T) {
+	for _, repair := range []bool{false, true} {
+		t.Run(fmt.Sprintf("repair=%t", repair), func(t *testing.T) {
+			ctx := context.Background()
+			st := mustStore(t)
+			defer func() { require.NoError(t, st.Close()) }()
+			now := time.Unix(1710000100, 0).UTC()
+			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Kind: "public_channel", UpdatedAt: now}))
+			require.NoError(t, st.SetSyncState(ctx, SourceBot, "workspace", "T123", "2020-01-01T00:00:00Z"))
+			require.NoError(t, st.SetSyncState(ctx, "doctor", "threads", "coverage", "partial"))
+			require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|legacy", "retained"))
+			beforeMarkers := repairKeyRows(t, st, "select * from sync_state order by source_name,entity_type,entity_id")
+			var calls []string
+			client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
+				calls = append(calls, r.URL.Path+":"+form.Get("token"))
+				if form.Get("token") == "fixture-user" {
+					require.Equal(t, "/auth.test", r.URL.Path)
+					return json.RawMessage(`{"ok":null,"team_id":"T123","team":"optional-auth-canary","user_id":"U123"}`), nil
+				}
+				require.Equal(t, "fixture-bot", form.Get("token"))
+				switch r.URL.Path {
+				case "/auth.test", "/users.list":
+					return primaryOwnerResponse(r.URL.Path), nil
+				case "/conversations.list":
+					require.Equal(t, "public_channel,private_channel", form.Get("types"))
+					return primaryOwnerResponse(r.URL.Path), nil
+				case "/conversations.history":
+					return json.RawMessage(`{"ok":true,"messages":[{"ts":"1710000000.000000","text":"bot parent","reply_count":1}]}`), nil
+				default:
+					t.Fatalf("unexpected data request %s", r.URL.Path)
+					return nil, nil
+				}
+			}).WithDMPolicy(admission.Include)
+			client.now = func() time.Time { return now }
+			if repair {
+				require.NoError(t, client.repairWorkspace(ctx, st, "T123"))
+				require.Equal(t, []string{"/auth.test:fixture-user", "/conversations.list:fixture-bot", "/conversations.history:fixture-bot"}, calls)
+			} else {
+				require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123", Full: true}))
+				require.Equal(t, []string{"/auth.test:fixture-bot", "/auth.test:fixture-user", "/conversations.list:fixture-bot", "/conversations.history:fixture-bot", "/users.list:fixture-bot"}, calls)
+			}
+			require.Equal(t, []map[string]any{{"channel_id": "C123", "ts": "1710000000.000000", "text": "bot parent", "source_name": SourceBot}}, repairKeyRows(t, st, "select channel_id,ts,text,source_name from messages"))
+			coverage, err := st.GetSyncState(ctx, "doctor", "threads", "coverage")
+			require.NoError(t, err)
+			require.Equal(t, "partial", coverage)
+			for _, row := range beforeMarkers {
+				if repair || row["entity_type"] == "thread_skip" {
+					require.Contains(t, repairKeyRows(t, st, "select * from sync_state"), row)
+				}
+			}
+			pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+			require.NoError(t, err)
+			if repair {
+				require.Empty(t, pending)
+			} else {
+				require.Len(t, pending, 1)
+				require.Equal(t, "1710000000.000000", pending[0].TS)
+				require.NotEmpty(t, pending[0].Generation)
+			}
+			assertAdmissionCanariesAbsent(t, st, "", "optional-auth-canary")
+		})
+	}
+}
+
+func TestTailRequiresNativeAuthSuccessBeforeRunner(t *testing.T) {
+	calls := 0
+	client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", App: "fixture-app"}, func(r *http.Request, form url.Values) (any, error) {
+		calls++
+		require.Equal(t, "/auth.test", r.URL.Path)
+		require.Equal(t, url.Values{"token": {"fixture-bot"}}, form)
+		return json.RawMessage(`{"team_id":"T123","team":"tail-auth-canary"}`), nil
+	})
+	client.socketModeFn = func(*slack.Client) socketModeRunner {
+		t.Fatal("unsuccessful auth must not construct Socket Mode")
+		return nil
+	}
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+	err := client.Tail(context.Background(), st, "T123", 0)
+	require.EqualError(t, err, "auth.test response did not report success")
+	require.Equal(t, 1, calls)
+	assertEmptyWorkspaceArchive(t, st)
+	assertAdmissionCanariesAbsent(t, st, err.Error(), "tail-auth-canary")
 }
