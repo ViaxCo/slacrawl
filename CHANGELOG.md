@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an internal read-only selection core for future export projections. Bind explicit workspace/channel/message rows, require retained native public-channel evidence and selected thread parents, and resolve only explicit labels and message fields with keep/replace text choices. Private plans are serializable; no CLI, output writer or publication path is added, and current type evidence does not certify historical origin or content safety.
+
 - Reject legacy Git snapshot publishing when `sync.include_dms = false`, before archive initialization, cache locking, Git operations or output writes. Keep the archive local; `--no-commit` and `--no-media` do not bypass the gate. Omitted/true retain unfiltered private snapshot publishing, including already archived DMs and drafts.
 
 - Verify and document importing Slackdump-converted ZIP and directory exports from database and chunk archives. Preserve real synthetic converter fixtures for thread identity, DM exclusion, source/FTS consistency and repeat-import coverage; no importer behavior or upstream dependency changes.
