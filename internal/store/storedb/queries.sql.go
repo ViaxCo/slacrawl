@@ -431,6 +431,7 @@ select cast(coalesce(max(updated_at), '') as text) as updated_at
 from sync_state
 where source_name not in ('doctor', 'retention')
   and not (entity_type = 'thread_pending_v1' and source_name in ('api-user', 'mcp'))
+  and not (source_name = 'mcp' and entity_type = 'history_work_v1')
 `
 
 func (q *Queries) LastSyncAt(ctx context.Context) (string, error) {

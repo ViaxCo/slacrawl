@@ -13,6 +13,7 @@ import (
 
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/mcpclient"
+	"github.com/openclaw/slacrawl/internal/store"
 )
 
 type Client struct {
@@ -55,6 +56,7 @@ type page[T any] struct {
 }
 
 type channelPage struct {
+	LatestTS    string
 	ChannelID   string
 	ChannelName string
 	Messages    []MessageRecord
@@ -275,8 +277,9 @@ func (c *Client) channelMessages(ctx context.Context, tools toolset, workspaceID
 			return "", errors.New("MCP channel response does not match requested conversation")
 		}
 		for _, message := range next.Messages {
-			if strings.TrimSpace(message.TS) == "" {
-				return "", errors.New("MCP message timestamp is empty")
+			result.LatestTS, err = store.MaxMCPHistoryTS(result.LatestTS, message.TS)
+			if err != nil {
+				return "", err
 			}
 		}
 		if result.ChannelID == "" {

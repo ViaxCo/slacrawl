@@ -269,11 +269,49 @@ successful-sync record and asks the operator to review workspace history
 availability. API pagination cannot restore messages Slack does not expose.
 
 These checks preserve valid writes, not whole-sync atomicity. Channel metadata
-and message-derived incremental cursors may change even when the old successful
-workspace sync record remains. No opaque cursor is stored or printed, and the
-checks do not establish complete history or resumable backfill. See Slack's
+and valid messages may change even when the old successful workspace sync record
+remains. The history checkpoint stays pending when history is incomplete; a
+completed history scan remains complete if only replies fail. No opaque server
+cursor is stored or printed, and these checks do not establish complete archive
+coverage or extend the native server's bounded history window. See Slack's
 [history](https://docs.slack.dev/reference/methods/conversations.history/) and
 [replies](https://docs.slack.dev/reference/methods/conversations.replies/) contracts.
+
+### MCP history checkpoints
+
+MCP incremental bounds come from completed channel-history scans, not the newest
+stored message. A newer reply or API/Desktop row cannot move the MCP history
+cutoff. Each checkpoint belongs to a workspace, channel, discovered adapter and
+normalized `--since` scope. History timestamps must be finite numbers, and the
+latest raw history timestamp is recorded even if local filtering or a richer
+stored row prevents that message from being written.
+
+The first selected scan after upgrade, snapshot import into a fresh archive, or
+whole-snapshot restore has no local MCP history checkpoint. It starts without an
+incremental bound, subject to the current purge floor. This may read more history
+than earlier versions. `--latest-only` still selects channels with a non-draft
+stored message or a retention seed; a checkpoint alone does not select a channel.
+
+A completed empty scan is recorded explicitly and preserves any earlier history
+watermark. Later ordinary scans overlap that watermark by one hour. Failed or
+incomplete history keeps its original pending interval for retry. Each ordinary
+retry reapplies the current purge floor; a prior `--full` does not grant later
+retries permission to restore purged messages. Explicit `--since` takes precedence
+over `--full` and leaves the ordinary checkpoint and thread backlog untouched.
+
+History completion is committed after history writes and before replies. A later
+reply or channel failure therefore preserves completed history while keeping
+workspace freshness unchanged. A newer attempt can supersede an older revision;
+the older invocation then reports a retryable failure instead of recording
+successful completion. This does not cancel an in-flight request or undo messages
+already committed by the older response. History progress itself does not advance
+status freshness.
+
+These local checkpoints are excluded from Git share exports and imports. Merge
+preserves the receiver's existing checkpoints; whole-snapshot restore clears them.
+Native MCP still makes its existing bounded history request without a wire
+`oldest` argument or cursor pagination. Pending intervals cannot recover messages
+outside the server's available window; use API backfill where supported.
 
 ### Retained MCP threads
 
@@ -349,8 +387,9 @@ Under every policy, selected catalog and retained message context workspace IDs
 must agree with the configured workspace. Every returned channel page and thread
 parent/reply must match the requested conversation and thread before the affected
 writes. Native message identities are checked before local timestamp filtering
-or conversion. Top-level history and thread messages require nonblank timestamps;
-replies must not reuse the parent timestamp. Nested metadata and catalog latest
+or conversion. Top-level history messages require finite numeric timestamps;
+thread messages require nonblank timestamps, and replies must not reuse the parent
+timestamp. Nested metadata and catalog latest
 timestamps remain optional. Earlier successful history writes remain if a later
 thread fails. Missing context is bound to the operator's configured workspace;
 it is not authenticated identity proof. External authors and their team IDs are allowed.

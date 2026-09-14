@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Track MCP channel-history completion separately from stored messages and replies. Keep failed or incomplete intervals pending, preserve completed empty scans, and retry with current retention bounds. Prevent newer replies or API/Desktop rows from skipping unread history; reject non-finite history timestamps before filtering. Keep checkpoints local to the archive and out of freshness timestamps. First intake after upgrade, fresh import or whole-snapshot restore establishes its own history checkpoint; native server window limits remain unchanged.
+
 - Preserve unvisited API thread-skip diagnostics during restricted or incomplete Full syncs, and explain retained thread work in Doctor's partial-coverage output. Require unrestricted traversal before bulk cleanup, retain generation guards, and keep observed omissions visible despite later success. Thanks @vincentkoc! (#229, #230)
 
 - Preserve unfinished MCP reply work across history-hint loss, failed batches, and restarts; guard ordinary replies by generation and reconcile committed tombstones. Keep explicit `--since` and `--full --since` restricted to returned roots without consuming older backlog. Thanks @vincentkoc! (#217, #220)

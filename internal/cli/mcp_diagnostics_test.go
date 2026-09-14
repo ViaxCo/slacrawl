@@ -131,6 +131,28 @@ func TestMCPWorkspaceCollisionDiagnosticsAcrossCLIPaths(t *testing.T) {
 				for table, prior := range before {
 					rows, err := st.QueryReadOnly(ctx, "select * from "+table)
 					require.NoError(t, err)
+					if table == "sync_state" && collision == "message" {
+						require.Len(t, rows, len(prior)+1)
+						var retained []map[string]any
+						for _, row := range rows {
+							if row["entity_type"] != store.MCPHistoryEntityType {
+								retained = append(retained, row)
+								continue
+							}
+							value, ok := row["value"].(string)
+							require.True(t, ok)
+							var progress store.MCPHistoryState
+							require.NoError(t, json.Unmarshal([]byte(value), &progress))
+							require.NotEmpty(t, progress.Revision)
+							require.Equal(t, store.MCPHistoryState{Pending: new(""), Revision: progress.Revision}, progress)
+							updated, ok := row["updated_at"].(string)
+							require.True(t, ok)
+							_, parseErr := time.Parse(time.RFC3339Nano, updated)
+							require.NoError(t, parseErr)
+							require.Equal(t, map[string]any{"source_name": "mcp", "entity_type": store.MCPHistoryEntityType, "entity_id": `["TREQUEST","CLOCAL","codex",""]`, "value": value, "updated_at": updated}, row)
+						}
+						rows = retained
+					}
 					require.ElementsMatch(t, prior, rows, table)
 				}
 			})

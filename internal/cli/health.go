@@ -383,6 +383,7 @@ select
   end as source,
   coalesce(max(case
     when entity_type = 'thread_pending_v1' and source_name in ('api-user', 'mcp') then null
+    when source_name = 'mcp' and entity_type = 'history_work_v1' then null
     else updated_at
   end), '') as last_seen_at,
   count(*) as sync_entries

@@ -68,6 +68,11 @@ more pages or a Slack history/message limit, `sync --source mcp` (alias
 preserves the previous successful workspace sync record. See
 [native response coverage](configuration.md#native-response-coverage).
 
+MCP incremental scans use local history checkpoints. Newer replies and rows from
+other sources do not advance their cutoff. The first scan without a checkpoint
+starts unbounded subject to retention; failed history retries its pending interval,
+and completed empty history is recorded. See [MCP history checkpoints](configuration.md#mcp-history-checkpoints).
+
 Ordinary API sync revisits retained thread roots and resumes saved replies work.
 `--full` does too; explicit `--since`, `--full --since` and Tail repair leave the
 ordinary backlog untouched. Replies need user authentication; unavailable replies
