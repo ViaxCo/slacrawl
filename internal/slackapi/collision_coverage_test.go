@@ -370,13 +370,17 @@ func TestRetainedHistoryCoverageScope(t *testing.T) {
 				}
 				require.NoError(t, st.SetSyncState(ctx, source, kind, key, raw))
 				require.NoError(t, st.SetSyncState(ctx, "doctor", "threads", "coverage", "full"))
+				_, err := st.DB().ExecContext(ctx, "update sync_state set updated_at='2000-01-01T00:00:00Z' where source_name='doctor' and entity_type='threads'")
+				require.NoError(t, err)
+				const markerQuery = "select value,updated_at from sync_state where source_name='doctor' and entity_type='threads' and entity_id='coverage'"
+				markerBefore, err := st.QueryReadOnly(ctx, markerQuery)
+				require.NoError(t, err)
 				client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
 					if r.URL.Path == "/conversations.list" && form.Get("types") == "im,mpim" {
 						return map[string]any{"ok": true, "channels": []any{}}, nil
 					}
 					return primaryOwnerResponse(r.URL.Path), nil
 				}).WithDMPolicy(admission.Include)
-				var err error
 				if operation == "repair" {
 					err = client.repairWorkspace(ctx, st, "T123")
 				} else {
@@ -389,13 +393,35 @@ func TestRetainedHistoryCoverageScope(t *testing.T) {
 				} else {
 					require.NoError(t, err)
 				}
-				want := "full"
-				if mode == "local-pending" || (operation == "sync" && mode == "foreign-pending") {
-					want = "partial"
+				markerAfter, markerErr := st.QueryReadOnly(ctx, markerQuery)
+				require.NoError(t, markerErr)
+				writesPartial := operation == "repair" && mode == "local-pending"
+				writesFull := operation == "sync" && (mode == "foreign-complete" || mode == "unrelated")
+				if writesPartial || writesFull {
+					require.Len(t, markerAfter, 1)
+					require.Equal(t, map[bool]string{true: "partial", false: "full"}[writesPartial], markerAfter[0]["value"])
+					require.NotEqual(t, markerBefore[0]["updated_at"], markerAfter[0]["updated_at"])
+				} else {
+					require.Equal(t, markerBefore, markerAfter, "repair scope and blocked publication preserve the exact raw marker")
 				}
-				status, err := st.Status(ctx)
+				// Status is archive-wide even when repair correctly ignores a
+				// canonical foreign value. It does not rewrite repair's result.
+				status, statusErr := st.Status(ctx)
+				if mode == "alias" || mode == "foreign-invalid" {
+					require.ErrorContains(t, statusErr, "invalid API history checkpoint")
+					require.NotContains(t, statusErr.Error(), "private-history-canary")
+					require.Equal(t, store.Status{}, status)
+				} else {
+					require.NoError(t, statusErr)
+					want := "full"
+					if mode == "local-pending" || mode == "foreign-pending" {
+						want = "partial"
+					}
+					require.Equal(t, want, status.ThreadState)
+				}
+				afterStatus, err := st.QueryReadOnly(ctx, markerQuery)
 				require.NoError(t, err)
-				require.Equal(t, want, status.ThreadState)
+				require.Equal(t, markerAfter, afterStatus)
 				after, err := st.GetSyncState(ctx, source, kind, key)
 				require.NoError(t, err)
 				require.Equal(t, raw, after)

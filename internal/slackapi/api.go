@@ -308,32 +308,15 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		}
 	}
 
-	hasIncompleteHistory, err := st.HasIncompleteAPIHistory(ctx, "")
-	if err != nil {
-		return err
+	publication := store.APIThreadCoveragePublication{
+		FullEligible: userRepliesAvailable && !threadRepliesSkipped.Skipped() && !threadRepliesSkipped.Omitted(),
 	}
-	threadCoverage := "partial"
-	if userRepliesAvailable && !threadRepliesSkipped.Skipped() && !threadRepliesSkipped.Omitted() {
-		// Only an unrestricted scan of both catalogs can retire unknown legacy
-		// skips. Scoped runs still clear individual successfully completed threads.
-		if opts.Full && opts.Since == "" && len(opts.Channels) == 0 && len(excluded) == 0 && dmCatalogComplete {
-			if err := st.DeleteAPIThreadSkipsIfNoPending(ctx, workspaceID); err != nil {
-				return err
-			}
-		}
-		hasThreadSkips, err := st.HasSyncStateType(ctx, SourceUser, "thread_skip")
-		if err != nil {
-			return err
-		}
-		hasPendingThreads, err := st.HasSyncStateType(ctx, SourceUser, store.ThreadPendingEntityType)
-		if err != nil {
-			return err
-		}
-		if !hasThreadSkips && !hasPendingThreads && !hasIncompleteHistory {
-			threadCoverage = "full"
-		}
+	// Only an unrestricted scan of both catalogs can retire unknown legacy
+	// skips. Scoped runs still clear individual successfully completed threads.
+	if publication.FullEligible && opts.Full && opts.Since == "" && len(opts.Channels) == 0 && len(excluded) == 0 && dmCatalogComplete {
+		publication.CleanupWorkspaceID = workspaceID
 	}
-	if err := st.SetSyncState(ctx, "doctor", "threads", "coverage", threadCoverage); err != nil {
+	if err := st.PublishAPIThreadCoverage(ctx, publication); err != nil {
 		return err
 	}
 	return st.SetSyncState(ctx, source.sourceName, "workspace", workspaceID, now.Format(time.RFC3339))

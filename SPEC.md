@@ -188,7 +188,8 @@ Nested `slack_api.thread_coverage` belongs to global-token diagnostics. Top-leve
 `thread_coverage` uses the named-workspace aggregate when configured. Retained
 `api-user/thread_skip` rows, pending API thread work or incomplete retained API
 history downgrade either full result to partial in both fields, without changing
-individual workspace diagnostics or persisted status.
+individual workspace diagnostics or the persisted coverage marker. Doctor reads
+Status and these retained facts from the same archive snapshot.
 
 When retained work changes global coverage from full to partial, Doctor sets
 optional `slack_api.thread_coverage_reason` to `retained_api_thread_work` when
@@ -499,11 +500,30 @@ Collisions do not retire the root's job or exact skip. No collision, foreign/mis
 roots and final tombstones do not enqueue this conditional work. An ordinary retry
 can recover it without a new reply hint.
 
-These are snapshot decisions, not continuously maintained `status.thread_state`.
-The final Sync coverage read and persisted Doctor value remain separate operations;
-fencing concurrent coverage publication is separate work. No erased evidence is
-reconstructed, and mixed older writers, catalog-only collision lifecycle, MCP
-history writes and Tail lifecycle are outside this boundary.
+Status reads counts, freshness, the historical coverage marker and any required
+retained API facts in one read-only transaction. A stored literal `full` becomes
+`partial` in that snapshot while API thread skips/jobs or incomplete API history
+remain. Reads never rewrite the marker or its timestamp. Clearing retained work
+can reveal an existing historical `full`, but does not promote a genuine
+`partial`, absent marker or other stored value. Malformed relevant history
+rejects a `full` projection; other stored values retain lazy validation unless
+Doctor explicitly needs the retained facts for a live full-coverage decision.
+The public Status JSON shape does not change.
+
+Sync combines eligible workspace skip cleanup, archive-wide history validation,
+global API thread checks and coverage publication in one writer transaction.
+A locally full-eligible run blocked by retained work leaves the previous marker
+and timestamp untouched; a genuine partial result writes `partial`. Errors roll
+back cleanup and publication together. Full cleanup eligibility is unchanged,
+and workspace completion remains a separate write. Repair stays workspace-scoped
+and can only write partial coverage.
+
+These decisions describe the observed snapshot, not newest-invocation ownership,
+continuous truth of the raw marker or live Slack completeness. Missing retained
+records do not establish completion; sharing or Restore may omit or clear local
+progress. No erased evidence is reconstructed. Mixed older writers, catalog-only
+collision lifecycle, MCP history writes and Tail lifecycle remain outside this
+boundary.
 
 Channel and user catalog pages also require explicit native success before rows
 or cursors return to their callers. Ordinary catalogs and users use the selected

@@ -30,14 +30,7 @@ func (s *Store) DeleteSyncState(ctx context.Context, source, entityType, entityI
 	})
 }
 
-func (s *Store) DeleteAPIThreadSkipsIfNoPending(ctx context.Context, workspaceID string) error {
-	// Serialize history admission and the existing pending-thread SQL guard.
-	// A concurrent Begin must not appear between the coverage check and delete.
-	q, commit, rollback, err := s.beginMessageTransaction(ctx, true)
-	if err != nil {
-		return err
-	}
-	defer rollback()
+func deleteAPIThreadSkipsIfNoPending(ctx context.Context, q storedb.DBTX, workspaceID string) error {
 	incomplete, err := hasIncompleteAPIHistory(ctx, q, workspaceID)
 	if err != nil {
 		return err
@@ -45,21 +38,10 @@ func (s *Store) DeleteAPIThreadSkipsIfNoPending(ctx context.Context, workspaceID
 	if incomplete {
 		return nil
 	}
-	if err := storedb.New(q).DeleteAPIThreadSkipsIfNoPending(ctx, storedb.DeleteAPIThreadSkipsIfNoPendingParams{
+	return storedb.New(q).DeleteAPIThreadSkipsIfNoPending(ctx, storedb.DeleteAPIThreadSkipsIfNoPendingParams{
 		EntityIDLike: workspaceID + "|%",
 		WorkspaceID:  workspaceID,
-	}); err != nil {
-		return err
-	}
-	return commit()
-}
-
-func (s *Store) HasSyncStateType(ctx context.Context, source, entityType string) (bool, error) {
-	count, err := s.q.CountSyncStateByType(ctx, storedb.CountSyncStateByTypeParams{
-		SourceName: source,
-		EntityType: entityType,
 	})
-	return count > 0, err
 }
 
 func (s *Store) ChannelSyncCursors(ctx context.Context, workspaceID string) ([]ChannelSyncCursor, error) {

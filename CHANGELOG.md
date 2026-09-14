@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Publish API thread coverage and eligible skip cleanup atomically against retained history and thread work. Preserve historical coverage while temporary pending work blocks a full result, and project Status plus Doctor retained facts from one read-only snapshot without rewriting markers or promoting genuine partial coverage.
+
 - Keep API history and reply collisions durably incomplete while committing valid rows. Preserve attempted history bounds and thread jobs/skips, queue scoped collision work for ordinary retry, and renew its generation against older completions. Check retained API history during Sync, repair, Full skip cleanup and CLI Doctor; report incomplete history without changing stored-status or named-auth ownership.
 
 - Keep API history and replies writes with the active scan for each source, workspace, channel and explicit Since scope. Acquire bounds and a fresh attempt generation atomically, preserve the requested upper horizon across delayed retries, and reject superseded pages, thread work, skips and completion without losing earlier committed pages. Ordinary retries still apply current retention limits.

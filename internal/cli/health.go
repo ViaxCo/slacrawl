@@ -104,33 +104,27 @@ func (a *App) runDoctor(ctx context.Context, configPath string, args []string, f
 	} else {
 		defer st.Close()
 		if threadCoverage == "full" || diag.ThreadCoverage == "full" {
-			hasThreadSkips, err := st.HasSyncStateType(ctx, slackapi.SourceUser, "thread_skip")
+			var facts store.APIThreadCoverageFacts
+			status, facts, err = st.StatusWithAPIThreadCoverage(ctx)
 			if err != nil {
 				return err
 			}
-			hasPendingThreads, err := st.HasSyncStateType(ctx, slackapi.SourceUser, store.ThreadPendingEntityType)
-			if err != nil {
-				return err
-			}
-			hasIncompleteHistory, err := st.HasIncompleteAPIHistory(ctx, "")
-			if err != nil {
-				return err
-			}
-			if hasThreadSkips || hasPendingThreads || hasIncompleteHistory {
+			if facts.ThreadWork || facts.IncompleteHistory {
 				threadCoverage = "partial"
 				// Keep the global auth diagnosis when only named coverage was full.
 				if diag.ThreadCoverage == "full" {
 					diag.ThreadCoverageReason = "retained_api_history_work"
-					if hasThreadSkips || hasPendingThreads {
+					if facts.ThreadWork {
 						diag.ThreadCoverageReason = "retained_api_thread_work"
 					}
 				}
 				diag.ThreadCoverage = threadCoverage
 			}
-		}
-		status, err = st.Status(ctx)
-		if err != nil {
-			return err
+		} else {
+			status, err = st.Status(ctx)
+			if err != nil {
+				return err
+			}
 		}
 		archiveProfile, err = a.buildArchiveProfile(ctx, cfg, st)
 		if err != nil {

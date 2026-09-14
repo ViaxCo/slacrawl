@@ -132,9 +132,22 @@ including an empty pending bound, or a record without completed history keeps
 coverage partial. Missing records do not invent completion.
 
 These checks do not fence older unconditional writers or skip diagnostics shared
-by different history scopes. Coverage is observed at the decision boundary, not
-continuously reflected in stored `status.thread_state`; the final Sync read and
-coverage write still need a separate concurrent-publication fence.
+by different history scopes. Status reads counts, freshness and the coverage
+marker in one read-only snapshot. A historical `full` is displayed as `partial`
+while retained API thread work or incomplete API history remains. Reads preserve
+the raw marker and timestamp; clearing work reveals historical full only when
+that marker already existed. Genuine partial, absent and other marker values are
+not promoted. Malformed retained history rejects a full projection; other marker
+values stay lazily checked unless Doctor needs explicit retained facts.
+
+Sync now checks those archive-wide facts and publishes coverage in one writer
+transaction, together with any eligible workspace-only skip cleanup. If retained
+work blocks a locally full-eligible run, the previous marker and timestamp stay
+unchanged. Genuine partial results write partial. Validation or write failure
+rolls cleanup and publication back together. Workspace completion is still
+separate, and repair remains workspace-scoped and partial-only. These are
+snapshot guarantees, not newest-invocation ordering or continuously current raw
+markers; missing local progress does not prove completed Slack history.
 
 Git-share snapshots retain manifest version 1 and their existing table format,
 but these API coverage checkpoints are local-only and are not exported. Imports
@@ -713,9 +726,11 @@ In JSON, `slack_api.thread_coverage` describes global credentials; top-level
 `thread_coverage` uses the named-workspace aggregate when present. An archived
 `api-user/thread_skip`, pending API thread work or incomplete retained API
 history downgrades either full result to partial in both fields.
-Individual `workspace_api` diagnostics and stored `status.thread_state` remain
-unchanged. Recent channel skips combine `api-bot` and `api-user`, newest first
-with channel-ID tie ordering and one limit of 20.
+Individual `workspace_api` diagnostics remain unchanged. Doctor obtains its
+Status projection and explicit retained facts from the same archive snapshot;
+neither read rewrites the historical coverage marker. Recent channel skips
+combine `api-bot` and `api-user`, newest first with channel-ID tie ordering and
+one limit of 20.
 
 If retained API work changes global coverage from full to partial, Doctor adds
 `slack_api.thread_coverage_reason = "retained_api_thread_work"` and displays
@@ -813,7 +828,8 @@ Catalog-only omissions still belong to the current invocation. CLI Doctor reads
 retained history/work when evaluating full coverage; its store-free capability
 probe does not certify archived completeness. Static scope restrictions alone
 retain the existing scoped coverage behavior. No erased evidence is reconstructed,
-and this does not qualify mixed older writers or continuous stored coverage.
+and this does not qualify mixed older writers or continuously current raw
+coverage markers.
 
 Committed parent tombstones, message removal through the store, and local purge
 cancel matching work and its API thread-skip record, even when the pending job

@@ -60,7 +60,7 @@ func TestAPIHistoryStatusValidatesAllOwnedKeys(t *testing.T) {
 				require.EqualError(t, err, "invalid API history checkpoint key")
 				require.False(t, incomplete)
 			}
-			require.EqualError(t, st.DeleteAPIThreadSkipsIfNoPending(ctx, "T1"), "invalid API history checkpoint key")
+			require.EqualError(t, cleanupAPIThreadSkipsForTest(ctx, st, "T1"), "invalid API history checkpoint key")
 			require.Equal(t, before, apiHistoryArchiveRows(t, st))
 		})
 	}
@@ -127,7 +127,7 @@ begin select raise(abort,'synthetic_cleanup_failure'); end`)
 				require.NoError(t, err)
 			}
 			before := apiHistoryArchiveRows(t, st)
-			err := st.DeleteAPIThreadSkipsIfNoPending(ctx, "T1")
+			err := cleanupAPIThreadSkipsForTest(ctx, st, "T1")
 			if mode == "rollback" {
 				require.ErrorContains(t, err, "synthetic_cleanup_failure")
 			} else {
@@ -165,7 +165,7 @@ func TestAPIHistoryCleanupSerializesWithBegin(t *testing.T) {
 			scope := APIHistoryScope{SourceName: "api-bot", WorkspaceID: "T1", ChannelID: "C1"}
 			seedAPIHistoryState(t, writer, scope, APIHistoryState{Complete: true, Latest: "1710000000.000000"})
 			if order == "cleanup-first" {
-				require.NoError(t, reader.DeleteAPIThreadSkipsIfNoPending(ctx, "T1"))
+				require.NoError(t, reader.PublishAPIThreadCoverage(ctx, APIThreadCoveragePublication{FullEligible: true, CleanupWorkspaceID: "T1"}))
 				_, err := writer.BeginAPIHistory(ctx, scope, APIHistoryOptions{}, "1710000100.000000")
 				require.NoError(t, err)
 				rows, err := reader.ListSyncState(ctx, "api-user", "thread_skip", 10)
@@ -178,7 +178,7 @@ func TestAPIHistoryCleanupSerializesWithBegin(t *testing.T) {
 				started, done := make(chan struct{}), make(chan error, 1)
 				go func() {
 					close(started)
-					done <- reader.DeleteAPIThreadSkipsIfNoPending(ctx, "T1")
+					done <- reader.PublishAPIThreadCoverage(ctx, APIThreadCoveragePublication{FullEligible: true, CleanupWorkspaceID: "T1"})
 				}()
 				<-started
 				raw, err := json.Marshal(APIHistoryState{Complete: true, Latest: "1710000000.000000", Pending: new(""), Generation: "writer-generation", PendingLatest: "1710000100.000000"})
@@ -313,4 +313,18 @@ func TestAPIReplyCollisionQueuesRequestedRoot(t *testing.T) {
 			requireMessageFTSParity(t, st)
 		})
 	}
+}
+
+// Workspace-only validation remains a separate helper contract. Publication
+// additionally validates foreign API values and must not replace that oracle.
+func cleanupAPIThreadSkipsForTest(ctx context.Context, st *Store, workspaceID string) error {
+	q, commit, rollback, err := st.beginMessageTransaction(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer rollback()
+	if err := deleteAPIThreadSkipsIfNoPending(ctx, q, workspaceID); err != nil {
+		return err
+	}
+	return commit()
 }

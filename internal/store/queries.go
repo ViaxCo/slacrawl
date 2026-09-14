@@ -17,31 +17,64 @@ import (
 )
 
 func (s *Store) Status(ctx context.Context) (Status, error) {
+	status, _, err := s.status(ctx, false)
+	return status, err
+}
+
+// StatusWithAPIThreadCoverage also evaluates retained work for a live Doctor
+// decision, even when the stored marker is not full.
+func (s *Store) StatusWithAPIThreadCoverage(ctx context.Context) (Status, APIThreadCoverageFacts, error) {
+	return s.status(ctx, true)
+}
+
+func (s *Store) status(ctx context.Context, includeFacts bool) (Status, APIThreadCoverageFacts, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return Status{}, APIThreadCoverageFacts{}, err
+	}
+	defer tx.Rollback()
+	// OpenReadOnly has one connection. Every query must use this transaction,
+	// both to share its snapshot and to avoid waiting for our own connection.
+	status, facts, err := readStatus(ctx, tx, includeFacts)
+	if err != nil {
+		return Status{}, APIThreadCoverageFacts{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Status{}, APIThreadCoverageFacts{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Status{}, APIThreadCoverageFacts{}, err
+	}
+	return status, facts, nil
+}
+
+func readStatus(ctx context.Context, dbtx storedb.DBTX, includeFacts bool) (Status, APIThreadCoverageFacts, error) {
+	q := storedb.New(dbtx)
 	status := Status{}
-	countWorkspaces, err := s.q.CountWorkspaces(ctx)
+	countWorkspaces, err := q.CountWorkspaces(ctx)
 	if err != nil {
-		return Status{}, err
+		return Status{}, APIThreadCoverageFacts{}, err
 	}
-	countChannels, err := s.q.CountChannels(ctx)
+	countChannels, err := q.CountChannels(ctx)
 	if err != nil {
-		return Status{}, err
+		return Status{}, APIThreadCoverageFacts{}, err
 	}
-	countUsers, err := s.q.CountUsers(ctx)
+	countUsers, err := q.CountUsers(ctx)
 	if err != nil {
-		return Status{}, err
+		return Status{}, APIThreadCoverageFacts{}, err
 	}
-	countMessages, err := s.q.CountMessages(ctx)
+	countMessages, err := q.CountMessages(ctx)
 	if err != nil {
-		return Status{}, err
+		return Status{}, APIThreadCoverageFacts{}, err
 	}
 	status.Workspaces = int(countWorkspaces)
 	status.Channels = int(countChannels)
 	status.Users = int(countUsers)
 	status.Messages = int(countMessages)
 
-	lastSync, err := s.q.LastSyncAt(ctx)
+	lastSync, err := q.LastSyncAt(ctx)
 	if err != nil {
-		return Status{}, err
+		return Status{}, APIThreadCoverageFacts{}, err
 	}
 	if lastSync != "" {
 		parsed, err := time.Parse(time.RFC3339, lastSync)
@@ -51,14 +84,24 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 	}
 
 	status.ThreadState = "partial"
-	threadState, err := s.q.ThreadCoverageState(ctx)
+	threadState, err := q.ThreadCoverageState(ctx)
 	if err == nil {
 		status.ThreadState = threadState
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		return Status{}, err
+		return Status{}, APIThreadCoverageFacts{}, err
 	}
 
-	return status, nil
+	var facts APIThreadCoverageFacts
+	if includeFacts || status.ThreadState == "full" {
+		facts, err = apiThreadCoverageFacts(ctx, dbtx)
+		if err != nil {
+			return Status{}, APIThreadCoverageFacts{}, err
+		}
+		if status.ThreadState == "full" && (facts.ThreadWork || facts.IncompleteHistory) {
+			status.ThreadState = "partial"
+		}
+	}
+	return status, facts, nil
 }
 
 func (s *Store) Search(ctx context.Context, workspaceID string, query string, limit int) ([]MessageRow, error) {

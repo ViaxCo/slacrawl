@@ -16,8 +16,8 @@ import (
 
 func TestDoctorRetainedAPIHistory(t *testing.T) {
 	for _, tc := range []struct {
-		name, source, history, wantGlobal, wantTop, reason, detail       string
-		thread, named, globalPartial, namedPartial, missingDB, wantError bool
+		name, source, history, wantGlobal, wantTop, reason, detail                   string
+		thread, named, globalPartial, namedPartial, missingDB, wantError, storedFull bool
 	}{
 		{name: "bot-history", source: "api-bot", history: "pending", wantGlobal: "partial", wantTop: "partial", reason: "retained_api_history_work", detail: "partial: incomplete API history"},
 		{name: "user-history", source: "api-user", history: "pending", wantGlobal: "partial", wantTop: "partial", reason: "retained_api_history_work", detail: "partial: incomplete API history"},
@@ -33,6 +33,13 @@ func TestDoctorRetainedAPIHistory(t *testing.T) {
 		{name: "malformed-key-with-thread", source: "api-user", history: "bad-key", thread: true, wantError: true},
 		{name: "foreign-malformed-value", source: "api-user", history: "bad-value", wantError: true},
 		{name: "unrelated-source", source: "mcp", history: "bad-key", wantGlobal: "full", wantTop: "full", detail: "user auth available for replies"},
+		{name: "stored-full-history", storedFull: true, source: "api-user", history: "pending", wantGlobal: "partial", wantTop: "partial", reason: "retained_api_history_work", detail: "partial: incomplete API history"},
+		{name: "stored-full-thread", storedFull: true, thread: true, wantGlobal: "partial", wantTop: "partial", reason: "retained_api_thread_work", detail: "partial: retained API thread skips or pending work"},
+		{name: "stored-full-complete", storedFull: true, source: "api-bot", history: "complete", wantGlobal: "full", wantTop: "full", detail: "user auth available for replies"},
+		{name: "stored-full-global-partial", storedFull: true, source: "api-user", history: "pending", named: true, globalPartial: true, wantGlobal: "partial", wantTop: "partial", detail: "partial without user auth"},
+		{name: "stored-full-named-partial", storedFull: true, source: "api-user", history: "pending", named: true, namedPartial: true, wantGlobal: "partial", wantTop: "partial", reason: "retained_api_history_work", detail: "partial: incomplete API history"},
+		{name: "stored-full-both-partial", storedFull: true, source: "api-user", history: "pending", named: true, globalPartial: true, namedPartial: true, wantGlobal: "partial", wantTop: "partial", detail: "partial without user auth"},
+		{name: "stored-full-both-partial-malformed", storedFull: true, source: "api-user", history: "bad-key", named: true, globalPartial: true, namedPartial: true, wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -61,13 +68,17 @@ func TestDoctorRetainedAPIHistory(t *testing.T) {
 					rolesWant = append(rolesWant, "fixture-global-user")
 				}
 			}
+			storedState := "stored-status"
+			if tc.storedFull {
+				storedState = "full"
+			}
 			require.NoError(t, cfg.Save(path))
 			configBefore, err := os.ReadFile(path)
 			require.NoError(t, err)
 			if !tc.missingDB {
 				st, err := store.Open(cfg.DBPath)
 				require.NoError(t, err)
-				require.NoError(t, st.SetSyncState(ctx, "doctor", "threads", "coverage", "stored-status"))
+				require.NoError(t, st.SetSyncState(ctx, "doctor", "threads", "coverage", storedState))
 				if tc.thread {
 					require.NoError(t, st.SetSyncState(ctx, "api-user", "thread_skip", "TOLD|COLD|1", "missing_scope"))
 				}
@@ -142,7 +153,11 @@ func TestDoctorRetainedAPIHistory(t *testing.T) {
 							require.NotContains(t, named, "thread_coverage_reason")
 						}
 						if !tc.missingDB {
-							require.Equal(t, "stored-status", report["status"].(map[string]any)["thread_state"])
+							wantStored := storedState
+							if tc.storedFull && (tc.thread || tc.history == "pending") {
+								wantStored = "partial"
+							}
+							require.Equal(t, wantStored, report["status"].(map[string]any)["thread_state"])
 						}
 					case "text":
 						require.Contains(t, output.String(), tc.detail)
