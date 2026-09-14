@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep API history and replies writes with the active scan for each source, workspace, channel and explicit Since scope. Acquire bounds and a fresh attempt generation atomically, preserve the requested upper horizon across delayed retries, and reject superseded pages, thread work, skips and completion without losing earlier committed pages. Ordinary retries still apply current retention limits.
+
 - Report bounded DM catalog/history probe failures in Doctor alongside missing scopes, including named workspaces. Stop on caller cancellation before later requests or output, and describe user-auth capability without claiming historical completeness.
 
 - Keep arbitrary native API error strings and repeated cursor values out of rendered diagnostics, Doctor output and failed-join state. Retain nine exact readable machine codes and inspectable native causes without changing success, skip, retry or pending-work behavior.

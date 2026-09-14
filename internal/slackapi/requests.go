@@ -159,12 +159,19 @@ type rawConversationRepliesResponse struct {
 	Messages []json.RawMessage `json:"messages"`
 }
 
-func (c *Client) getConversationHistory(ctx context.Context, token string, params *slack.GetConversationHistoryParameters) (*conversationHistoryPage, error) {
+func (c *Client) getConversationHistory(ctx context.Context, token string, params *slack.GetConversationHistoryParameters, check func() error) (*conversationHistoryPage, error) {
 	return retry(ctx, c.sleep, 3, func() (*conversationHistoryPage, error) {
+		if err := checkHistoryRequest(ctx, check); err != nil {
+			return nil, err
+		}
 		values := conversationHistoryValues(params)
 		resp := rawConversationHistoryResponse{}
-		if _, err := c.postSlackForm(ctx, token, "conversations.history", values, &resp); err != nil {
+		_, requestErr := c.postSlackForm(ctx, token, "conversations.history", values, &resp)
+		if err := checkHistoryRequest(ctx, check); err != nil {
 			return nil, err
+		}
+		if requestErr != nil {
+			return nil, requestErr
 		}
 		if err := nativePageSuccess("conversations.history", resp.SlackResponse, resp.Messages != nil); err != nil {
 			return nil, err
@@ -182,12 +189,19 @@ func (c *Client) getConversationHistory(ctx context.Context, token string, param
 	})
 }
 
-func (c *Client) getConversationReplies(ctx context.Context, params *slack.GetConversationRepliesParameters) (*conversationRepliesPage, error) {
+func (c *Client) getConversationReplies(ctx context.Context, params *slack.GetConversationRepliesParameters, check func() error) (*conversationRepliesPage, error) {
 	return retry(ctx, c.sleep, 3, func() (*conversationRepliesPage, error) {
+		if err := checkHistoryRequest(ctx, check); err != nil {
+			return nil, err
+		}
 		values := conversationRepliesValues(params)
 		resp := rawConversationRepliesResponse{}
-		if _, err := c.postSlackForm(ctx, c.tokens.User, "conversations.replies", values, &resp); err != nil {
+		_, requestErr := c.postSlackForm(ctx, c.tokens.User, "conversations.replies", values, &resp)
+		if err := checkHistoryRequest(ctx, check); err != nil {
 			return nil, err
+		}
+		if requestErr != nil {
+			return nil, requestErr
 		}
 		if err := nativePageSuccess("conversations.replies", resp.SlackResponse, resp.Messages != nil); err != nil {
 			return nil, err
@@ -414,4 +428,15 @@ func (c *Client) getUsers(ctx context.Context, token string) ([]slack.User, erro
 		seen[page.nextCursor] = true
 		cursor = page.nextCursor
 	}
+}
+
+// Retries remain rate-limit-only, but every physical attempt rechecks ownership.
+func checkHistoryRequest(ctx context.Context, check func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if check != nil {
+		return check()
+	}
+	return nil
 }

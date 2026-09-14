@@ -135,7 +135,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		ordinaryThreads := opts.Since == "" && tools.readThread != ""
 		pendingThreads := map[string]store.ThreadWork{}
 		if ordinaryThreads {
-			work, err := st.PrepareThreadWork(ctx, SourceName, workspaceID, channel.ID)
+			work, err := st.PrepareThreadWork(ctx, SourceName, workspaceID, channel.ID, nil)
 			if err != nil {
 				return summary, persistenceError(err)
 			}
@@ -262,7 +262,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			summary.Replies += result.replies
 			coverage.include(result.coverage)
 			if work != nil && !result.coverage.more && !result.coverage.limited {
-				if _, err := st.CompleteThreadWork(ctx, *work, ""); err != nil {
+				if _, err := st.CompleteThreadWork(ctx, *work, "", nil); err != nil {
 					return summary, err
 				}
 			}

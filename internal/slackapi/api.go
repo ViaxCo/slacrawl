@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -415,16 +413,4 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
-}
-
-func repairOldest(latestTS string, overlap time.Duration) string {
-	if latestTS == "" {
-		return ""
-	}
-	parsed, err := strconv.ParseFloat(latestTS, 64)
-	if err != nil {
-		return latestTS
-	}
-	adjusted := math.Max(parsed-overlap.Seconds(), 0)
-	return strconv.FormatFloat(adjusted, 'f', 6, 64)
 }

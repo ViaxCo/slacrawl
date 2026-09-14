@@ -107,6 +107,27 @@ local completion checkpoints; interrupted scans retain their pending interval.
 `--latest-only` selects previously observed channels; it does not bound the
 history interval or request count.
 
+API history acquires its current lower bound, upper request horizon and a fresh
+attempt generation in one archive transaction. The exact primary source,
+workspace, channel and normalized `--since` identify the scope. A newer attempt
+supersedes the older one: stale history/replies responses, thread work, skip/join
+records and completion cannot overwrite its state. Earlier committed pages stay
+available, and the superseded caller reports failure. An already dispatched
+external join cannot be undone.
+
+A delayed clock cannot shrink the upper horizon inherited from completed or
+active work. Completion records the horizon actually requested, including an
+empty scan. Ordinary retries apply the current retention floor and never inherit
+Full's restore permission; explicit Since still wins over Full, and Full wins
+over LatestOnly. Valid old v8 checkpoints acquire generation and upper fields
+on their next scan; the SQLite version and share format do not change.
+
+Validation covers the selected canonical checkpoint and owned channel. It does
+not audit other keys/aliases or prove archive-wide readiness, and it does not
+fence older unconditional writers or skip diagnostics shared by different
+history scopes. Independent thread generations still protect thread work;
+collision coverage remains a separate boundary.
+
 Git-share snapshots retain manifest version 1 and their existing table format,
 but these API coverage checkpoints are local-only and are not exported. Imports
 consume and validate older snapshots containing them without applying them:

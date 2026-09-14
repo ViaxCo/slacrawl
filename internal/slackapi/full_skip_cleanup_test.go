@@ -366,7 +366,7 @@ func TestNativeJoinSuccessControlsHistoryRetry(t *testing.T) {
 			st := mustStore(t)
 			defer func() { require.NoError(t, st.Close()) }()
 			require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|legacy", "unknown origin"))
-			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1709900000.000000"}))
+			require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", store.APIHistoryState{Complete: true, Latest: "1709900000.000000"}))
 			beforeSkip := repairKeyRows(t, st, "select * from sync_state where entity_type='thread_skip'")
 			now := time.Unix(1710000100, 0).UTC()
 			histories, joinCalls := 0, 0
@@ -407,7 +407,7 @@ func TestNativeJoinSuccessControlsHistoryRetry(t *testing.T) {
 			joinState, err := st.GetSyncState(ctx, SourceBot, "channel_join", "C123")
 			require.NoError(t, err)
 			require.Equal(t, map[string]string{"success": "joined", "unsuccessful": "failed:conversations.join response did not report success", "decode": "failed:slack conversations.join response decode failed", "native-error": "failed:slack conversations.join API response failed"}[outcome], joinState)
-			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			coverage, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			require.True(t, coverage.Complete)
 			skips := repairKeyRows(t, st, "select * from sync_state where entity_type='thread_skip'")

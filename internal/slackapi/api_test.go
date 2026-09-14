@@ -536,7 +536,7 @@ func TestSyncDefaultsToIncrementalHistoryWhenNotFull(t *testing.T) {
 		UpdatedAt:      client.now(),
 	}, nil))
 
-	require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1710000000.000100"}))
+	require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", store.APIHistoryState{Complete: true, Latest: "1710000000.000100"}))
 	err := client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123", Channels: []string{"C123"}})
 	require.NoError(t, err)
 	require.Equal(t, "1709996400.000100", server.lastHistoryOldest("C123"))
@@ -828,7 +828,7 @@ func TestRepairWorkspaceReconcilesIncrementalHistory(t *testing.T) {
 		UpdatedAt:      client.now(),
 	}, nil))
 
-	require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1710000000.000100"}))
+	require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", store.APIHistoryState{Complete: true, Latest: "1710000000.000100"}))
 	require.NoError(t, client.repairWorkspace(ctx, st, "T123"))
 
 	rows, err := st.Messages(ctx, "", "C123", "", 10)
@@ -1602,16 +1602,16 @@ func TestChannelSyncPlanLatestOnlySkipsUnsyncedChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	client := &Client{}
-	channels, oldestByChannel, err := client.channelSyncPlan(context.Background(), st, "T123", []slack.Channel{
+	channels, options, err := client.channelSyncPlan(context.Background(), st, "T123", []slack.Channel{
 		{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}, Name: "general"}},
 		{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C999"}, Name: "new-channel"}},
 	}, SyncOptions{LatestOnly: true})
 	require.NoError(t, err)
 	require.Len(t, channels, 1)
 	require.Equal(t, "C123", channels[0].ID)
-	require.Contains(t, oldestByChannel, "C123")
-	require.Equal(t, "1710003600.000000", oldestByChannel["C123"])
-	require.NotContains(t, oldestByChannel, "C999")
+	attempt, err := st.BeginAPIHistory(context.Background(), store.APIHistoryScope{SourceName: SourceBot, WorkspaceID: "T123", ChannelID: channels[0].ID}, options, "1800000000.000000")
+	require.NoError(t, err)
+	require.Equal(t, "1710003600.000000", attempt.Oldest)
 }
 
 func TestSyncChannelUsesInclusiveRetentionFloor(t *testing.T) {
@@ -1644,8 +1644,7 @@ func TestSyncChannelUsesInclusiveRetentionFloor(t *testing.T) {
 		st,
 		"T123",
 		slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
-		floor,
-		false,
+		store.APIHistoryOptions{},
 		now,
 		false,
 		channelSyncSource{token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
@@ -1693,11 +1692,10 @@ func TestExplicitSinceDoesNotScanRetainedThreadRoots(t *testing.T) {
 		st,
 		"T123",
 		slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
-		"1710600000.000000",
-		true,
+		store.APIHistoryOptions{RestoreRequested: true},
 		now,
 		true,
-		channelSyncSource{token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
+		channelSyncSource{token: "xoxb-test", sourceName: SourceBot, sourceRank: 2, coverageScope: "1710600000.000000"},
 	)
 	require.NoError(t, err)
 	require.Zero(t, replyCalls)
@@ -1958,8 +1956,7 @@ func TestSyncChannelHistoryRejectsRepeatedCursor(t *testing.T) {
 		st,
 		"T123",
 		slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
-		"",
-		false,
+		store.APIHistoryOptions{},
 		now,
 		false,
 		channelSyncSource{token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
@@ -1994,7 +1991,7 @@ func TestSyncThreadRejectsRepeatedCursor(t *testing.T) {
 	defer cancel()
 	client := NewWithOptions(config.Tokens{Bot: "xoxb-test", User: "xoxp-test"}, server.URL+"/", server.Client())
 	client.sleep = func(context.Context, time.Duration) error { return nil }
-	_, err := client.syncThread(ctx, st, "T123", "C123", "1710000000.000100", false, now, nil, nil)
+	_, err := client.syncThread(ctx, st, "T123", "C123", "1710000000.000100", false, now, nil, nil, nil)
 	require.EqualError(t, err, "conversations.replies repeated cursor")
 	require.Equal(t, 2, calls)
 	require.Equal(t, []string{"", "cursor-private-canary"}, cursors)

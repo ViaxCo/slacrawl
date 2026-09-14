@@ -24,29 +24,29 @@ func TestThreadWorkDiscoveryAndGeneration(t *testing.T) {
 		}
 		require.NoError(t, st.UpsertMessage(ctx, msg, nil))
 	}
-	first, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+	first, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 	require.NoError(t, err)
 	require.Len(t, first, 61, "the authoritative backlog has no reporting limit")
 	_, err = st.DB().ExecContext(ctx, "update messages set reply_count=0 where channel_id='C1'")
 	require.NoError(t, err)
-	renewed, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+	renewed, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 	require.NoError(t, err)
 	require.Len(t, renewed, 61, "pending work survives overwritten hints")
 	for i := range first {
 		require.Equal(t, first[i].TS, renewed[i].TS)
 		require.NotEqual(t, first[i].Generation, renewed[i].Generation)
-		completed, err := st.CompleteThreadWork(ctx, first[i], "")
+		completed, err := st.CompleteThreadWork(ctx, first[i], "", nil)
 		require.NoError(t, err)
 		require.False(t, completed)
 	}
 	remaining, err := st.PendingThreadWork(ctx, "api-user", "T1", "C1")
 	require.NoError(t, err)
 	require.Equal(t, renewed, remaining, "stale completion cannot delete a newer generation")
-	other, err := st.PrepareThreadWork(ctx, "api-user", "T2", "C2")
+	other, err := st.PrepareThreadWork(ctx, "api-user", "T2", "C2", nil)
 	require.NoError(t, err)
 	require.Empty(t, other)
 	for _, item := range renewed {
-		completed, err := st.CompleteThreadWork(ctx, item, "")
+		completed, err := st.CompleteThreadWork(ctx, item, "", nil)
 		require.NoError(t, err)
 		require.True(t, completed)
 	}
@@ -90,7 +90,7 @@ func TestThreadPreparationReconcilesStoredTombstones(t *testing.T) {
 			require.NoError(t, st.UpsertMessage(ctx, msg, nil))
 			if marker == "deleted_ts" || marker == "subtype" {
 				for _, source := range []string{"api-user", "mcp"} {
-					_, err := st.PrepareThreadWork(ctx, source, "T1", "C1")
+					_, err := st.PrepareThreadWork(ctx, source, "T1", "C1", nil)
 					require.NoError(t, err)
 				}
 			}
@@ -108,7 +108,7 @@ func TestThreadPreparationReconcilesStoredTombstones(t *testing.T) {
 				_, err := st.DB().ExecContext(ctx, `create trigger reject_skip_reconcile before delete on sync_state when old.entity_type='thread_skip' begin select raise(abort,'synthetic_skip_reconcile_failure'); end`)
 				require.NoError(t, err)
 			}
-			queued, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+			queued, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 			if marker == "skip-rollback" {
 				require.ErrorContains(t, err, "synthetic_skip_reconcile_failure")
 				requireThreadWorkSkips(t, st, beforeSkips)
@@ -132,7 +132,7 @@ func TestThreadWorkKeysKeepWorkspaceAndChannelSeparate(t *testing.T) {
 		msg := batchMessage(parts[1], "1", parts[0], "parent", now)
 		msg.ReplyCount = 1
 		require.NoError(t, st.UpsertMessage(ctx, msg, nil))
-		work, err := st.PrepareThreadWork(ctx, "api-user", parts[0], parts[1])
+		work, err := st.PrepareThreadWork(ctx, "api-user", parts[0], parts[1], nil)
 		require.NoError(t, err)
 		require.Len(t, work, 1)
 		keys = append(keys, threadWorkKey(work[0]))
@@ -141,7 +141,7 @@ func TestThreadWorkKeysKeepWorkspaceAndChannelSeparate(t *testing.T) {
 		require.Equal(t, work, pending)
 	}
 	require.NotEqual(t, keys[0], keys[1])
-	_, err := st.PrepareThreadWork(ctx, "api-user", "T", "C")
+	_, err := st.PrepareThreadWork(ctx, "api-user", "T", "C", nil)
 	require.True(t, IsWorkspaceCollision(err, "channel"))
 }
 
@@ -165,7 +165,7 @@ func TestThreadSkipReconciliationStaysWithinOwnedRoots(t *testing.T) {
 	}
 	require.NoError(t, st.SetSyncState(ctx, "api-user", "thread_skip", "T1|C1|absent", "no deletion evidence"))
 	before := threadWorkSkipRows(t, st)
-	work, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+	work, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 	require.NoError(t, err)
 	require.Empty(t, work)
 	requireThreadWorkSkips(t, st, before, "T1|C1|1")
@@ -279,11 +279,11 @@ func TestThreadWorkDiscoveryAtPageCommit(t *testing.T) {
 			case "pending", "completed":
 				require.NoError(t, st.UpsertMessage(ctx, root, nil))
 				require.NoError(t, st.UpsertMessage(ctx, child, nil))
-				work, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+				work, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 				require.NoError(t, err)
 				require.Len(t, work, 1)
 				if mode == "completed" {
-					completed, err := st.CompleteThreadWork(ctx, work[0], "")
+					completed, err := st.CompleteThreadWork(ctx, work[0], "", nil)
 					require.NoError(t, err)
 					require.True(t, completed)
 					discovery.ExcludedTS[root.TS] = struct{}{}
@@ -362,7 +362,7 @@ func TestThreadWorkPreservesConcurrentGeneration(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, owner.Close()) })
 			now := time.Unix(1710000000, 0).UTC()
 			seedBatchCatalog(t, st, "T1", "C1", "U1", now)
-			prepared, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+			prepared, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 			require.NoError(t, err)
 			require.Empty(t, prepared)
 			root := batchMessage("C1", "1710000001.000000", "T1", "root", now)
@@ -374,7 +374,7 @@ func TestThreadWorkPreservesConcurrentGeneration(t *testing.T) {
 				require.NoError(t, owner.UpsertMessage(ctx, child, nil))
 			}
 			require.NoError(t, owner.UpsertMessage(ctx, root, nil))
-			work, err := owner.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+			work, err := owner.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 			require.NoError(t, err)
 			require.Len(t, work, 1)
 			skipKey := "T1|C1|" + root.TS
@@ -396,7 +396,7 @@ func TestThreadWorkPreservesConcurrentGeneration(t *testing.T) {
 			current, err := owner.ThreadWorkCurrent(ctx, work[0])
 			require.NoError(t, err)
 			require.True(t, current)
-			completed, err := owner.CompleteThreadWork(ctx, work[0], skipKey)
+			completed, err := owner.CompleteThreadWork(ctx, work[0], skipKey, nil)
 			require.NoError(t, err)
 			require.True(t, completed)
 			assertBatchCount(t, st, "select count(*) from sync_state", 0)
@@ -416,7 +416,7 @@ func TestThreadWorkRevalidatedAtPageCommit(t *testing.T) {
 			root.SourceName, root.SourceRank = "api-bot", 2
 			root.ReplyCount = 1
 			require.NoError(t, st.UpsertMessage(ctx, root, nil))
-			prepared, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+			prepared, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 			require.NoError(t, err)
 			require.Len(t, prepared, 1)
 			work := prepared[0]
@@ -431,12 +431,12 @@ func TestThreadWorkRevalidatedAtPageCommit(t *testing.T) {
 				require.Empty(t, pending)
 			}
 			if mode == "renewed" {
-				_, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+				_, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 				require.NoError(t, err)
 				require.NoError(t, st.SetSyncState(ctx, "api-user", "thread_skip", "T1|C1|"+root.TS, "new attempt skip"))
 			}
 			if mode == "completed" || mode == "revoked-completion" {
-				completed, err := st.CompleteThreadWork(ctx, work, "")
+				completed, err := st.CompleteThreadWork(ctx, work, "", nil)
 				require.NoError(t, err)
 				require.Equal(t, mode == "completed", completed)
 				if completed {
@@ -552,7 +552,7 @@ func TestThreadWorkRejectsInconsistentParents(t *testing.T) {
 				cancel()
 				ctx = canceled
 			}
-			_, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+			_, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 			if mode == "canceled" {
 				require.ErrorIs(t, err, context.Canceled)
 			} else {
@@ -678,7 +678,7 @@ func TestThreadWorkPurgeAndFreshness(t *testing.T) {
 		msg.ReplyCount = 1
 		require.NoError(t, st.UpsertMessage(ctx, msg, nil))
 		for _, source := range []string{"api-user", "mcp"} {
-			_, err := st.PrepareThreadWork(ctx, source, workspace, channel)
+			_, err := st.PrepareThreadWork(ctx, source, workspace, channel, nil)
 			require.NoError(t, err)
 		}
 	}
@@ -737,7 +737,7 @@ func TestPhysicalDeleteRetiresThreadWork(t *testing.T) {
 			require.NoError(t, st.UpsertMessage(ctx, msg, []Mention{{Type: "user", TargetID: "U1"}}))
 			if mode != "skip-only" {
 				for _, source := range []string{"api-user", "mcp"} {
-					work, err := st.PrepareThreadWork(ctx, source, "T1", "C1")
+					work, err := st.PrepareThreadWork(ctx, source, "T1", "C1", nil)
 					require.NoError(t, err)
 					require.Len(t, work, 1)
 				}
@@ -808,7 +808,7 @@ func TestPhysicalDeleteRetiresThreadWork(t *testing.T) {
 			// invalid. Remove only that fixture row before testing a fresh Prepare.
 			require.NoError(t, st.DeleteSyncState(ctx, "api-user", ThreadPendingEntityType, threadWorkKey(ThreadWork{WorkspaceID: "T1", ChannelID: "C1", TS: "1710000002.000000"})))
 			for _, source := range []string{"api-user", "mcp"} {
-				work, err := st.PrepareThreadWork(ctx, source, "T1", "C1")
+				work, err := st.PrepareThreadWork(ctx, source, "T1", "C1", nil)
 				require.NoError(t, err)
 				require.Empty(t, work, "physical deletion cannot leave an orphaned job")
 			}
@@ -863,7 +863,7 @@ func TestThreadWorkGuardPrecedesAllBatchWrites(t *testing.T) {
 			root := batchMessage("C1", "1710000001.000000", "T1", "root", now)
 			root.ReplyCount = 1
 			require.NoError(t, st.UpsertMessage(ctx, root, nil))
-			work, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+			work, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 			require.NoError(t, err)
 			require.Len(t, work, 1)
 			mutations := map[string]string{
@@ -940,13 +940,13 @@ func TestThreadCompletionKeepsNewerSkipAndRollsBack(t *testing.T) {
 			root := batchMessage("C1", "1710000001.000000", "T1", "root", now)
 			root.ReplyCount = 1
 			require.NoError(t, st.UpsertMessage(ctx, root, nil))
-			work, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+			work, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 			require.NoError(t, err)
 			require.Len(t, work, 1)
 			key := "T1|C1|" + root.TS
 			require.NoError(t, st.SetSyncState(ctx, "api-user", "thread_skip", key, "new attempt skip"))
 			if mode == "renewed" {
-				_, err = st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+				_, err = st.PrepareThreadWork(ctx, "api-user", "T1", "C1", nil)
 				require.NoError(t, err)
 			}
 			if mode == "deleted" {
@@ -959,7 +959,7 @@ func TestThreadCompletionKeepsNewerSkipAndRollsBack(t *testing.T) {
 			}
 			before, err := st.QueryReadOnly(ctx, "select * from sync_state order by source_name,entity_type,entity_id")
 			require.NoError(t, err)
-			completed, err := st.CompleteThreadWork(ctx, work[0], key)
+			completed, err := st.CompleteThreadWork(ctx, work[0], key, nil)
 			require.Equal(t, mode == "current", completed)
 			if mode == "rollback" {
 				require.ErrorContains(t, err, "synthetic_skip_cleanup_failure")

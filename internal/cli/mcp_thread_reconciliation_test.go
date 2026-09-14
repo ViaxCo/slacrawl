@@ -33,7 +33,7 @@ func TestMCPSlicedReturnedRootEvidenceFromCLI(t *testing.T) {
 				mcpReconcileCatalog(t, st, now)
 				old := store.Message{WorkspaceID: "TLOCAL", ChannelID: "C123", TS: mcpWorkRoot, Text: "old retained root", NormalizedText: "old retained root", ReplyCount: 1, SourceName: "mcp", SourceRank: 4, RawJSON: "{}", UpdatedAt: now}
 				require.NoError(t, st.UpsertMessage(ctx, old, nil))
-				_, err = st.PrepareThreadWork(ctx, "mcp", "TLOCAL", "C123")
+				_, err = st.PrepareThreadWork(ctx, "mcp", "TLOCAL", "C123", nil)
 				require.NoError(t, err)
 				beforePending := mcpWorkPending(t, st)
 				beforeRoot := apiKeyRows(t, st, "select * from messages where ts='"+mcpWorkRoot+"'")
@@ -121,7 +121,7 @@ func TestMCPNoToolReconcilesMergedTombstonesFromCLI(t *testing.T) {
 				require.NoError(t, st.UpsertMessage(ctx, root, nil))
 				require.NoError(t, st.SetSyncState(ctx, "mcp", "workspace", "TLOCAL", "2020-01-01T00:00:00Z"))
 				if mode != "fresh" {
-					_, err := st.PrepareThreadWork(ctx, "mcp", "TLOCAL", "C123")
+					_, err := st.PrepareThreadWork(ctx, "mcp", "TLOCAL", "C123", nil)
 					require.NoError(t, err)
 				}
 				beforePending := mcpWorkPending(t, st)

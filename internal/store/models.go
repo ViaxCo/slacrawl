@@ -85,15 +85,23 @@ type SyncStateWrite struct {
 	Value      string
 }
 
+type SyncStateDelete struct {
+	SourceName string
+	EntityType string
+	EntityID   string
+}
+
 type WriteBatch struct {
-	Workspaces      []Workspace
-	Channels        []Channel
-	Users           []User
-	Messages        []MessageWrite
-	SyncStates      []SyncStateWrite
-	PendingThreads  []ThreadWork
-	ThreadGuard     *ThreadWork
-	ThreadDiscovery *ThreadWorkDiscovery
+	Workspaces       []Workspace
+	Channels         []Channel
+	Users            []User
+	Messages         []MessageWrite
+	SyncStates       []SyncStateWrite
+	SyncStateDeletes []SyncStateDelete
+	HistoryGuard     *APIHistoryAttempt
+	PendingThreads   []ThreadWork
+	ThreadGuard      *ThreadWork
+	ThreadDiscovery  *ThreadWorkDiscovery
 }
 
 type CollisionSkip struct {

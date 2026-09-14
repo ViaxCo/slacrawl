@@ -407,7 +407,7 @@ Share config:
    - explicit `[sync].include_dms = false` skips IM/MPIM and rejects unknown or conflicting conversation types
    - omitted/true retain the existing per-source acquisition defaults
    - reject missing channel IDs, foreign context workspace IDs, and mismatched typed latest-message channel IDs for retained conversations under every policy
-6. derive per-channel sync window:
+6. select channels and explicit history mode; acquire the actual window atomically when the channel scan begins:
    - explicit `--since` wins
    - `--full` disables incremental cutoffs
    - `--latest-only` skips channels that do not already have a stored cursor
@@ -415,6 +415,8 @@ Share config:
    - retain unfinished intervals across failures; observed message maxima do not certify completed backfill
    - histories without a completion checkpoint start at the permitted retention floor, including desktop-only or legacy archives
    - explicit `--since` coverage is isolated from ordinary/full history checkpoints
+   - validate the selected canonical checkpoint and channel ownership, then acquire a random generation with the actual lower bound and requested upper horizon in one Store writer transaction
+   - choose the upper horizon as the maximum of the supplied clock, completed horizon and prior active request horizon; completion consumes that recorded bound, including for empty history
 7. persist admitted channel metadata
 8. fetch users with the primary client, including the profile snapshot used for DM names
 9. backfill message history
@@ -456,6 +458,26 @@ Share config:
     - static scope restrictions alone do not redefine other scoped coverage behavior. The omission fact belongs to this Sync; it does not create durable collision work or guarantee what a later Doctor capability probe reports
     - primary history uses `api-bot` rank 2 or `api-user` rank 1; workspace success records that source, coverage remains source-specific, and ordinary message reconciliation is unchanged
     - Tail and periodic repair keep their bot-owned catalog/history path; selecting a primary for Sync never reassigns the stored bot client
+
+API history attempt ownership is local to the exact source, workspace, channel
+and normalized Since key. Every physical history/replies request checks caller
+cancellation and then ownership before and after the request, including retries.
+Page writes, thread preparation/discovery/completion, tombstone retirement,
+thread-skip changes and channel skip/join records check the same generation in
+their write transaction. A superseded attempt returns a failure and cannot count
+as successful channel/workspace completion. Previously committed pages remain.
+Join checks do not undo an external join already dispatched; retry sleeps keep
+their existing cancellation behavior.
+
+Ordinary acquisition uses current pending work or completed overlap and then
+applies the current retention floor; it does not inherit an older Full request's
+restore permission. Since still precedes Full, and Full precedes LatestOnly.
+Valid legacy v8 checkpoints without generation/upper fields acquire both on the
+next attempt without inventing an earlier upper horizon. Malformed selected
+canonical values fail without writes. This does not audit aliases or unrelated
+checkpoints, fence older unconditional writers or cross-scope skip diagnostics,
+or establish durable collision coverage or archive-wide readiness. API Latest
+is a completed requested horizon, unlike MCP's returned-message watermark.
 
 Channel and user catalog pages also require explicit native success before rows
 or cursors return to their callers. Ordinary catalogs and users use the selected

@@ -34,7 +34,7 @@ func TestRepairMessageKeyAdmission(t *testing.T) {
 			const priorLatest = "1709900000.000000"
 			const attemptedOldest = "1709896400.000000"
 			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Name: "fixture", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
-			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: priorLatest}))
+			require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", store.APIHistoryState{Complete: true, Latest: priorLatest}))
 			_, err := st.DB().ExecContext(ctx, "insert into sync_state(source_name,entity_type,entity_id,value,updated_at) values(?,?,?,?,?)", SourceBot, "workspace", "T123", "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z")
 			require.NoError(t, err)
 			parent := slack.Message{Msg: slack.Msg{Channel: "C123", Type: "message", Timestamp: parentTS, Text: "history-parent", ReplyCount: 2}}
@@ -102,7 +102,7 @@ func TestRepairMessageKeyAdmission(t *testing.T) {
 			client := NewWithOptions(config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, server.URL()+"/", server.Client()).WithDMPolicy(admission.Exclude)
 			client.now = func() time.Time { return now }
 			runErr := client.repairWorkspace(ctx, st, "T123")
-			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			coverage, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			coverageJSON, err := json.Marshal(coverage)
 			require.NoError(t, err)
@@ -121,7 +121,8 @@ func TestRepairMessageKeyAdmission(t *testing.T) {
 			if runErr == nil || runErr.Error() != expectedError || coverage.Pending == nil || len(badRows) != 0 || !parentPreserved || !workspacePreserved {
 				t.Fatalf("repair-key boundary: error=%t expected_error=%t pending=%t workspace_preserved=%t bad_rows=%d parent_preserved=%t", runErr != nil, runErr != nil && runErr.Error() == expectedError, coverage.Pending != nil, workspacePreserved, len(badRows), parentPreserved)
 			}
-			require.Equal(t, historyCoverage{Complete: true, Latest: priorLatest, Pending: new(attemptedOldest)}, coverage)
+			require.NotEmpty(t, coverage.Generation)
+			require.Equal(t, store.APIHistoryState{Complete: true, Latest: priorLatest, Pending: new(attemptedOldest), Generation: coverage.Generation, PendingLatest: "1710000200.000000"}, coverage)
 			assertAdmissionCanariesAbsent(t, st, fmt.Sprint(runErr), "message-key-bad", "message-key-sibling", "reply-parent-replacement", "UMESSAGEKEYBAD", "UMESSAGEKEYSIBLING", "FMESSAGEKEYBAD", "FMESSAGEKEYSIBLING")
 			if tc.endpoint == "history" {
 				require.Len(t, rows, 1)
@@ -141,9 +142,9 @@ func TestRepairMessageKeyAdmission(t *testing.T) {
 			require.Len(t, repairKeyRows(t, st, "select * from message_fts"), len(rows))
 			corrected.Store(true)
 			require.NoError(t, client.repairWorkspace(ctx, st, "T123"))
-			coverage, err = loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			coverage, err = readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
-			require.Equal(t, historyCoverage{Complete: true, Latest: "1710000200.000000"}, coverage)
+			require.Equal(t, store.APIHistoryState{Complete: true, Latest: "1710000200.000000"}, coverage)
 			mu.Lock()
 			observedOldest = append([]string(nil), oldest...)
 			mu.Unlock()
