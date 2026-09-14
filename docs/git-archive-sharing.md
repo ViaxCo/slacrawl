@@ -28,7 +28,7 @@ behavior, including archived DMs and drafts. Intake settings do not purge those
 rows or certify a snapshot as safe to publish. The publication gate does not
 change the optional release notifier that runs before command dispatch.
 
-## Selection core for future projections
+## Offline selected projections
 
 The internal selection API prepares a private, versioned plan for explicitly
 chosen workspace, channel and message IDs. It reads an existing archive without
@@ -47,13 +47,18 @@ without those flags remain unqualified. Routine MCP sync preserves existing
 channel rows and does not repair older lossy metadata; richer records also stay
 unchanged. Retained raw metadata is private input, never projection output.
 
-There is no selection command or publication integration yet.
+Use `export prepare`, `export build` and `export verify` with explicit archive,
+selection/plan and output paths; see the [command recipe](commands.md#offline-projections).
+These commands ignore global `--config` and retained config state. They do not
+initialize archives, auto-import snapshots, check for releases, contact Slack,
+or invoke Git. Keep the selection and generated plan private: the plan contains
+source bindings and replacement text. There is no publication integration.
 Current channel type cannot prove that a conversation was never a DM, and kept
 or replacement text can quote private content. Selection, labels and content
 review remain the operator's responsibility; this is not a complete sanitizer.
 Legacy snapshot publishing and its DM-exclusion gate remain unchanged.
 
-### Internal artifact writer and verifier
+### Artifact writer and verifier
 
 The internal artifact API writes an explicit expected projection into a fresh
 directory containing only `manifest.json` and `messages.jsonl`. The manifest
@@ -71,7 +76,11 @@ attempt. There is no recursive cleanup or atomic/crash-durability guarantee.
 
 The receipt covers bytes observed during verification only. It does not certify
 DM origin or quoted content, authorize publication, or protect later file edits.
-This API does not add a command or connect the artifact to Git publishing.
+The offline CLI resolves the private plan against the current archive before
+building or verifying. Prepare and build require clean embedded Git metadata;
+build must match the plan's producer revision. A newer verifier can verify an
+older producer's artifact using that plan, without the producing binary. Neither
+command connects the artifact to Git publishing.
 
 ## Configure the archive
 

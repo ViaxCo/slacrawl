@@ -22,6 +22,7 @@ var (
 		"update",
 		"sync",
 		"import",
+		"export",
 		"purge",
 		"tail",
 		"watch",
@@ -89,7 +90,7 @@ _slacrawl()
     local i
     for ((i=1; i < ${#words[@]}; i++)); do
         case "${words[i]}" in
-            init|version|check-update|metadata|doctor|report|digest|analytics|publish|subscribe|update|sync|import|purge|tail|watch|tui|search|messages|files|mentions|sql|users|channels|status|completion)
+            init|version|check-update|metadata|doctor|report|digest|analytics|publish|subscribe|update|sync|import|export|purge|tail|watch|tui|search|messages|files|mentions|sql|users|channels|status|completion)
                 command="${words[i]}"
                 break
                 ;;
@@ -115,6 +116,10 @@ _slacrawl()
 			;;
 		analytics)
 			COMPREPLY=( $(compgen -W "digest quiet trends --help -h ${global_flags}" -- "${cur}") )
+			return
+			;;
+		export)
+			COMPREPLY=( $(compgen -W "prepare build verify --help -h" -- "${cur}") )
 			return
 			;;
     esac
@@ -164,6 +169,20 @@ _slacrawl()
                 *)
                     COMPREPLY=( $(compgen -W "digest quiet trends --help -h ${global_flags}" -- "${cur}") )
                     ;;
+            esac
+            ;;
+        export)
+            case "${prev}" in
+                --db|--selection|--plan|--out|--dir)
+                    _filedir
+                    return
+                    ;;
+            esac
+            local export_subcommand="${words[i+1]}"
+            case "${export_subcommand}" in
+                prepare) COMPREPLY=( $(compgen -W "--db --selection --out --format --json --help -h" -- "${cur}") ) ;;
+                build) COMPREPLY=( $(compgen -W "--db --plan --out --format --json --help -h" -- "${cur}") ) ;;
+                verify) COMPREPLY=( $(compgen -W "--db --plan --dir --format --json --help -h" -- "${cur}") ) ;;
             esac
             ;;
         publish)
@@ -300,6 +319,23 @@ _slacrawl() {
                 ;;
               *)
                 _values 'analytics subcommand' digest quiet trends
+                ;;
+            esac
+          fi
+          ;;
+        export)
+          if (( CURRENT == 3 )); then
+            _values 'export subcommand' prepare build verify
+          else
+            case $words[3] in
+              prepare)
+                _arguments '--db[existing archive]:path:_files' '--selection[private selection]:path:_files' '--out[new private plan]:path:_files' '--format[output format]:format:(text json log)' '--json[json output]' '--help[show help]'
+                ;;
+              build)
+                _arguments '--db[existing archive]:path:_files' '--plan[private plan]:path:_files' '--out[new artifact directory]:path:_files' '--format[output format]:format:(text json log)' '--json[json output]' '--help[show help]'
+                ;;
+              verify)
+                _arguments '--db[existing archive]:path:_files' '--plan[private plan]:path:_files' '--dir[artifact directory]:path:_files' '--format[output format]:format:(text json log)' '--json[json output]' '--help[show help]'
                 ;;
             esac
           fi

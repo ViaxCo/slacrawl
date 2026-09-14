@@ -87,6 +87,7 @@ func (a *App) printHelp() {
 	b.WriteString("  update     Pull and import the latest git snapshot.\n")
 	b.WriteString("  sync       Run a one-shot crawl from bot/api, wiretap/desktop, or both.\n")
 	b.WriteString("  import     Import a Slack export ZIP or directory.\n")
+	b.WriteString("  export     Prepare, build, or verify an offline projection.\n")
 	b.WriteString("  purge      Preview or delete messages older than a cutoff.\n")
 	b.WriteString("  tail       Listen for live events through Socket Mode.\n")
 	b.WriteString("  watch      Refresh desktop-local state on an interval.\n")

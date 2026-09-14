@@ -29,6 +29,68 @@ The default paths are:
 
 Override the config with the global `--config <path>` flag. Database, cache, and log paths live in the TOML config; see [Configuration](configuration.md).
 
+## Offline projections
+
+These commands use explicit paths and work without HOME or a Slacrawl config:
+
+```sh
+slacrawl --json export prepare --db archive.db --selection selection.json --out private-plan.json
+slacrawl --json export build --db archive.db --plan private-plan.json --out new-projection
+slacrawl --json export verify --db archive.db --plan private-plan.json --dir new-projection
+```
+
+Put global output flags before `export`, or use `--format`/`--json` after the
+subcommand. `export --json prepare` is unsupported. Global `--config` is ignored;
+`--config` after an export subcommand is unsupported. The export path does not
+resolve default config, initialize or repair the archive, auto-import, sync,
+check releases, contact Slack, or invoke Git.
+
+Create a private selection document in this field order. Formatting whitespace
+is allowed; field names, string escapes and required fields use the exact typed
+JSON spelling. Unknown, duplicate, case-varied and missing fields are rejected.
+
+```json
+{
+  "workspace_id": "TTEST",
+  "workspace_label": "reviewed workspace",
+  "channels": [{"channel_id": "CPUBLIC", "label": "reviewed channel"}],
+  "messages": [{
+    "channel_id": "CPUBLIC",
+    "ts": "1767312000.000002",
+    "text": {"mode": "keep", "replacement": null}
+  }]
+}
+```
+
+Use `{"mode":"replace","replacement":"reviewed text"}` to replace text;
+`""` is an explicit empty replacement. Keep requires `replacement:null`.
+Both arrays must select at least one entry. Empty labels default to IDs. Select
+any reply's eligible parent explicitly. Selected channels need retained native
+public-channel evidence; sparse or conflicting metadata cannot qualify.
+
+Prepare writes a private version 1 envelope containing `version`,
+`producer_revision` and `selection` (the bound core plan). Do not hand-edit it:
+it requires exact compact JSON plus one LF, including all generated hashes and
+fields. It is not a shareable artifact. Selection and plan files must be regular nonsymlink
+files. The plan and artifact destinations must be new, with existing parents;
+failed writes remain for inspection, and a retry needs a new destination.
+
+Prepare and build require a clean Git checkout stamped into the binary with
+`go build -buildvcs=true ./cmd/slacrawl`. A dirty checkout or binary without
+that metadata fails; some module-version installs omit it. Build must use the
+same revision as prepare. Verify can use a newer binary without matching its
+revision to the plan, and does not require the old producer binary. Both commands
+recheck the plan against the current archive, so changed selected rows require
+new preparation and review.
+
+Prepare prints channel/message counts. Build and verify print
+`manifest_sha256`, `messages_sha256`, `manifest_bytes`, `messages_bytes` and `rows`.
+The two-file artifact contains only explicit labels, identities and selected
+message fields. Receipts describe the bytes observed; they do not certify
+lifetime DM origin, quoted private content or permission to publish. Operators
+must review selection, labels and kept/replacement text. See
+[projection limits](git-archive-sharing.md#offline-selected-projections).
+
 ## Ingest and refresh
 
 | Command | Purpose |

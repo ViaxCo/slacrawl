@@ -661,7 +661,8 @@ default), then message channel ID, timestamp, user ID, chosen text, thread
 timestamp and edit timestamp. Text requires an explicit keep or replace choice;
 replacement may be empty. Nullable emitted scalars preserve NULL versus empty.
 Raw payloads, source bindings, deletion/draft metadata and derived content remain
-private. Selection itself has no CLI or publishing path and writes no files. Current native
+private. The selection core writes no files; its offline CLI owns private plan
+storage and artifact commands, with no publishing path. Current native
 type evidence does not establish lifetime DM origin or review quoted private
 content. Operators remain responsible for selection, labels and text choices.
 
@@ -694,7 +695,35 @@ closure, then rechecks inventory and identity. Bounds derive from expected
 content. A receipt identifies the bytes observed during verification; later
 mutation invalidates that observation. This is not lifetime DM-origin proof,
 content review, producer authentication, or a commit/push authorization gate.
-No CLI, Git integration or schema change is part of this profile.
+No Git integration or schema change is part of this profile.
+
+### Offline export commands
+
+`export prepare --db PATH --selection PATH --out PRIVATE_PLAN`,
+`export build --db PATH --plan PRIVATE_PLAN --out NEW_DIR` and
+`export verify --db PATH --plan PRIVATE_PLAN --dir DIR` require every path
+explicitly. Dispatch precedes default config resolution and the release notifier.
+Global `--config` is ignored; export-local `--config` is unsupported. No archive
+initialization, automatic import, sync, Slack or Git operation occurs.
+
+The CLI owns a private version 1 envelope with `version`, `producer_revision`
+and `selection` (the core plan). Prepare/build require unique embedded Go build
+settings `vcs=git`, a lowercase 40-hex `vcs.revision` and `vcs.modified=false`.
+Build requires the current revision to match the envelope. Verify uses the plan's
+revision, permitting newer verifiers without the old producing binary. Both
+build and verify freshly resolve bindings; artifact data never defines expected
+content. Missing or dirty build metadata fails with clean-build guidance.
+
+Selection input allows formatting whitespace but otherwise must match the
+closed typed JSON field order, spelling and explicit fields. Plans require exact
+compact canonical JSON plus one LF. Roundtrip equality rejects duplicate,
+unknown, case-varied, escaped or missing keys. Core selection semantics still
+own required arrays and scalar validation. Selection and plan files must be regular nonsymlink
+files with checked read/close and pathname/handle identity. Prepare exclusively
+creates a 0600 plan in an existing parent and checks write/sync/close; failure
+retains partial output. Commands emit counts or five tagged receipt fields only,
+never plan contents or private replacement text. Verification receipts remain
+observations, not content approval or publication authority.
 
 ### Desktop-local sync
 
