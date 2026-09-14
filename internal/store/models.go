@@ -92,16 +92,17 @@ type SyncStateDelete struct {
 }
 
 type WriteBatch struct {
-	Workspaces       []Workspace
-	Channels         []Channel
-	Users            []User
-	Messages         []MessageWrite
-	SyncStates       []SyncStateWrite
-	SyncStateDeletes []SyncStateDelete
-	HistoryGuard     *APIHistoryAttempt
-	PendingThreads   []ThreadWork
-	ThreadGuard      *ThreadWork
-	ThreadDiscovery  *ThreadWorkDiscovery
+	Workspaces               []Workspace
+	Channels                 []Channel
+	Users                    []User
+	Messages                 []MessageWrite
+	SyncStates               []SyncStateWrite
+	SyncStateDeletes         []SyncStateDelete
+	HistoryGuard             *APIHistoryAttempt
+	PendingThreads           []ThreadWork
+	ThreadGuard              *ThreadWork
+	ThreadDiscovery          *ThreadWorkDiscovery
+	PendingThreadOnCollision *ThreadWork
 }
 
 type CollisionSkip struct {

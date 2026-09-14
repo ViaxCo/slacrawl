@@ -112,11 +112,18 @@ func (a *App) runDoctor(ctx context.Context, configPath string, args []string, f
 			if err != nil {
 				return err
 			}
-			if hasThreadSkips || hasPendingThreads {
+			hasIncompleteHistory, err := st.HasIncompleteAPIHistory(ctx, "")
+			if err != nil {
+				return err
+			}
+			if hasThreadSkips || hasPendingThreads || hasIncompleteHistory {
 				threadCoverage = "partial"
 				// Keep the global auth diagnosis when only named coverage was full.
 				if diag.ThreadCoverage == "full" {
-					diag.ThreadCoverageReason = "retained_api_thread_work"
+					diag.ThreadCoverageReason = "retained_api_history_work"
+					if hasThreadSkips || hasPendingThreads {
+						diag.ThreadCoverageReason = "retained_api_thread_work"
+					}
 				}
 				diag.ThreadCoverage = threadCoverage
 			}

@@ -31,12 +31,27 @@ func (s *Store) DeleteSyncState(ctx context.Context, source, entityType, entityI
 }
 
 func (s *Store) DeleteAPIThreadSkipsIfNoPending(ctx context.Context, workspaceID string) error {
-	// Full sync must preserve this workspace's newer pending attempt without
-	// letting unrelated workspaces prevent cleanup. The SQL uses one snapshot.
-	return s.q.DeleteAPIThreadSkipsIfNoPending(ctx, storedb.DeleteAPIThreadSkipsIfNoPendingParams{
+	// Serialize history admission and the existing pending-thread SQL guard.
+	// A concurrent Begin must not appear between the coverage check and delete.
+	q, commit, rollback, err := s.beginMessageTransaction(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer rollback()
+	incomplete, err := hasIncompleteAPIHistory(ctx, q, workspaceID)
+	if err != nil {
+		return err
+	}
+	if incomplete {
+		return nil
+	}
+	if err := storedb.New(q).DeleteAPIThreadSkipsIfNoPending(ctx, storedb.DeleteAPIThreadSkipsIfNoPendingParams{
 		EntityIDLike: workspaceID + "|%",
 		WorkspaceID:  workspaceID,
-	})
+	}); err != nil {
+		return err
+	}
+	return commit()
 }
 
 func (s *Store) HasSyncStateType(ctx context.Context, source, entityType string) (bool, error) {

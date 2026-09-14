@@ -245,7 +245,11 @@ func TestFullThreadSkipCleanupRecordsActualOmissions(t *testing.T) {
 				require.Equal(t, before, after, "omitted work cannot erase unrelated legacy diagnostics")
 				pending, err := st.ListSyncState(ctx, SourceUser, store.ThreadPendingEntityType, 10)
 				require.NoError(t, err)
-				require.Empty(t, pending, "the omission veto must not depend on retained pending work")
+				if mode == "reply-collision" {
+					require.Len(t, pending, 1, "a collided reply retains its requested root")
+				} else {
+					require.Empty(t, pending, "other omission vetoes do not depend on retained pending work")
+				}
 				coverage, err := st.GetSyncState(ctx, "doctor", "threads", "coverage")
 				require.NoError(t, err)
 				require.Equal(t, "partial", coverage, "an actual omission cannot newly claim full, even without a prior skip")

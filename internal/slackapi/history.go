@@ -35,6 +35,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 	oldest, horizon := attempt.Oldest, attempt.Latest
 	enforceRetention, inclusive := attempt.EnforceRetention, attempt.Inclusive
 	checkAttempt := func() error { return st.CheckAPIHistory(ctx, attempt) }
+	historyIncomplete := false
 	syncedThreads := map[string]struct{}{}
 	pendingThreads := map[string]store.ThreadWork{}
 	completedThreads := map[string]struct{}{}
@@ -84,6 +85,9 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 		}
 		outcome, err := c.syncThread(ctx, st, workspaceID, channel.ID, threadTS, enforceRetention, now, work, source.threadSkip, &attempt)
+		if outcome == threadSyncIncomplete {
+			historyIncomplete = true
+		}
 		if outcome == threadSyncUnattempted {
 			return err
 		}
@@ -101,7 +105,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 			return err
 		}
-		if outcome == threadSyncRevoked {
+		if outcome == threadSyncRevoked || outcome == threadSyncIncomplete {
 			return nil
 		}
 		if work != nil {
@@ -203,6 +207,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			if err != nil {
 				return err
 			}
+			historyIncomplete = historyIncomplete || len(result.CollisionsSkipped) > 0
 			for _, skip := range result.CollisionsSkipped {
 				source.threadSkip.RecordOmission()
 				c.skipMessageCollision(skip.Err, workspaceID, skip.ChannelID, skip.TS)
@@ -269,6 +274,11 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 		}
 	}
+	// Keep the exact attempted interval and its prior completed horizon when
+	// any page omitted a collision, without vetoing another channel's progress.
+	if historyIncomplete {
+		return st.CheckAPIHistory(ctx, attempt)
+	}
 	return st.CompleteAPIHistory(ctx, attempt)
 }
 
@@ -278,6 +288,7 @@ const (
 	threadSyncComplete threadSyncResult = iota
 	threadSyncRevoked
 	threadSyncUnattempted
+	threadSyncIncomplete
 )
 
 func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID string, channelID string, threadTS string, enforceRetention bool, now time.Time, work *store.ThreadWork, skips *threadSkipTracker, history *store.APIHistoryAttempt) (threadSyncResult, error) {
@@ -286,6 +297,13 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 	// Rejection before the first request must leave a later page free to
 	// process newly admitted work; revocation after a request still counts.
 	revokedResult := threadSyncUnattempted
+	outcome := threadSyncComplete
+	revokedOutcome := func(fallback threadSyncResult) threadSyncResult {
+		if outcome == threadSyncIncomplete {
+			return outcome
+		}
+		return fallback
+	}
 	checkAttempt := func() error {
 		if history != nil {
 			return st.CheckAPIHistory(ctx, *history)
@@ -294,15 +312,15 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 	}
 	for {
 		if err := checkAttempt(); err != nil {
-			return revokedResult, err
+			return revokedOutcome(revokedResult), err
 		}
 		if work != nil {
 			current, err := st.ThreadWorkCurrent(ctx, *work)
 			if err != nil {
-				return revokedResult, err
+				return revokedOutcome(revokedResult), err
 			}
 			if !current {
-				return revokedResult, nil
+				return revokedOutcome(revokedResult), nil
 			}
 		}
 		revokedResult = threadSyncRevoked
@@ -313,24 +331,27 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 			Limit:     200,
 		}, checkAttempt)
 		if err := checkAttempt(); err != nil {
-			return revokedResult, err
+			return revokedOutcome(revokedResult), err
 		}
 		if work != nil {
 			current, checkErr := st.ThreadWorkCurrent(ctx, *work)
 			if checkErr != nil {
-				return threadSyncComplete, checkErr
+				return outcome, checkErr
 			}
 			if !current {
-				return threadSyncRevoked, nil
+				return revokedOutcome(threadSyncRevoked), nil
 			}
 		}
 		if err != nil {
-			return threadSyncComplete, err
+			return outcome, err
 		}
 		if err := validateMessagePage(resp.Messages, channelID); err != nil {
-			return threadSyncComplete, fmt.Errorf("channel %s replies: %w", channelID, err)
+			return outcome, fmt.Errorf("channel %s replies: %w", channelID, err)
 		}
 		batch := store.WriteBatch{HistoryGuard: history, Messages: make([]store.MessageWrite, 0, len(resp.Messages)), ThreadGuard: work}
+		if work == nil {
+			batch.PendingThreadOnCollision = &store.ThreadWork{SourceName: SourceUser, WorkspaceID: workspaceID, ChannelID: channelID, TS: threadTS}
+		}
 		for _, rawMsg := range resp.Messages {
 			msg := rawMsg.Message
 			if msg.Channel == "" {
@@ -348,10 +369,13 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 		if len(batch.Messages) > 0 || work != nil || history != nil {
 			result, err := st.ApplyWriteBatch(ctx, batch)
 			if err != nil {
-				return threadSyncComplete, err
+				return outcome, err
 			}
 			if result.ThreadWorkRevoked {
-				return threadSyncRevoked, nil
+				return revokedOutcome(threadSyncRevoked), nil
+			}
+			if len(result.CollisionsSkipped) > 0 {
+				outcome = threadSyncIncomplete
 			}
 			for _, skip := range result.CollisionsSkipped {
 				skips.RecordOmission()
@@ -360,12 +384,12 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 		}
 		if resp.NextCursor == "" {
 			if resp.HasMore {
-				return threadSyncComplete, errors.New("conversations.replies returned has_more without a continuation cursor; scan remains incomplete; slacrawl does not support timestamp pagination")
+				return outcome, errors.New("conversations.replies returned has_more without a continuation cursor; scan remains incomplete; slacrawl does not support timestamp pagination")
 			}
-			return threadSyncComplete, nil
+			return outcome, nil
 		}
 		if seen[resp.NextCursor] {
-			return threadSyncComplete, errors.New("conversations.replies repeated cursor")
+			return outcome, errors.New("conversations.replies repeated cursor")
 		}
 		seen[resp.NextCursor] = true
 		cursor = resp.NextCursor

@@ -122,11 +122,19 @@ Full's restore permission; explicit Since still wins over Full, and Full wins
 over LatestOnly. Valid old v8 checkpoints acquire generation and upper fields
 on their next scan; the SQLite version and share format do not change.
 
-Validation covers the selected canonical checkpoint and owned channel. It does
-not audit other keys/aliases or prove archive-wide readiness, and it does not
-fence older unconditional writers or skip diagnostics shared by different
-history scopes. Independent thread generations still protect thread work;
-collision coverage remains a separate boundary.
+History acquisition validates only its selected canonical checkpoint and owned
+channel. Coverage decisions separately scan retained records for the exact API
+sources and history type. Every key must be canonical; workspace-only decisions
+ignore a foreign value only after validating its key. Sync and CLI Doctor use an
+archive-wide view, while repair and Full skip cleanup use the selected workspace.
+Malformed relevant records fail without resetting or deleting them. Pending work,
+including an empty pending bound, or a record without completed history keeps
+coverage partial. Missing records do not invent completion.
+
+These checks do not fence older unconditional writers or skip diagnostics shared
+by different history scopes. Coverage is observed at the decision boundary, not
+continuously reflected in stored `status.thread_state`; the final Sync read and
+coverage write still need a separate concurrent-publication fence.
 
 Git-share snapshots retain manifest version 1 and their existing table format,
 but these API coverage checkpoints are local-only and are not exported. Imports
@@ -703,16 +711,18 @@ unavailable capability rather than a successful user session.
 
 In JSON, `slack_api.thread_coverage` describes global credentials; top-level
 `thread_coverage` uses the named-workspace aggregate when present. An archived
-`api-user/thread_skip` or pending API thread work downgrades either full result
-to partial in both fields.
+`api-user/thread_skip`, pending API thread work or incomplete retained API
+history downgrades either full result to partial in both fields.
 Individual `workspace_api` diagnostics and stored `status.thread_state` remain
 unchanged. Recent channel skips combine `api-bot` and `api-user`, newest first
 with channel-ID tie ordering and one limit of 20.
 
 If retained API work changes global coverage from full to partial, Doctor adds
 `slack_api.thread_coverage_reason = "retained_api_thread_work"` and displays
-`partial: retained API thread skips or pending work`. It does not describe a
-valid user session as missing. An already-partial global auth result keeps the
+`partial: retained API thread skips or pending work`. History-only incompleteness
+uses `retained_api_history_work` with `partial: incomplete API history`; thread
+skips/jobs take precedence when both exist. It does not describe a valid user
+session as missing. An already-partial global auth result keeps the
 authentication explanation, even when retained work also lowers the named
 aggregate. JSON omits an unset reason; `--format log` includes
 `thread_coverage_reason="-"`. With valid user auth and no recognized reason,
@@ -743,8 +753,10 @@ Ordinary API sync and `--full` without `--since` revisit eligible roots already
 in the selected channels, even when fetched history no longer contains their
 reply hints. Roots need a positive reply count or a distinct archived child;
 an empty or self-referencing `thread_ts` is supported. Explicit `--since`,
-`--full --since`, Tail repair and excluded conversations leave this backlog
-untouched. Current-page thread processing keeps its existing scope.
+`--full --since` and Tail repair do not drain this backlog. A committed replies
+collision queues or renews its requested owned/live root for ordinary retry;
+excluded conversations leave work untouched. Current-page thread processing
+keeps its existing scope.
 
 Replies work is saved locally before history can overwrite hints and in the
 same transaction as fetched messages that establish roots through reply counts
@@ -776,10 +788,10 @@ deletion or renewal during a request discards its stale response. Bulk retiremen
 of unrelated legacy thread skips requires Full with no `--since`, no channel
 allow-list and no effective channel exclusions, after DM enumeration completes
 with DMs enabled and no conversation or message work omitted. Full cleanup also
-keeps thread-skip records while API replies work in that workspace is still
-pending; another workspace's pending work does not block cleanup. Successful
-individual replies still clear their own skip
-during scoped runs. Remaining retained work runs after complete history traversal
+keeps thread-skip records while API replies work or incomplete API history in
+that workspace remains. The history check and pending-thread deletion guard share
+one writer transaction; canonical foreign-workspace records do not block cleanup.
+Successful individual replies still clear their own skip during scoped runs. Remaining retained work runs after complete history traversal
 and before the completed history horizon is saved. A replies failure can therefore
 stop later channel or media work while preserving committed messages and the
 pending history interval.
@@ -788,9 +800,20 @@ DM catalog filtering or missing scope, admission drops, recoverable history skip
 and channel or message ownership collisions keep this sync's recorded thread
 coverage partial. A later successful channel does not erase that omission. Scoped
 runs retain unvisited diagnostics; successful scoped replies still clear their
-own skips. This does not add durable collision retry jobs or guarantee a later
-Doctor capability probe will report the same coverage.
-Static scope restrictions alone retain the existing scoped coverage behavior.
+own skips. History or replies collisions keep that channel's exact attempted
+interval and prior completed horizon. A collision anywhere in replies pagination
+also preserves the job and exact skip; later errors still win, and valid rows on
+other pages or channels commit. With no owned generation, that collision queues
+or renews only the requested live root, even without reply-count/child evidence.
+The queue write follows discovery filtering and commits with the page, so an
+older ordinary reply cannot retire the new generation. An ordinary retry can
+drain it without fresh history hints; successful scoped replies leave the job.
+
+Catalog-only omissions still belong to the current invocation. CLI Doctor reads
+retained history/work when evaluating full coverage; its store-free capability
+probe does not certify archived completeness. Static scope restrictions alone
+retain the existing scoped coverage behavior. No erased evidence is reconstructed,
+and this does not qualify mixed older writers or continuous stored coverage.
 
 Committed parent tombstones, message removal through the store, and local purge
 cancel matching work and its API thread-skip record, even when the pending job

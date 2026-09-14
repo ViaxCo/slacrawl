@@ -308,6 +308,10 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		}
 	}
 
+	hasIncompleteHistory, err := st.HasIncompleteAPIHistory(ctx, "")
+	if err != nil {
+		return err
+	}
 	threadCoverage := "partial"
 	if userRepliesAvailable && !threadRepliesSkipped.Skipped() && !threadRepliesSkipped.Omitted() {
 		// Only an unrestricted scan of both catalogs can retire unknown legacy
@@ -325,7 +329,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		if err != nil {
 			return err
 		}
-		if !hasThreadSkips && !hasPendingThreads {
+		if !hasThreadSkips && !hasPendingThreads && !hasIncompleteHistory {
 			threadCoverage = "full"
 		}
 	}

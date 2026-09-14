@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep API history and reply collisions durably incomplete while committing valid rows. Preserve attempted history bounds and thread jobs/skips, queue scoped collision work for ordinary retry, and renew its generation against older completions. Check retained API history during Sync, repair, Full skip cleanup and CLI Doctor; report incomplete history without changing stored-status or named-auth ownership.
+
 - Keep API history and replies writes with the active scan for each source, workspace, channel and explicit Since scope. Acquire bounds and a fresh attempt generation atomically, preserve the requested upper horizon across delayed retries, and reject superseded pages, thread work, skips and completion without losing earlier committed pages. Ordinary retries still apply current retention limits.
 
 - Report bounded DM catalog/history probe failures in Doctor alongside missing scopes, including named workspaces. Stop on caller cancellation before later requests or output, and describe user-auth capability without claiming historical completeness.

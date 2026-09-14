@@ -225,6 +225,10 @@ func loadAPIHistory(ctx context.Context, q *storedb.Queries, source, key string)
 	if err != nil {
 		return APIHistoryState{}, err
 	}
+	return decodeAPIHistory(raw)
+}
+
+func decodeAPIHistory(raw string) (APIHistoryState, error) {
 	var state APIHistoryState
 	if json.Unmarshal([]byte(raw), &state) != nil {
 		return APIHistoryState{}, errors.New("invalid API history checkpoint")
@@ -270,4 +274,58 @@ func apiHistoryTimestamp(value string) (float64, error) {
 		return 0, errors.New("API history requires a finite timestamp")
 	}
 	return parsed, nil
+}
+
+// HasIncompleteAPIHistory evaluates retained API records in one read snapshot.
+// Empty workspaceID selects the archive. Missing records do not prove completion.
+func (s *Store) HasIncompleteAPIHistory(ctx context.Context, workspaceID string) (bool, error) {
+	return hasIncompleteAPIHistory(ctx, s.db, workspaceID)
+}
+
+func hasIncompleteAPIHistory(ctx context.Context, q storedb.DBTX, workspaceID string) (bool, error) {
+	rows, err := q.QueryContext(ctx, `select source_name, entity_id, value from sync_state
+where source_name in ('api-bot', 'api-user') and entity_type = ?
+order by source_name, entity_id`, APIHistoryEntityType)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	incomplete := false
+	for rows.Next() {
+		var source, key, raw string
+		if err := rows.Scan(&source, &key, &raw); err != nil {
+			return false, err
+		}
+		scope, err := decodeAPIHistoryKey(source, key)
+		if err != nil {
+			return false, err
+		}
+		// An untrusted key cannot establish workspace ownership. Once canonical,
+		// a foreign value cannot veto this workspace's cleanup or repair.
+		if workspaceID != "" && scope.WorkspaceID != workspaceID {
+			continue
+		}
+		state, err := decodeAPIHistory(raw)
+		if err != nil {
+			return false, err
+		}
+		incomplete = incomplete || !state.Complete || state.Pending != nil
+	}
+	// Do not return early on pending work: later malformed records still veto
+	// the decision, and must never be hidden by SQL JSON filters or joins.
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return incomplete, nil
+}
+
+func decodeAPIHistoryKey(source, key string) (APIHistoryScope, error) {
+	var parts [3]string
+	if json.Unmarshal([]byte(key), &parts) == nil {
+		scope := APIHistoryScope{SourceName: source, WorkspaceID: parts[0], ChannelID: parts[1], Since: parts[2]}
+		if canonical, err := scope.key(); err == nil && canonical == key {
+			return scope, nil
+		}
+	}
+	return APIHistoryScope{}, errors.New("invalid API history checkpoint key")
 }

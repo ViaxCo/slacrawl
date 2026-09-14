@@ -174,7 +174,11 @@ func (c *Client) repairWorkspace(ctx context.Context, st *store.Store, workspace
 	}, now, userRepliesAvailable, threadRepliesSkipped); err != nil {
 		return err
 	}
-	if threadRepliesSkipped.Skipped() {
+	hasIncompleteHistory, err := st.HasIncompleteAPIHistory(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	if threadRepliesSkipped.Skipped() || threadRepliesSkipped.Omitted() || hasIncompleteHistory {
 		return st.SetSyncState(ctx, "doctor", "threads", "coverage", "partial")
 	}
 	return nil

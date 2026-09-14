@@ -34,6 +34,8 @@ func renderDoctorBlock(w *strings.Builder, value any) bool {
 			coverageDetail = "user auth available for replies"
 		case slackAPI["thread_coverage_reason"] == "retained_api_thread_work":
 			coverageDetail = "partial: retained API thread skips or pending work"
+		case slackAPI["thread_coverage_reason"] == "retained_api_history_work":
+			coverageDetail = "partial: incomplete API history"
 		case !truthy(slackAPI["user_auth_available"]):
 			coverageDetail = "partial without user auth"
 		}

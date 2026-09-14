@@ -93,6 +93,12 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 			return WriteBatchResult{}, err
 		}
 	}
+	// A committed collision invalidates an older ordinary completion even when
+	// discovery preserves extant generations. Enqueue against the requested
+	// root's final live ownership, never the skipped message's identity.
+	if len(result.CollisionsSkipped) > 0 && batch.PendingThreadOnCollision != nil {
+		requests = append(requests, *batch.PendingThreadOnCollision)
+	}
 	result.PendingThreads, err = enqueueThreadWork(ctx, dbtx, requests)
 	if err != nil {
 		return WriteBatchResult{}, err
