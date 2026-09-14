@@ -40,8 +40,12 @@ The in-memory result includes explicit labels (IDs by default), message author
 IDs, text selected with keep/replace, and thread/edit timestamps. It omits raw
 payloads, profiles, source and deletion/draft metadata, and derived indexes.
 Replies require an explicitly selected parent. Channels need unambiguous retained
-native public-channel flags as well as a public stored kind; sparse or archived
-MCP metadata without those flags remains unqualified.
+native public-channel flags as well as a public stored kind. Newly inserted
+native MCP channel rows retain the delivered object without synthesizing flags.
+Sparse native objects, human-text/direct-ID records and older MCP metadata
+without those flags remain unqualified. Routine MCP sync preserves existing
+channel rows and does not repair older lossy metadata; richer records also stay
+unchanged. Retained raw metadata is private input, never projection output.
 
 There is no selection command or publication integration yet.
 Current channel type cannot prove that a conversation was never a DM, and kept

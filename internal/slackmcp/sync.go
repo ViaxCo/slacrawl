@@ -357,6 +357,10 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 }
 
 func toStoreChannel(workspaceID string, channel ChannelRecord, now time.Time) store.Channel {
+	raw := store.MarshalRaw(channel)
+	if channel.native != nil {
+		raw = string(channel.native.raw)
+	}
 	return store.Channel{
 		ID:          channel.ID,
 		WorkspaceID: workspaceID,
@@ -366,7 +370,7 @@ func toStoreChannel(workspaceID string, channel ChannelRecord, now time.Time) st
 		Purpose:     channel.Purpose,
 		IsPrivate:   channel.IsPrivate,
 		IsArchived:  channel.IsArchived,
-		RawJSON:     store.MarshalRaw(channel),
+		RawJSON:     raw,
 		UpdatedAt:   now,
 	}
 }
