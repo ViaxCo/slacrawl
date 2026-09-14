@@ -149,7 +149,8 @@ func TestNativeTransportDiagnosticsKeepCauses(t *testing.T) {
 			case "type":
 				var typeErr *json.UnmarshalTypeError
 				require.ErrorAs(t, err, &typeErr)
-				require.Equal(t, "SlackResponse.ok", typeErr.Field)
+				require.Equal(t, "string", typeErr.Value)
+				require.Equal(t, "bool", typeErr.Type.String())
 			}
 			if phase == "construction" {
 				require.Zero(t, calls)
