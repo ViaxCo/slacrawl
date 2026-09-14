@@ -621,8 +621,11 @@ that replies work without borrowing the bot's history checkpoint.
 
 Existing message reconciliation can revive a tombstone when an in-flight history
 page arrives later. If that page admits thread evidence after cancellation, its
-transaction queues fresh work while preserving any existing newer generation.
-Roots successfully completed during this sync stay excluded. A revoked attempt
+transaction queues fresh work while preserving every existing generation, including
+work another sync created after this sync prepared. Ordinary replies requests use
+only generations prepared or newly queued by this invocation; a competing sync
+keeps ownership of its response and skip state. Roots successfully completed
+during this sync stay excluded. A revoked attempt
 is not completion and can leave newly queued work for the next sync.
 
 Successful replies retire only the generation that was processed. Retained

@@ -397,7 +397,8 @@ Share config:
     - ordinary sync with empty `Since`, including Full, durably queues eligible retained roots before history and page-discovered roots with their message transaction; post-history discovery runs after completeness checks
     - use `api-user`-owned workspace/channel/root jobs with generation-conditional completion; preserve jobs when hints disappear, replies fail or replies capability is unavailable
     - reconcile retained work before completed history coverage; do not re-enqueue roots completed during the same attempt
-    - recheck known work in the history write transaction: admitted revival after cancellation queues fresh work, extant generations remain unchanged, and revoked completion does not exclude later work
+    - recheck every scoped candidate in the history write transaction: admitted revival after cancellation queues fresh work, all extant generations remain unchanged, and revoked completion does not exclude later work
+    - ordinary replies require a generation prepared or newly queued by this invocation; an unowned page hint does not claim another sync's work or prevent a later page from acquiring canceled work
     - explicit Since, Full+Since, Tail repair and excluded conversations leave ordinary jobs untouched
     - committed stored tombstones (nonempty `deleted_ts` or `subtype=message_deleted`) and purge cancel matching jobs; preparation reconciles already-stored tombstones before fetching
     - hidden deletion events are not returned by Slack history polling; do not infer deletion from absent hints or claim polling discovers deletions

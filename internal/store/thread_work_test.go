@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -222,7 +223,7 @@ func TestThreadWorkPageAtomicity(t *testing.T) {
 }
 
 func TestThreadWorkDiscoveryAtPageCommit(t *testing.T) {
-	for _, mode := range []string{"root-child", "child-root", "root-page", "child-page", "foreign-child", "priority-child", "retained-child", "overwritten-child", "positive-hint", "known", "completed", "enqueue-failure", "nil", "invalid-source", "invalid-scope", "unrelated-request"} {
+	for _, mode := range []string{"root-child", "child-root", "root-page", "child-page", "foreign-child", "priority-child", "retained-child", "overwritten-child", "positive-hint", "pending", "completed", "enqueue-failure", "nil", "invalid-source", "invalid-scope", "unrelated-request"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			st := openBatchTestStore(t)
@@ -275,7 +276,7 @@ func TestThreadWorkDiscoveryAtPageCommit(t *testing.T) {
 					batch.Messages = append(batch.Messages, MessageWrite{Message: root})
 					batch.PendingThreads = []ThreadWork{{SourceName: "api-user", WorkspaceID: "T1", ChannelID: "C1", TS: root.TS}}
 				}
-			case "known", "completed":
+			case "pending", "completed":
 				require.NoError(t, st.UpsertMessage(ctx, root, nil))
 				require.NoError(t, st.UpsertMessage(ctx, child, nil))
 				work, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
@@ -286,8 +287,6 @@ func TestThreadWorkDiscoveryAtPageCommit(t *testing.T) {
 					require.NoError(t, err)
 					require.True(t, completed)
 					discovery.ExcludedTS[root.TS] = struct{}{}
-				} else {
-					discovery.KnownWork = map[string]ThreadWork{root.TS: work[0]}
 				}
 				before, err = st.QueryReadOnly(ctx, "select * from sync_state")
 				require.NoError(t, err)
@@ -343,14 +342,70 @@ func TestThreadWorkDiscoveryAtPageCommit(t *testing.T) {
 				require.Empty(t, result.PendingThreads)
 				after, err := st.QueryReadOnly(ctx, "select * from sync_state")
 				require.NoError(t, err)
-				require.Equal(t, before, after, "discovery cannot renew known work or recreate completed work")
+				require.Equal(t, before, after, "discovery cannot renew pending work or recreate completed work")
 			}
 			requireMessageFTSParity(t, st)
 		})
 	}
 }
 
-func TestKnownThreadWorkRevalidatedAtPageCommit(t *testing.T) {
+func TestThreadWorkPreservesConcurrentGeneration(t *testing.T) {
+	for _, evidence := range []string{"hint", "child"} {
+		t.Run(evidence, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "concurrent.db")
+			st, err := Open(path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, st.Close()) })
+			owner, err := Open(path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, owner.Close()) })
+			now := time.Unix(1710000000, 0).UTC()
+			seedBatchCatalog(t, st, "T1", "C1", "U1", now)
+			prepared, err := st.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+			require.NoError(t, err)
+			require.Empty(t, prepared)
+			root := batchMessage("C1", "1710000001.000000", "T1", "root", now)
+			root.ReplyCount = 1
+			child := batchMessage("C1", "1710000002.000000", "T1", "child", now)
+			child.ThreadTS = root.TS
+			if evidence == "child" {
+				root.ReplyCount = 0
+				require.NoError(t, owner.UpsertMessage(ctx, child, nil))
+			}
+			require.NoError(t, owner.UpsertMessage(ctx, root, nil))
+			work, err := owner.PrepareThreadWork(ctx, "api-user", "T1", "C1")
+			require.NoError(t, err)
+			require.Len(t, work, 1)
+			skipKey := "T1|C1|" + root.TS
+			require.NoError(t, owner.SetSyncState(ctx, "api-user", "thread_skip", skipKey, "owner skip"))
+			before, err := owner.QueryReadOnly(ctx, "select * from sync_state order by source_name,entity_type,entity_id")
+			require.NoError(t, err)
+			batch := WriteBatch{Messages: []MessageWrite{{Message: root}}, ThreadDiscovery: &ThreadWorkDiscovery{SourceName: "api-user", WorkspaceID: "T1", ChannelID: "C1"}}
+			if evidence == "hint" {
+				batch.PendingThreads = []ThreadWork{{SourceName: "api-user", WorkspaceID: "T1", ChannelID: "C1", TS: root.TS}}
+			} else {
+				batch.Messages = append(batch.Messages, MessageWrite{Message: child})
+			}
+			result, err := st.ApplyWriteBatch(ctx, batch)
+			require.NoError(t, err)
+			require.Empty(t, result.PendingThreads, "a page must neither replace nor adopt another invocation's generation")
+			after, err := st.QueryReadOnly(ctx, "select * from sync_state order by source_name,entity_type,entity_id")
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+			current, err := owner.ThreadWorkCurrent(ctx, work[0])
+			require.NoError(t, err)
+			require.True(t, current)
+			completed, err := owner.CompleteThreadWork(ctx, work[0], skipKey)
+			require.NoError(t, err)
+			require.True(t, completed)
+			assertBatchCount(t, st, "select count(*) from sync_state", 0)
+			requireMessageFTSParity(t, st)
+		})
+	}
+}
+
+func TestThreadWorkRevalidatedAtPageCommit(t *testing.T) {
 	for _, mode := range []string{"hint", "duplicate-hint", "child", "current", "renewed", "completed", "revoked-completion", "still-deleted", "enqueue-failure", "read-failure", "nil", "unrelated-source"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
@@ -366,7 +421,7 @@ func TestKnownThreadWorkRevalidatedAtPageCommit(t *testing.T) {
 			require.Len(t, prepared, 1)
 			work := prepared[0]
 			discovery := &ThreadWorkDiscovery{SourceName: work.SourceName, WorkspaceID: work.WorkspaceID, ChannelID: work.ChannelID,
-				KnownWork: map[string]ThreadWork{root.TS: work}, ExcludedTS: map[string]struct{}{}}
+				ExcludedTS: map[string]struct{}{}}
 			if mode != "current" && mode != "renewed" && mode != "completed" && mode != "nil" && mode != "unrelated-source" {
 				deleted := root
 				deleted.DeletedTS = root.TS

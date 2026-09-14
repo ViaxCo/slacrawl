@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -456,6 +457,185 @@ func TestRetainedThreadRevivalRequeuesCanceledWork(t *testing.T) {
 			require.Equal(t, map[bool]string{true: "partial", false: "full"}[wantPending], status.ThreadState)
 		})
 	}
+}
+
+func TestRetainedThreadConcurrentSyncKeepsOwner(t *testing.T) {
+	for _, mode := range []string{"bot-only", "user-capable"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			var workers sync.WaitGroup
+			defer func() {
+				cancel()
+				workers.Wait()
+			}()
+			path := filepath.Join(t.TempDir(), "concurrent.db")
+			contenderStore, err := store.Open(path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, contenderStore.Close()) })
+			ownerStore, err := store.Open(path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, ownerStore.Close()) })
+			const rootTS, childTS = "1710000001.000000", "1710000002.000000"
+			const workQuery = "select * from sync_state where source_name='api-user' and entity_type in ('thread_pending_v1','thread_skip') order by entity_type,entity_id"
+			historyEntered, historyRelease := make(chan struct{}), make(chan struct{})
+			repliesEntered, repliesRelease := make(chan struct{}), make(chan struct{})
+			await := func(signal <-chan struct{}) {
+				t.Helper()
+				select {
+				case <-signal:
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+			}
+			tokens := config.Tokens{Bot: "fixture-contender-bot"}
+			if mode == "user-capable" {
+				tokens.User = "fixture-contender-user"
+			}
+			contenderReplies := 0
+			contender := primaryOwnerClient(t, tokens, func(r *http.Request, form url.Values) (any, error) {
+				switch r.URL.Path {
+				case "/conversations.history":
+					close(historyEntered)
+					select {
+					case <-historyRelease:
+					case <-r.Context().Done():
+						return nil, r.Context().Err()
+					}
+					return map[string]any{"ok": true, "messages": []any{map[string]any{"ts": rootTS, "text": "root", "reply_count": 1}}}, nil
+				case "/conversations.replies":
+					contenderReplies++
+					return nil, fmt.Errorf("contender requested unowned replies for %s", form.Get("ts"))
+				}
+				return primaryOwnerResponse(r.URL.Path), nil
+			})
+			ownerReplies := 0
+			owner := primaryOwnerClient(t, config.Tokens{Bot: "fixture-owner-bot", User: "fixture-owner-user"}, func(r *http.Request, form url.Values) (any, error) {
+				switch r.URL.Path {
+				case "/conversations.history":
+					return map[string]any{"ok": true, "messages": []any{map[string]any{"ts": rootTS, "text": "root", "reply_count": 1}}}, nil
+				case "/conversations.replies":
+					ownerReplies++
+					if ownerReplies != 1 || form.Get("channel") != "C123" || form.Get("ts") != rootTS {
+						return nil, fmt.Errorf("unexpected owner replies request: %v", form)
+					}
+					close(repliesEntered)
+					select {
+					case <-repliesRelease:
+					case <-r.Context().Done():
+						return nil, r.Context().Err()
+					}
+					return map[string]any{"ok": true, "messages": []any{map[string]any{"ts": childTS, "thread_ts": rootTS, "text": "owner reply <@U1>"}}}, nil
+				}
+				return primaryOwnerResponse(r.URL.Path), nil
+			})
+			contenderDone, ownerDone := make(chan error, 1), make(chan error, 1)
+			workers.Go(func() { contenderDone <- contender.Sync(ctx, contenderStore, SyncOptions{WorkspaceID: "T123"}) })
+			await(historyEntered)
+			pending, err := contenderStore.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+			require.NoError(t, err)
+			require.Empty(t, pending, "the contender prepared before the root existed")
+			workers.Go(func() { ownerDone <- owner.Sync(ctx, ownerStore, SyncOptions{WorkspaceID: "T123"}) })
+			await(repliesEntered)
+			pending, err = ownerStore.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+			require.NoError(t, err)
+			require.Len(t, pending, 1)
+			require.NoError(t, ownerStore.SetSyncState(ctx, SourceUser, "thread_skip", "T123|C123|"+rootTS, "owner skip"))
+			before, err := ownerStore.QueryReadOnly(ctx, workQuery)
+			require.NoError(t, err)
+			close(historyRelease)
+			require.NoError(t, <-contenderDone)
+			require.Zero(t, contenderReplies)
+			after, err := contenderStore.QueryReadOnly(ctx, workQuery)
+			require.NoError(t, err)
+			require.Equal(t, before, after, "the contender must preserve the owner's generation, skip and timestamps")
+			current, err := ownerStore.ThreadWorkCurrent(ctx, pending[0])
+			require.NoError(t, err)
+			require.True(t, current)
+			status, err := contenderStore.Status(ctx)
+			require.NoError(t, err)
+			require.Equal(t, "partial", status.ThreadState)
+			close(repliesRelease)
+			require.NoError(t, <-ownerDone)
+			require.Equal(t, 1, ownerReplies)
+			after, err = ownerStore.QueryReadOnly(ctx, workQuery)
+			require.NoError(t, err)
+			require.Empty(t, after)
+			rows, err := ownerStore.QueryReadOnly(ctx, "select ts,thread_ts,source_name,source_rank from messages where ts='"+childTS+"'")
+			require.NoError(t, err)
+			require.Equal(t, []map[string]any{{"ts": childTS, "thread_ts": rootTS, "source_name": SourceUser, "source_rank": int64(1)}}, rows)
+			status, err = ownerStore.Status(ctx)
+			require.NoError(t, err)
+			require.Equal(t, "full", status.ThreadState)
+		})
+	}
+}
+
+func TestRetainedThreadUnownedHintCanAcquireLaterPage(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "later-page.db")
+	st, err := store.Open(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	other, err := store.Open(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, other.Close()) }()
+	const rootTS, childTS = "1710000001.000000", "1710000002.000000"
+	const workQuery = "select * from sync_state where source_name='api-user' and entity_type in ('thread_pending_v1','thread_skip') order by entity_type,entity_id"
+	var previous []map[string]any
+	var priorGeneration string
+	histories, replies := 0, 0
+	client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
+		switch r.URL.Path {
+		case "/conversations.history":
+			histories++
+			if histories == 1 {
+				pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+				require.NoError(t, err)
+				require.Empty(t, pending)
+				retainedOwnerSeed(t, other, rootTS)
+				pending, err = other.PrepareThreadWork(ctx, SourceUser, "T123", "C123")
+				require.NoError(t, err)
+				require.Len(t, pending, 1)
+				priorGeneration = pending[0].Generation
+				require.NoError(t, other.SetSyncState(ctx, SourceUser, "thread_skip", "T123|C123|"+rootTS, "other owner skip"))
+				previous, err = other.QueryReadOnly(ctx, workQuery)
+				require.NoError(t, err)
+			} else {
+				require.Equal(t, 2, histories)
+				require.Equal(t, "next-history", form.Get("cursor"))
+				require.Zero(t, replies, "unowned hints must not consume the attempted-thread slot")
+				after, err := other.QueryReadOnly(ctx, workQuery)
+				require.NoError(t, err)
+				require.Equal(t, previous, after)
+				require.NoError(t, other.MarkMessageDeleted(ctx, store.Message{WorkspaceID: "T123", ChannelID: "C123", TS: rootTS,
+					DeletedTS: rootTS, SourceName: SourceBot, SourceRank: 2, RawJSON: `{}`, UpdatedAt: time.Unix(1710000010, 0)}, nil))
+			}
+			payload := map[string]any{"ok": true, "messages": []any{map[string]any{"ts": rootTS, "text": "revived root", "reply_count": 1}}}
+			if histories == 1 {
+				payload["response_metadata"] = map[string]any{"next_cursor": "next-history"}
+			}
+			return payload, nil
+		case "/conversations.replies":
+			replies++
+			require.Equal(t, 2, histories)
+			require.Equal(t, rootTS, form.Get("ts"))
+			pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+			require.NoError(t, err)
+			require.Len(t, pending, 1)
+			require.NotEqual(t, priorGeneration, pending[0].Generation)
+			return map[string]any{"ok": true, "messages": []any{map[string]any{"ts": childTS, "thread_ts": rootTS, "text": "later reply"}}}, nil
+		}
+		return primaryOwnerResponse(r.URL.Path), nil
+	})
+	require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"}))
+	require.Equal(t, 2, histories)
+	require.Equal(t, 1, replies)
+	after, err := st.QueryReadOnly(ctx, workQuery)
+	require.NoError(t, err)
+	require.Empty(t, after)
+	rows, err := st.QueryReadOnly(ctx, "select thread_ts,source_name from messages where ts='"+childTS+"'")
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{{"thread_ts": rootTS, "source_name": SourceUser}}, rows)
 }
 
 func TestTailDeletionRetiresPendingThread(t *testing.T) {

@@ -85,7 +85,7 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 			return WriteBatchResult{}, err
 		}
 		requests = append(requests, discovered...)
-		requests, err = filterKnownThreadWork(ctx, dbtx, *batch.ThreadDiscovery, requests)
+		requests, err = filterThreadWorkRequests(ctx, dbtx, *batch.ThreadDiscovery, requests)
 		if err != nil {
 			return WriteBatchResult{}, err
 		}

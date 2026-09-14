@@ -27,13 +27,12 @@ type ThreadWork struct {
 }
 
 // ThreadWorkDiscovery scopes page-commit discovery to one admitted channel.
-// KnownWork is rechecked after page writes; ExcludedTS contains work positively
+// Existing jobs are preserved after page writes; ExcludedTS contains work
 // completed by this invocation, which must not be recreated by later pages.
 type ThreadWorkDiscovery struct {
 	SourceName  string
 	WorkspaceID string
 	ChannelID   string
-	KnownWork   map[string]ThreadWork
 	ExcludedTS  map[string]struct{}
 }
 
@@ -85,25 +84,23 @@ where `+threadRootPredicate+` order by m.ts`, string(keys), discovery.ChannelID,
 	return requests, nil
 }
 
-// Cancellation can remove a prepared generation before history revives its
-// parent. Recheck exclusions in the page transaction: absent work may be
-// recreated without replacing an extant generation or its skip.
-func filterKnownThreadWork(ctx context.Context, q storedb.DBTX, discovery ThreadWorkDiscovery, requests []ThreadWork) ([]ThreadWork, error) {
+// Another sync can queue or cancel work while history is in flight. Recheck
+// every scoped candidate in the page transaction: absent work may be created
+// without replacing an extant generation or its skip.
+func filterThreadWorkRequests(ctx context.Context, q storedb.DBTX, discovery ThreadWorkDiscovery, requests []ThreadWork) ([]ThreadWork, error) {
 	filtered := make([]ThreadWork, 0, len(requests))
 	for _, work := range requests {
 		if work.SourceName == discovery.SourceName && work.WorkspaceID == discovery.WorkspaceID && work.ChannelID == discovery.ChannelID {
 			if _, completed := discovery.ExcludedTS[work.TS]; completed {
 				continue
 			}
-			if known, ok := discovery.KnownWork[work.TS]; ok && known.SourceName == work.SourceName && known.WorkspaceID == work.WorkspaceID && known.ChannelID == work.ChannelID && known.TS == work.TS {
-				var pending bool
-				if err := q.QueryRowContext(ctx, `select exists (select 1 from sync_state
+			var pending bool
+			if err := q.QueryRowContext(ctx, `select exists (select 1 from sync_state
 where source_name = ? and entity_type = ? and entity_id = ?)`, work.SourceName, ThreadPendingEntityType, threadWorkKey(work)).Scan(&pending); err != nil {
-					return nil, err
-				}
-				if pending {
-					continue
-				}
+				return nil, err
+			}
+			if pending {
+				continue
 			}
 		}
 		filtered = append(filtered, work)

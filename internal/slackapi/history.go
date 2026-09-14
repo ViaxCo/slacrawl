@@ -51,7 +51,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 	completedThreads := map[string]struct{}{}
 	var discovery *store.ThreadWorkDiscovery
 	if source.retainedThreads {
-		discovery = &store.ThreadWorkDiscovery{SourceName: SourceUser, WorkspaceID: workspaceID, ChannelID: channel.ID, KnownWork: pendingThreads, ExcludedTS: completedThreads}
+		discovery = &store.ThreadWorkDiscovery{SourceName: SourceUser, WorkspaceID: workspaceID, ChannelID: channel.ID, ExcludedTS: completedThreads}
 		work, err := st.PrepareThreadWork(ctx, SourceUser, workspaceID, channel.ID)
 		if err != nil {
 			return err
@@ -64,12 +64,17 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		if _, ok := syncedThreads[threadTS]; ok {
 			return nil
 		}
-		syncedThreads[threadTS] = struct{}{}
-		threadKey := workspaceID + "|" + channel.ID + "|" + threadTS
 		var work *store.ThreadWork
 		if pending, ok := pendingThreads[threadTS]; ok {
 			work = &pending
 		}
+		// Page hints may belong to another sync's job. Leave them unattempted
+		// until this invocation admits work, which can happen on a later page.
+		if source.retainedThreads && work == nil {
+			return nil
+		}
+		syncedThreads[threadTS] = struct{}{}
+		threadKey := workspaceID + "|" + channel.ID + "|" + threadTS
 		saveSkip := func(reason string) (bool, error) {
 			if work == nil {
 				return true, st.SetSyncState(ctx, SourceUser, "thread_skip", threadKey, reason)
