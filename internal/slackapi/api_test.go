@@ -2000,7 +2000,7 @@ func TestGetUsersRejectsRepeatedCursor(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := client.getUsers(ctx, client.bot)
+	_, err := client.getUsers(ctx, client.tokens.Bot)
 	require.ErrorContains(t, err, `users.list repeated cursor "stuck"`)
 	require.Equal(t, 2, calls)
 	t.Logf("getUsers stuck next_cursor: %v", err)
@@ -2027,7 +2027,7 @@ func TestGetUsersWalksDistinctCursors(t *testing.T) {
 	client := NewWithOptions(config.Tokens{Bot: "xoxb-test"}, server.URL+"/", server.Client())
 	client.sleep = func(context.Context, time.Duration) error { return nil }
 
-	users, err := client.getUsers(context.Background(), client.bot)
+	users, err := client.getUsers(context.Background(), client.tokens.Bot)
 	require.NoError(t, err)
 	require.Len(t, users, 2)
 	require.Equal(t, "U1", users[0].ID)
@@ -2052,7 +2052,7 @@ func TestGetUsersRejectsCursorCycle(t *testing.T) {
 	client := NewWithOptions(config.Tokens{Bot: "xoxb-test"}, server.URL+"/", server.Client())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	users, err := client.getUsers(ctx, client.bot)
+	users, err := client.getUsers(ctx, client.tokens.Bot)
 	require.ErrorContains(t, err, `users.list repeated cursor "page-a"`)
 	require.Nil(t, users)
 	require.Equal(t, []string{"", "page-a", "page-b"}, cursors)
@@ -2083,7 +2083,7 @@ func TestGetUsersRetriesOnlyRateLimitedPage(t *testing.T) {
 		delays = append(delays, delay)
 		return nil
 	}
-	users, err := client.getUsers(context.Background(), client.bot)
+	users, err := client.getUsers(context.Background(), client.tokens.Bot)
 	require.NoError(t, err)
 	require.Equal(t, []slack.User{{ID: "U1"}, {ID: "U2"}}, users)
 	require.Equal(t, []string{"", "page2", "page2"}, cursors)

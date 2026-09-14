@@ -210,7 +210,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	threadRepliesSkipped := newThreadSkipTracker()
 	source.threadSkip = threadRepliesSkipped
 
-	channels, err := c.fetchChannelsWithClient(ctx, source.historyClient, workspaceID)
+	channels, err := c.fetchChannelsWithToken(ctx, source.token, workspaceID)
 	if err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		dmCatalogComplete bool
 	)
 	if c.dmPolicy.Enabled(c.tokens.User != "") && userRepliesAvailable && c.user != nil {
-		users, err = c.getUsers(ctx, source.historyClient)
+		users, err = c.getUsers(ctx, source.token)
 		if err != nil {
 			return err
 		}
@@ -290,7 +290,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	}
 
 	if users == nil {
-		users, err = c.getUsers(ctx, source.historyClient)
+		users, err = c.getUsers(ctx, source.token)
 		if err != nil {
 			return err
 		}
@@ -329,17 +329,17 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 }
 
 func (c *Client) fetchChannels(ctx context.Context, workspaceID string) ([]slack.Channel, error) {
-	return c.fetchChannelsWithClient(ctx, c.bot, workspaceID)
+	return c.fetchChannelsWithToken(ctx, c.tokens.Bot, workspaceID)
 }
 
-func (c *Client) fetchChannelsWithClient(ctx context.Context, client *slack.Client, workspaceID string) ([]slack.Channel, error) {
+func (c *Client) fetchChannelsWithToken(ctx context.Context, token string, workspaceID string) ([]slack.Channel, error) {
 	var (
 		cursor   string
 		channels []slack.Channel
 		seen     = map[string]bool{}
 	)
 	for {
-		page, nextCursor, err := c.getConversations(ctx, client, &slack.GetConversationsParameters{
+		page, nextCursor, err := c.getConversations(ctx, token, &slack.GetConversationsParameters{
 			Cursor:          cursor,
 			ExcludeArchived: false,
 			Limit:           200,

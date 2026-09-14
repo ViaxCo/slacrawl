@@ -14,14 +14,42 @@ import (
 	"github.com/slack-go/slack"
 )
 
-func (c *Client) getConversations(ctx context.Context, client *slack.Client, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
+func (c *Client) getConversations(ctx context.Context, token string, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 	type result struct {
 		channels   []slack.Channel
 		nextCursor string
 	}
 	res, err := retry(ctx, c.sleep, 3, func() (result, error) {
-		channels, nextCursor, err := client.GetConversationsContext(ctx, params)
-		return result{channels: channels, nextCursor: nextCursor}, err
+		values := url.Values{}
+		if params.Cursor != "" {
+			values.Set("cursor", params.Cursor)
+		}
+		if params.Limit != 0 {
+			values.Set("limit", strconv.Itoa(params.Limit))
+		}
+		if params.Types != nil {
+			values.Set("types", strings.Join(params.Types, ","))
+		}
+		if params.ExcludeArchived {
+			values.Set("exclude_archived", "true")
+		}
+		if params.TeamID != "" {
+			values.Set("team_id", params.TeamID)
+		}
+		var response struct {
+			slack.SlackResponse
+			Channels []slack.Channel `json:"channels"`
+			Metadata struct {
+				NextCursor string `json:"next_cursor"`
+			} `json:"response_metadata"`
+		}
+		if err := c.postSlackForm(ctx, token, "conversations.list", values, &response); err != nil {
+			return result{}, err
+		}
+		if err := nativePageSuccess("conversations.list", response.SlackResponse); err != nil {
+			return result{}, err
+		}
+		return result{channels: response.Channels, nextCursor: response.Metadata.NextCursor}, nil
 	})
 	return res.channels, res.nextCursor, err
 }
@@ -72,7 +100,7 @@ func (c *Client) getConversationHistory(ctx context.Context, token string, param
 		if err := c.postSlackForm(ctx, token, "conversations.history", values, &resp); err != nil {
 			return nil, err
 		}
-		if err := conversationPageSuccess("conversations.history", resp.SlackResponse); err != nil {
+		if err := nativePageSuccess("conversations.history", resp.SlackResponse); err != nil {
 			return nil, err
 		}
 		messages, err := rawConversationMessages(resp.Messages)
@@ -95,7 +123,7 @@ func (c *Client) getConversationReplies(ctx context.Context, params *slack.GetCo
 		if err := c.postSlackForm(ctx, c.tokens.User, "conversations.replies", values, &resp); err != nil {
 			return nil, err
 		}
-		if err := conversationPageSuccess("conversations.replies", resp.SlackResponse); err != nil {
+		if err := nativePageSuccess("conversations.replies", resp.SlackResponse); err != nil {
 			return nil, err
 		}
 		messages, err := rawConversationMessages(resp.Messages)
@@ -110,12 +138,12 @@ func (c *Client) getConversationReplies(ctx context.Context, params *slack.GetCo
 	})
 }
 
-func conversationPageSuccess(method string, response slack.SlackResponse) error {
+func nativePageSuccess(method string, response slack.SlackResponse) error {
 	if err := response.Err(); err != nil {
 		return err
 	}
 	// Slack's Err permits blank-error responses from non-JSON methods. Native
-	// history and replies pages must affirm success before their messages count.
+	// catalog, history and replies pages must affirm success before they count.
 	if !response.Ok {
 		return fmt.Errorf("%s response did not report success", method)
 	}
@@ -143,7 +171,7 @@ func (c *Client) postSlackForm(ctx context.Context, token string, method string,
 		return &slack.RateLimitedError{RetryAfter: time.Duration(seconds) * time.Second}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("slack %s: %s", method, resp.Status)
+		return slack.StatusCodeError{Code: resp.StatusCode, Status: resp.Status}
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -235,7 +263,7 @@ func rawPayloadFromMessageJSON(rawMessage json.RawMessage) any {
 	return rawMessageFieldsPayload(raw)
 }
 
-func (c *Client) getUsers(ctx context.Context, client *slack.Client) ([]slack.User, error) {
+func (c *Client) getUsers(ctx context.Context, token string) ([]slack.User, error) {
 	var (
 		cursor string
 		users  []slack.User
@@ -247,12 +275,22 @@ func (c *Client) getUsers(ctx context.Context, client *slack.Client) ([]slack.Us
 			nextCursor string
 		}
 		page, err := retry(ctx, c.sleep, 3, func() (result, error) {
-			pager := client.GetUsersPaginated(slack.GetUsersOptionLimit(200), slack.GetUsersOptionCursor(cursor))
-			next, callErr := pager.Next(ctx)
-			if callErr != nil {
-				return result{}, callErr
+			values := url.Values{
+				"limit": {"200"}, "presence": {"false"}, "cursor": {cursor},
+				"team_id": {""}, "include_locale": {"true"},
 			}
-			return result{users: next.Users, nextCursor: next.Cursor}, nil
+			var response struct {
+				slack.SlackResponse
+				Members  []slack.User           `json:"members"`
+				Metadata slack.ResponseMetadata `json:"response_metadata"`
+			}
+			if err := c.postSlackForm(ctx, token, "users.list", values, &response); err != nil {
+				return result{}, err
+			}
+			if err := nativePageSuccess("users.list", response.SlackResponse); err != nil {
+				return result{}, err
+			}
+			return result{users: response.Members, nextCursor: response.Metadata.Cursor}, nil
 		})
 		if err != nil {
 			return nil, err

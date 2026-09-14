@@ -767,6 +767,28 @@ MCP uses the same local work lifecycle with its own
 [reply and scope rules](#retained-mcp-threads). This does not certify complete
 Slack capture.
 
+### API catalog page success
+
+Channel and user catalogs must report `ok: true` before their rows or cursors
+are returned. Missing, null or false success with no concrete Slack error stops
+that catalog operation. A failed later page discards its earlier catalog pages;
+retry starts the catalog again. Already completed public history survives a later
+user or DM catalog failure, while final workspace/Doctor markers and unvisited
+legacy thread skips stay unchanged. Existing concrete missing-scope handling
+keeps its current skip behavior.
+
+Ordinary catalogs and profiles use the selected primary token. DM discovery
+uses the user token; periodic repair retains the bot-owned channel catalog.
+Empty successful catalogs remain valid, including the existing second user
+fetch when enabled-DM sync receives an empty user result.
+
+Catalog responses now use the same whole-body reader as history/replies, rejecting
+trailing JSON and read errors after a valid object. Non-200 responses from these
+four methods use SDK status errors; bounded retries remain limited to rate limits
+with Retry-After. This validation does not certify collection presence or complete
+payload shape, and does not change authentication, conversation-info, join or
+Doctor probe-error handling.
+
 ### API history completeness
 
 Native history and replies pages must report `ok: true` before any message on
@@ -774,7 +796,7 @@ that page is admitted. Missing, null or false success with blank or absent error
 text stops sync or repair with a method-specific error. Concrete Slack errors
 keep their existing type and details; previously committed pages survive, and
 the pending interval remains available for a corrected retry. This does not
-change catalog or authentication response handling.
+change authentication response handling.
 
 API sync and periodic tail repair follow every nonempty history/replies cursor,
 even when a page is short or empty. After writing a valid page and handling its

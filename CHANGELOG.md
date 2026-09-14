@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Require explicit success on native API channel and user catalog pages before returning rows or cursors. Failed catalogs preserve earlier completed public history and final sync markers for retry. Share whole-body response validation and typed HTTP status errors with history/replies, while retaining token routing, concrete missing-scope handling and bounded rate-limit retries.
+
 - Require explicit success on native API history and replies pages before admitting messages. Reject missing, null or false success with no concrete Slack error; preserve earlier committed pages, pending retries and native errors across ordinary sync and periodic repair.
 
 - Explain retained API thread skips or pending work in Doctor's partial-coverage output instead of blaming missing user authentication. Add an optional JSON reason while preserving global/named coverage decisions, authentication results and stored status.

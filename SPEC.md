@@ -440,6 +440,22 @@ Share config:
     - primary history uses `api-bot` rank 2 or `api-user` rank 1; workspace success records that source, coverage remains source-specific, and ordinary message reconciliation is unchanged
     - Tail and periodic repair keep their bot-owned catalog/history path; selecting a primary for Sync never reassigns the stored bot client
 
+Channel and user catalog pages also require explicit native success before rows
+or cursors return to their callers. Ordinary catalogs and users use the selected
+primary token; DM discovery uses the user token and repair keeps the bot token.
+Missing/null/false success without a concrete Slack error discards the current
+catalog operation, including earlier catalog pages. Previously completed public
+history survives a later user/DM catalog failure, while final workspace/Doctor
+markers and unvisited legacy skips remain unchanged until a corrected retry succeeds.
+Existing concrete missing-scope handling remains unchanged.
+
+Catalogs share the history/replies whole-body reader: trailing JSON and a read
+error after a valid object are rejected. Non-200 responses use the SDK's typed
+status error on all four methods; only rate limits with Retry-After use the
+existing bounded retry policy. Typed catalog decoding still precedes success
+validation; this does not certify collection presence or complete payload shape,
+change authentication/info/join handling, or expose suppressed Doctor probe errors.
+
 ### Slack export import
 
 1. Read all four workspace JSON catalog roles and reserve every ID/name locator
