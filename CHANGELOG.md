@@ -2,11 +2,13 @@
 
 ## Unreleased
 
+- Report bounded DM catalog/history probe failures in Doctor alongside missing scopes, including named workspaces. Stop on caller cancellation before later requests or output, and describe user-auth capability without claiming historical completeness.
+
 - Keep arbitrary native API error strings and repeated cursor values out of rendered diagnostics, Doctor output and failed-join state. Retain nine exact readable machine codes and inspectable native causes without changing success, skip, retry or pending-work behavior.
 
 - Keep native API transport and decoding payloads out of rendered errors, progress logs, optional-auth Doctor diagnostics and failed-join state. Preserve inspectable causes, typed status/cancellation checks, retries and pending work.
 
-- Require present collection arrays before certifying native API history, replies, channel catalogs or user catalogs. Missing/null collections preserve retry work instead of completing an empty page; explicit empty arrays remain valid. Keep prior valid writes, native error handling and Doctor's existing probe-error behavior.
+- Require present collection arrays before certifying native API history, replies, channel catalogs or user catalogs. Missing/null collections preserve retry work instead of completing an empty page; explicit empty arrays remain valid. Keep prior valid writes and native error handling.
 
 - Require a nonblank authenticated workspace ID before workspace-bound API operations. Reject successful but unbound primary or optional-user identities before sync/repair writes, preserve concrete optional-auth fallback, and use canonical workspace IDs in Doctor diagnostics and DM probes. Requested workspace and enterprise IDs do not replace missing authentication identity.
 

@@ -266,8 +266,8 @@ func TestCompletenessDecoderPreservesCapabilityProbes(t *testing.T) {
 					cursor = "next"
 				}
 				if method == "history" {
-					// Doctor suppresses non-scope probe failures, so directly verify that
-					// Limit=1 still requires a collection without enforcing scan completion.
+					// Verify Limit=1 requires a collection independently of Doctor's
+					// access diagnosis and without enforcing scan completion.
 					page, err := client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123", Limit: 1})
 					if missing {
 						require.Nil(t, page)
@@ -332,7 +332,12 @@ func TestCompletenessDecoderPreservesCapabilityProbes(t *testing.T) {
 			if failure == "missing-scope" {
 				wantScope = "im:history"
 			}
-			require.Equal(t, wantScope, diag.DMsMissingScope, "non-scope probe failures remain suppressed; these diagnostics do not certify a page")
+			require.Equal(t, wantScope, diag.DMsMissingScope)
+			wantFailure := "history_failed"
+			if failure == "missing-scope" {
+				wantFailure = ""
+			}
+			require.Equal(t, wantFailure, diag.DMProbeError, "access sampling does not certify a page")
 			require.Equal(t, []string{"/auth.test", "/conversations.list", "/conversations.history"}, calls)
 		})
 	}

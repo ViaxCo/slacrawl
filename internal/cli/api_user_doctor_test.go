@@ -27,11 +27,11 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 		wantReason, wantText                             string
 	}{
 		{name: "global-partial/named-full/missing", missingDB: true, wantGlobal: "partial", wantTop: "full", wantText: "partial without user auth"},
-		{name: "global-full/named-partial/empty", globalFull: true, namedPartial: true, wantGlobal: "full", wantTop: "partial", wantText: "full historical replies"},
+		{name: "global-full/named-partial/empty", globalFull: true, namedPartial: true, wantGlobal: "full", wantTop: "partial", wantText: "user auth available for replies"},
 		{name: "global-partial/named-full/skipped", retainedSkip: true, wantGlobal: "partial", wantTop: "partial", wantText: "partial without user auth"},
 		{name: "global-full/named-partial/skipped", globalFull: true, namedPartial: true, retainedSkip: true, wantGlobal: "partial", wantTop: "partial", wantReason: "retained_api_thread_work", wantText: "partial: retained API thread skips or pending work"},
 		{name: "global-full/no-named/skipped", globalFull: true, noNamed: true, retainedSkip: true, wantGlobal: "partial", wantTop: "partial", wantReason: "retained_api_thread_work", wantText: "partial: retained API thread skips or pending work"},
-		{name: "global-full/named-full/unrelated-skips", globalFull: true, otherSkip: true, wantGlobal: "full", wantTop: "full", wantText: "full historical replies"},
+		{name: "global-full/named-full/unrelated-skips", globalFull: true, otherSkip: true, wantGlobal: "full", wantTop: "full", wantText: "user auth available for replies"},
 		{name: "global-invalid/named-full/missing", globalInvalid: true, missingDB: true, wantGlobal: "partial", wantTop: "full", wantText: "partial without user auth"},
 		{name: "global-invalid/named-full/skipped", globalInvalid: true, retainedSkip: true, wantGlobal: "partial", wantTop: "partial", wantText: "partial without user auth"},
 		{name: "global-unsafe/named-unsafe/missing", globalInvalid: true, namedPartial: true, unsafeError: true, missingDB: true, wantGlobal: "partial", wantTop: "partial", wantText: "partial without user auth"},
@@ -165,7 +165,7 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 					if tc.globalFull {
 						require.NotContains(t, output.String(), "partial without user auth")
 					} else {
-						require.NotContains(t, output.String(), "full historical replies")
+						require.NotContains(t, output.String(), "user auth available for replies")
 						require.NotContains(t, output.String(), "retained API thread skips or pending work")
 					}
 				} else {

@@ -809,9 +809,12 @@ func isMissingScopeError(err error) bool {
 	return channelSkipReason(err) == "missing_scope"
 }
 
-func (c *Client) dmMissingScope(ctx context.Context, workspaceID string) string {
+func (c *Client) probeDMAccess(ctx context.Context, workspaceID string) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
 	if !c.dmPolicy.Enabled(c.tokens.User != "") || c.tokens.User == "" {
-		return ""
+		return "", "", nil
 	}
 	missing := make(map[string]struct{})
 	addMissing := func(scope string) {
@@ -822,12 +825,16 @@ func (c *Client) dmMissingScope(ctx context.Context, workspaceID string) string 
 	}
 
 	dms, err := c.fetchDMs(ctx, workspaceID, nil)
+	if ctx.Err() != nil {
+		return "", "", ctx.Err()
+	}
 	if err != nil {
 		if isMissingScopeError(err) {
 			addMissing("im:read")
 			addMissing("mpim:read")
+			return joinScopes(missing), "", nil
 		}
-		return joinScopes(missing)
+		return "", "catalog_failed", nil
 	}
 
 	var sampleIM, sampleMPIM string
@@ -847,26 +854,29 @@ func (c *Client) dmMissingScope(ctx context.Context, workspaceID string) string 
 		}
 	}
 
-	if sampleIM != "" {
+	// Probe one available conversation per kind. A later successful sample must
+	// not erase a failure or missing scope from the other kind.
+	failure := ""
+	for _, sample := range []struct{ channelID, scope string }{
+		{sampleIM, "im:history"}, {sampleMPIM, "mpim:history"},
+	} {
+		if sample.channelID == "" {
+			continue
+		}
 		_, historyErr := c.getConversationHistory(ctx, c.tokens.User, &slack.GetConversationHistoryParameters{
-			ChannelID: sampleIM,
+			ChannelID: sample.channelID,
 			Limit:     1,
 		})
+		if ctx.Err() != nil {
+			return joinScopes(missing), failure, ctx.Err()
+		}
 		if isMissingScopeError(historyErr) {
-			addMissing("im:history")
+			addMissing(sample.scope)
+		} else if historyErr != nil {
+			failure = "history_failed"
 		}
 	}
-	if sampleMPIM != "" {
-		_, historyErr := c.getConversationHistory(ctx, c.tokens.User, &slack.GetConversationHistoryParameters{
-			ChannelID: sampleMPIM,
-			Limit:     1,
-		})
-		if isMissingScopeError(historyErr) {
-			addMissing("mpim:history")
-		}
-	}
-
-	return joinScopes(missing)
+	return joinScopes(missing), failure, ctx.Err()
 }
 
 func joinScopes(scopes map[string]struct{}) string {

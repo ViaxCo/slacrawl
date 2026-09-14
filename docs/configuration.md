@@ -697,6 +697,25 @@ aggregate. JSON omits an unset reason; `--format log` includes
 `thread_coverage_reason="-"`. With valid user auth and no recognized reason,
 human output reports `partial` without guessing the cause.
 
+### Doctor DM access sampling
+
+Doctor samples at most one available IM and one MPIM history. A non-scope catalog
+failure sets optional `dm_probe_error = "catalog_failed"`; a non-scope history failure
+sets `"history_failed"` and does not prevent sampling the other kind. Missing
+scopes accumulate independently, so scope warnings and a probe failure can appear
+together. Global and named workspace output reports both, with a retry suggestion.
+The new field contains only those codes, never provider payloads or cursors.
+JSON omits an unset field; log output displays `dm_probe_error="-"`.
+
+These checks leave authentication, DM inclusion and thread-coverage decisions
+unchanged. `user auth available for replies` describes a capability, not a
+completed backfill. `enabled for user token; history coverage not verified` does
+not claim that empty catalogs or unsampled kinds passed history checks.
+Canceling Doctor or reaching its caller deadline stops subsequent requests and
+returns an error without a report. A request timeout while the caller remains
+active is a bounded probe failure; unavailable optional auth keeps its existing
+fallback behavior.
+
 ### Retained API threads
 
 Ordinary API sync and `--full` without `--since` revisit eligible roots already
@@ -808,8 +827,8 @@ failures and reports user-auth failures as unavailable. Tail rejects failed bot
 auth before starting Socket Mode, and an unsuccessful lookup for an untyped
 event stops tailing without writes or acknowledgement. A failed join remains a
 recorded, nonfatal history skip: sync can finish with partial coverage, but does
-not retry history as though the join succeeded. Doctor's suppression of non-scope
-capability-probe errors is unchanged.
+not retry history as though the join succeeded. Doctor reports non-scope
+capability-probe failures separately from missing scopes.
 
 Workspace-bound operations require `auth.test` to identify a nonblank workspace
 after trimming whitespace. A configured or requested workspace cannot replace
@@ -858,9 +877,10 @@ Successful history/replies pages must contain a `messages` array. Missing/null
 collections leave the page uncertified instead of completing an empty interval;
 explicit `[]` remains valid. Earlier writes, completed horizons and pending work
 retain their existing retry behavior. The array requirement also applies to
-one-message capability probes, but Doctor still suppresses non-scope probe
-errors and those diagnostics do not certify complete history. Authentication,
-conversation-info and join responses are outside this page-only check.
+one-message capability probes; Doctor reports non-scope probe failures separately
+from missing scopes. Those diagnostics do not certify complete history.
+Authentication, conversation-info and join responses are outside this page-only
+check.
 
 API sync and periodic tail repair follow every nonempty history/replies cursor,
 even when a page is short or empty. After writing a valid page and handling its
@@ -883,8 +903,8 @@ advance. A corrected retry resumes that pending interval and can complete it.
 Concrete request, validation, write, and cancellation failures keep their
 precedence; native transport/decode failures use the bounded diagnostics above.
 One-message capability probes require successful page responses but remain
-independent of scan completion. Doctor's existing suppression of
-non-scope probe errors is unchanged.
+independent of scan completion. Doctor reports non-scope probe failures without
+changing authentication or thread-coverage decisions.
 
 See Slack's [history contract](https://docs.slack.dev/reference/methods/conversations.history/#message-types),
 [replies pagination](https://docs.slack.dev/reference/methods/conversations.replies/#pagination),

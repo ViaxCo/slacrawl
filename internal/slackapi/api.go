@@ -39,6 +39,7 @@ type Diagnostics struct {
 	ThreadCoverageReason string `json:"thread_coverage_reason,omitempty"`
 	DMsIncluded          bool   `json:"dms_included"`
 	DMsMissingScope      string `json:"dms_missing_scope,omitempty"`
+	DMProbeError         string `json:"dm_probe_error,omitempty"`
 	BotAuthTeamID        string `json:"bot_auth_team_id,omitempty"`
 	BotAuthTeam          string `json:"bot_auth_team,omitempty"`
 	UserAuthAvailable    bool   `json:"user_auth_available"`
@@ -126,8 +127,14 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 		UserConfigured: c.tokens.User != "",
 		ThreadCoverage: "partial",
 	}
+	if err := ctx.Err(); err != nil {
+		return diag, err
+	}
 	if c.bot != nil {
 		resp, err := c.authTest(ctx, c.tokens.Bot)
+		if ctx.Err() != nil {
+			return diag, ctx.Err()
+		}
 		if err != nil {
 			return diag, err
 		}
@@ -142,6 +149,9 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 
 	if c.tokens.User != "" {
 		userAuth, err := c.authTest(ctx, c.tokens.User)
+		if ctx.Err() != nil {
+			return diag, ctx.Err()
+		}
 		var workspaceID string
 		if err == nil {
 			workspaceID, err = authenticatedWorkspaceID(userAuth, diag.BotAuthTeamID)
@@ -151,13 +161,16 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 			diag.ThreadCoverage = "full"
 			if c.dmPolicy.Enabled(c.tokens.User != "") {
 				diag.DMsIncluded = true
-				diag.DMsMissingScope = c.dmMissingScope(ctx, workspaceID)
+				diag.DMsMissingScope, diag.DMProbeError, err = c.probeDMAccess(ctx, workspaceID)
+				if err != nil {
+					return diag, err
+				}
 			}
 		} else {
 			diag.UserAuthError = err.Error()
 		}
 	}
-	return diag, nil
+	return diag, ctx.Err()
 }
 
 func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) error {
