@@ -132,6 +132,36 @@ func (s *Store) PrepareMCPThreadWork(ctx context.Context, history MCPHistoryWork
 	return s.prepareThreadWork(ctx, "mcp", history.WorkspaceID, history.ChannelID, nil, &history)
 }
 
+// PrepareMCPReturnedThreadWork acquires only roots selected by this history
+// response. Renewing their shared generations fences older scoped or ordinary
+// replies without inspecting or changing unselected backlog.
+func (s *Store) PrepareMCPReturnedThreadWork(ctx context.Context, history MCPHistoryWork, returnedTS, hintedTS []string) ([]ThreadWork, error) {
+	dbtx, commit, rollback, err := s.beginMessageTransaction(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback()
+	if err := checkMCPHistory(ctx, dbtx, &history); err != nil {
+		return nil, err
+	}
+	roots, err := returnedThreadRoots(ctx, dbtx, history.WorkspaceID, history.ChannelID, returnedTS, hintedTS)
+	if err != nil {
+		return nil, err
+	}
+	requests := make([]ThreadWork, 0, len(roots))
+	for _, root := range roots {
+		requests = append(requests, ThreadWork{SourceName: "mcp", WorkspaceID: history.WorkspaceID, ChannelID: history.ChannelID, TS: root.TS})
+	}
+	queued, err := enqueueThreadWork(ctx, dbtx, requests)
+	if err != nil {
+		return nil, err
+	}
+	if err := commit(); err != nil {
+		return nil, err
+	}
+	return queued, nil
+}
+
 func (s *Store) prepareThreadWork(ctx context.Context, source, workspaceID, channelID string, history *APIHistoryAttempt, mcpHistory *MCPHistoryWork) ([]ThreadWork, error) {
 	if err := validateThreadWorkSource(source); err != nil {
 		return nil, err

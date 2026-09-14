@@ -678,9 +678,9 @@ completion, preserving the order before replies and their later failures.
 
 This does not cancel an already dispatched call, add transport retries or undo
 earlier committed batches. Workspace/user catalogs precede this per-channel
-owner. Queued replies retain their independent thread-generation guard; scoped
-replies without queued work remain a separate ownership gap. No-tool
-reconciliation independently validates current live work and stored tombstones.
+owner. Replies retain their independent thread-generation guard after selected
+work is acquired. No-tool reconciliation independently validates current live
+work and stored tombstones.
 Whole-Sync workspace publication after completed history is not fenced by this
 history-write revision.
 
@@ -737,11 +737,17 @@ unchanged. API history continues to own its separate requested horizon.
 10. with explicit Since, including Full with Since, restrict roots to identities
     themselves returned in history, using final stored ownership and reply/child
     evidence plus positive page hints; do not follow a returned child to an
-    unreturned parent or read/change ordinary pending work
-11. for replies with queued work, check generation and live ownership before and
+    unreturned parent. Under the current pending or completed history revision,
+    select and renew only those roots in one write transaction. Their shared MCP
+    generations fence older ordinary or scoped replies across Since and adapters;
+    unselected backlog and API jobs/skips stay untouched. Acquire all selected
+    roots before replies, so a later unvisited root remains pending after failure
+11. for every reply traversal, check generation and live ownership before and
     after each native or text request, each parent/reply transaction and completion;
     revoked work discards uncommitted materialization and stops pagination,
-    preserving earlier commits and any newer job
+    preserving earlier commits and any newer job. Complete and empty-complete
+    replies retire only the current job; errors and incomplete replies retain it.
+    Since bounds root selection, not the selected thread's reply timestamps
 12. during ordinary sync without a thread tool, validate selected pending work
     and reconcile authoritative stored tombstones in one transaction after valid
     history writes; do not create or renew jobs; surviving work fails actionably

@@ -339,7 +339,8 @@ watermark. Later ordinary scans overlap that watermark by one hour. Failed or
 incomplete history keeps its original pending interval for retry. Each ordinary
 retry reapplies the current purge floor; a prior `--full` does not grant later
 retries permission to restore purged messages. Explicit `--since` takes precedence
-over `--full` and leaves the ordinary checkpoint and thread backlog untouched.
+over `--full` and leaves the ordinary history checkpoint and unselected thread
+backlog untouched.
 
 History completion is committed after history writes and before replies. A later
 reply or channel failure therefore preserves completed history while keeping
@@ -379,29 +380,35 @@ history window.
 Explicit `--since`, including `--full --since`, fetches threads only for roots
 themselves returned in history. A returned root can qualify through an archived
 child even when its reply count is absent. A returned child alone does not add
-an older, unreturned parent. This leaves the ordinary queue and unreturned
-retained roots untouched. Channel selection and DM admission still determine
-which conversations can be read.
+an older, unreturned parent. After history writes, one transaction checks the
+current history revision and acquires only eligible returned roots, using final
+stored evidence and positive page hints. It renews selected existing MCP jobs;
+unselected backlog and API jobs/skips remain untouched. The shared generation
+fences older ordinary or scoped replies, including another Since or adapter.
+Channel selection and DM admission still determine which conversations can be read.
+Since selects roots; their reply requests have no date bound.
 
 During ordinary sync, a connector without a thread tool reconciles selected
 stored tombstones after valid history writes, including tombstones merged from
 a share. This cleanup neither creates nor renews jobs. If live work remains,
 sync returns an actionable error, preserves the old successful workspace record
 and requires a connector with thread support before retrying. With no pending
-work, the existing behavior remains. Explicit Since does not inspect or clean
-the ordinary queue.
+work, the existing behavior remains. Explicit Since without a thread tool does
+not acquire replies work or inspect/clean the ordinary queue.
 
-Replies with queued work check its generation and live parent around requests
-and in writes. Scoped replies without queued work have no generation guard;
-that ownership boundary remains separate. Deletion or renewal stops stale
-pagination and discards the response after the in-flight request returns; it does
-not immediately cancel that request or undo earlier committed history or parent
-writes. Another writer's renewed work can
-remain pending even when the current sync records successful freshness.
+Every reply traversal checks its acquired generation and live parent around
+requests and in parent/reply writes, including empty responses. Deletion or
+renewal stops stale pagination and discards the response after the in-flight
+request returns; it does not immediately cancel that request or undo earlier
+committed history or parent writes. A newer history revision alone does not
+revoke independently acquired replies. Another writer's renewed work can remain
+pending even when the current sync records successful freshness.
 
 Complete replies retire their matching job even if the enclosing history is
 incomplete. History coverage still prevents successful workspace freshness;
-incomplete replies keep their job. Local tombstone, purge and share lifecycle
+incomplete replies keep their job. Scoped sync acquires all selected roots before
+requesting replies, so an earlier failure leaves even unvisited selected jobs for
+a later ordinary retry. Local tombstone, purge and share lifecycle
 rules are shared with [retained API work](#retained-api-threads). Neither queue
 certifies complete Slack capture or export safety.
 

@@ -19,7 +19,7 @@ import (
 )
 
 func TestMCPThreadWorkRevocation(t *testing.T) {
-	for _, mode := range []string{"before-request", "delete-in-flight", "renew-in-flight", "error-revoked", "invalid-revoked", "empty-revoked", "empty-current", "error-current", "parent-commit-renews", "unguarded"} {
+	for _, mode := range []string{"before-request", "delete-in-flight", "renew-in-flight", "error-revoked", "invalid-revoked", "empty-revoked", "empty-current", "error-current", "parent-commit-renews", "missing-generation"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			st := admissionStore(t)
@@ -44,12 +44,11 @@ func TestMCPThreadWorkRevocation(t *testing.T) {
 				require.NoError(t, err)
 				expected = admissionTableSnapshot(t, st)
 			}
-			guard := &work
 			if mode == "before-request" {
 				deleteParent()
-			} else if mode == "unguarded" {
-				renew()
-				guard = nil
+			} else if mode == "missing-generation" {
+				work.Generation = ""
+				expected = admissionTableSnapshot(t, st)
 			}
 			if mode == "parent-commit-renews" {
 				// Force renewal at the real boundary between the existing separate
@@ -82,18 +81,15 @@ begin update sync_state set value='new-generation' where source_name='mcp' and e
 				return `{"ok":true,"messages":[{"ts":"1710000001.000000","text":"root refreshed"},{"ts":"1710000002.000000","thread_ts":"1710000001.000000","text":"child <@UCHILD>"}]}`, nil
 			})}
 			before := admissionTableSnapshot(t, st)
-			result, err := syncThread(ctx, st, client, toolset{provider: providerReference, readThread: "slack_get_thread_replies"}, "TLOCAL", "C123", parent.TS, false, now, guard)
+			result, err := syncThread(ctx, st, client, toolset{provider: providerReference, readThread: "slack_get_thread_replies"}, work, false, now)
 			if mode == "error-current" {
 				require.EqualError(t, err, "read MCP thread: synthetic request failure")
 				require.Equal(t, before, admissionTableSnapshot(t, st))
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, map[bool]int{true: 0, false: 1}[mode == "before-request"], calls)
-			if mode == "unguarded" {
-				require.False(t, result.revoked)
-				require.Equal(t, 1, result.replies)
-			} else if mode == "empty-current" {
+			require.Equal(t, map[bool]int{true: 0, false: 1}[mode == "before-request" || mode == "missing-generation"], calls)
+			if mode == "empty-current" {
 				require.False(t, result.revoked)
 				require.Zero(t, result.replies)
 				require.Equal(t, before, admissionTableSnapshot(t, st))
@@ -374,7 +370,7 @@ func TestMCPAdmittedRevivalRequeuesCanceledWork(t *testing.T) {
 				return "{\"ok\":true,\"messages\":[]}", nil
 			})}
 			tools := toolset{provider: providerReference, readThread: "slack_get_thread_replies"}
-			stale, err := syncThread(ctx, st, client, tools, "TLOCAL", "C123", parent.TS, false, now, &prepared[0])
+			stale, err := syncThread(ctx, st, client, tools, prepared[0], false, now)
 			require.NoError(t, err)
 			require.True(t, stale.revoked)
 			require.Zero(t, calls)
@@ -387,7 +383,7 @@ func TestMCPAdmittedRevivalRequeuesCanceledWork(t *testing.T) {
 				require.Len(t, written.PendingThreads, 1)
 				work := written.PendingThreads[0]
 				require.NotEqual(t, prepared[0].Generation, work.Generation)
-				result, err := syncThread(ctx, st, client, tools, "TLOCAL", "C123", parent.TS, false, now, &work)
+				result, err := syncThread(ctx, st, client, tools, work, false, now)
 				require.NoError(t, err)
 				require.False(t, result.revoked)
 				require.Equal(t, 1, calls)
@@ -448,7 +444,7 @@ func TestMCPHistoryPreservesUnseenConcurrentWork(t *testing.T) {
 		return `{"ok":true,"messages":[]}`, nil
 	})}
 	work := owned.PendingThreads[0]
-	result, err := syncThread(ctx, owner, client, toolset{provider: providerReference, readThread: "slack_get_thread_replies"}, "TLOCAL", "C123", materialized.TS, false, now, &work)
+	result, err := syncThread(ctx, owner, client, toolset{provider: providerReference, readThread: "slack_get_thread_replies"}, work, false, now)
 	require.NoError(t, err)
 	require.False(t, result.revoked)
 	require.Equal(t, 1, calls)

@@ -238,35 +238,27 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 					return summary, err
 				}
 			}
-			threadRoots = make(map[string]struct{}, len(pendingThreads))
-			for ts := range pendingThreads {
-				threadRoots[ts] = struct{}{}
-			}
 		} else {
 			hints := make([]string, 0, len(threadRoots))
 			for ts := range threadRoots {
 				hints = append(hints, ts)
 			}
-			roots, err := st.ReturnedThreadRoots(ctx, workspaceID, channel.ID, returnedTS, hints)
+			work, err := st.PrepareMCPReturnedThreadWork(ctx, history, returnedTS, hints)
 			if err != nil {
 				return summary, persistenceError(err)
 			}
-			threadRoots = make(map[string]struct{}, len(roots))
-			for _, root := range roots {
-				threadRoots[root.TS] = struct{}{}
+			for _, item := range work {
+				pendingThreads[item.TS] = item
 			}
 		}
-		orderedRoots := make([]string, 0, len(threadRoots))
-		for threadTS := range threadRoots {
+		orderedRoots := make([]string, 0, len(pendingThreads))
+		for threadTS := range pendingThreads {
 			orderedRoots = append(orderedRoots, threadTS)
 		}
 		sort.Strings(orderedRoots)
 		for _, threadTS := range orderedRoots {
-			var work *store.ThreadWork
-			if pending, ok := pendingThreads[threadTS]; ok {
-				work = &pending
-			}
-			result, err := syncThread(ctx, st, client, tools, workspaceID, channel.ID, threadTS, enforceRetention, now, work)
+			work := pendingThreads[threadTS]
+			result, err := syncThread(ctx, st, client, tools, work, enforceRetention, now)
 			if err != nil {
 				return summary, err
 			}
@@ -275,8 +267,8 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			}
 			summary.Replies += result.replies
 			coverage.include(result.coverage)
-			if work != nil && !result.coverage.more && !result.coverage.limited {
-				if _, err := st.CompleteThreadWork(ctx, *work, "", nil); err != nil {
+			if !result.coverage.more && !result.coverage.limited {
+				if _, err := st.CompleteThreadWork(ctx, work, "", nil); err != nil {
 					return summary, err
 				}
 			}
@@ -311,20 +303,16 @@ type threadSyncResult struct {
 	revoked  bool
 }
 
-func syncThread(ctx context.Context, st *store.Store, client *Client, tools toolset, workspaceID, channelID, threadTS string, enforceRetention bool, now time.Time, work *store.ThreadWork) (threadSyncResult, error) {
-	var current func() (bool, error)
-	if work != nil {
-		current = func() (bool, error) { return st.ThreadWorkCurrent(ctx, *work) }
-	}
+func syncThread(ctx context.Context, st *store.Store, client *Client, tools toolset, work store.ThreadWork, enforceRetention bool, now time.Time) (threadSyncResult, error) {
+	workspaceID, channelID, threadTS := work.WorkspaceID, work.ChannelID, work.TS
+	current := func() (bool, error) { return st.ThreadWorkCurrent(ctx, work) }
 	thread, err := client.threadMessages(ctx, tools, workspaceID, channelID, threadTS, current)
-	if current != nil {
-		ok, checkErr := current()
-		if checkErr != nil {
-			return threadSyncResult{}, checkErr
-		}
-		if !ok {
-			return threadSyncResult{revoked: true}, nil
-		}
+	ok, checkErr := current()
+	if checkErr != nil {
+		return threadSyncResult{}, checkErr
+	}
+	if !ok {
+		return threadSyncResult{revoked: true}, nil
 	}
 	if thread.revoked {
 		return threadSyncResult{revoked: true}, nil
@@ -336,7 +324,7 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 	if thread.Parent != nil && (len(thread.Replies) > 0 || thread.Parent.ReplyCount > 0 || strings.TrimSpace(thread.Parent.LatestReply) != "") {
 		thread.Parent.ReplyCount = max(thread.Parent.ReplyCount, len(thread.Replies))
 		thread.Parent.LatestReply = latestReplyTS(thread.Parent.LatestReply, thread.Replies)
-		written, err := st.ApplyWriteBatch(ctx, store.WriteBatch{ThreadGuard: work, Messages: []store.MessageWrite{
+		written, err := st.ApplyWriteBatch(ctx, store.WriteBatch{ThreadGuard: &work, Messages: []store.MessageWrite{
 			toMessageWrite(workspaceID, *thread.Parent, enforceRetention, now),
 		}})
 		if err != nil {
@@ -346,12 +334,9 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 			return threadSyncResult{revoked: true}, nil
 		}
 	}
-	batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(thread.Replies)), ThreadGuard: work}
+	batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(thread.Replies)), ThreadGuard: &work}
 	for _, reply := range thread.Replies {
 		batch.Messages = append(batch.Messages, toMessageWrite(workspaceID, reply, enforceRetention, now))
-	}
-	if len(batch.Messages) == 0 && work == nil {
-		return result, nil
 	}
 	written, err := st.ApplyWriteBatch(ctx, batch)
 	if err != nil {

@@ -200,10 +200,10 @@ order by m.ts
 	return roots, rows.Err()
 }
 
-// ReturnedThreadRoots restricts sliced-sync discovery to identities actually
+// returnedThreadRoots restricts sliced-sync discovery to identities actually
 // returned by history. Final stored ownership/evidence excludes rejected child
 // links; explicit hints still survive a later duplicate that omits the count.
-func (s *Store) ReturnedThreadRoots(ctx context.Context, workspaceID, channelID string, returnedTS, hintedTS []string) ([]ThreadRoot, error) {
+func returnedThreadRoots(ctx context.Context, q storedb.DBTX, workspaceID, channelID string, returnedTS, hintedTS []string) ([]ThreadRoot, error) {
 	if len(returnedTS) == 0 {
 		return nil, nil
 	}
@@ -215,7 +215,7 @@ func (s *Store) ReturnedThreadRoots(ctx context.Context, workspaceID, channelID 
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `select distinct m.channel_id, m.ts
+	rows, err := q.QueryContext(ctx, `select distinct m.channel_id, m.ts
 from json_each(?) k join messages m on m.ts = k.value
 join channels c on c.id = m.channel_id and c.workspace_id = m.workspace_id
 where m.workspace_id = ? and m.channel_id = ? and `+threadRootLivePredicate+`
