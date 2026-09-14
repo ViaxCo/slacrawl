@@ -1,0 +1,30 @@
+[
+  {
+    "type": "message",
+    "channel": "GLEGACY",
+    "user": "UME",
+    "text": "slackdump-legacy-canary",
+    "ts": "1767225600.000001",
+    "team": "TTEST",
+    "replace_original": false,
+    "delete_original": false,
+    "metadata": {
+      "event_type": "",
+      "event_payload": null
+    },
+    "blocks": null,
+    "user_team": "TTEST",
+    "source_team": "TTEST",
+    "user_profile": {
+      "avatar_hash": "",
+      "image_72": "",
+      "first_name": "",
+      "real_name": "",
+      "display_name": "",
+      "team": "",
+      "name": "me",
+      "is_restricted": false,
+      "is_ultra_restricted": false
+    }
+  }
+]
