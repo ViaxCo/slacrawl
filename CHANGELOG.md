@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add internal capture of exact independently verified projection bytes, so later consumers can use immutable manifest/message contents without reopening changed files. Return no usable snapshot on failure; retain the receipt-only verifier path and existing content/publication limits.
+
 - Add offline `export prepare`, `export build` and `export verify` commands with explicit archive and private selection/plan paths. Bind preparation/building to a clean embedded Git revision, recheck current source bindings before building or verifying, and emit only counts or observed-byte receipts. Keep private plans separate from the two-file artifact; no config loading, automatic imports, release checks, Slack or Git publishing runs on this path.
 
 - Preserve exact native MCP channel objects when inserting new archive channels, so later selection can inspect the delivered type and identity evidence. Keep missing and conflicting fields intact without retaining the whole catalog. Existing channels, human-text records and direct-ID stubs stay unchanged; routine sync does not repair older lossy metadata or certify DM origin/content safety.

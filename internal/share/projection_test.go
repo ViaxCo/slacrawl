@@ -543,3 +543,166 @@ func TestProjectionCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, receipt)
 }
+
+func TestProjectionCaptureOwnsVerifiedBytes(t *testing.T) {
+	for _, change := range []string{"replace", "remove"} {
+		t.Run(change, func(t *testing.T) {
+			ctx := context.Background()
+			expected := projectionTestExpected()
+			manifest := projectionTestManifest(projectionTestMessages)
+			dir := filepath.Join(t.TempDir(), "projection")
+			writeManualProjection(t, dir, projectionTestMessages, manifest)
+			receipt, err := VerifyProjection(ctx, dir, expected, projectionTestRevision)
+			require.NoError(t, err)
+			captured, err := CaptureProjection(ctx, dir, expected, projectionTestRevision)
+			require.NoError(t, err)
+			gotManifest, gotMessages, gotReceipt, err := captured.Contents()
+			require.NoError(t, err)
+			require.Equal(t, manifest, gotManifest)
+			require.Equal(t, projectionTestMessages, gotMessages)
+			require.Equal(t, receipt, gotReceipt)
+			require.Equal(t, ProjectionReceipt{
+				ManifestSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(manifest))), MessagesSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(projectionTestMessages))),
+				ManifestBytes: int64(len(manifest)), MessagesBytes: int64(len(projectionTestMessages)), Rows: 2,
+			}, gotReceipt)
+
+			// Neither caller-owned inputs nor later filesystem contents back the snapshot.
+			expected.WorkspaceLabel = "changed-label-canary"
+			expected.Channels[0].Label = "changed-channel-canary"
+			*expected.Messages[0].UserID = "changed-author-canary"
+			expected.Messages[1].Text = "changed-text-canary"
+			*expected.Messages[1].ThreadTS = "changed-parent-canary"
+			*expected.Messages[0].EditedTS = "changed-edit-canary"
+			expected.Messages = nil
+			for _, name := range []string{"manifest.json", "messages.jsonl"} {
+				path := filepath.Join(dir, name)
+				if change == "replace" {
+					require.NoError(t, os.WriteFile(path, []byte("changed-file-canary"), 0o600))
+				} else {
+					require.NoError(t, os.Remove(path))
+				}
+			}
+			if change == "remove" {
+				require.NoError(t, os.Remove(dir))
+			}
+			manifestCopy, messagesCopy := []byte(gotManifest), []byte(gotMessages)
+			manifestCopy[0], messagesCopy[0] = 'X', 'X'
+			gotReceipt.Rows = 99
+			gotReceipt.ManifestSHA256 = "changed-receipt"
+			gotManifest, gotMessages, gotReceipt, err = captured.Contents()
+			require.NoError(t, err)
+			require.Equal(t, manifest, gotManifest)
+			require.Equal(t, projectionTestMessages, gotMessages)
+			require.Equal(t, receipt, gotReceipt)
+			require.NotEqual(t, string(manifestCopy), gotManifest)
+			require.NotEqual(t, string(messagesCopy), gotMessages)
+		})
+	}
+}
+
+func TestProjectionCaptureRejectsIncompleteVerification(t *testing.T) {
+	for _, tc := range []struct{ name, failure string }{
+		{"invalid-expected", "expected projection reply requires its selected root"},
+		{"manifest", "invalid projection manifest"},
+		{"manifest-bound", "cannot read bounded projection manifest"},
+		{"late-row", "projection message 1 differs from expected fields"},
+		{"trailing-data", "projection messages contain trailing content or a read failure"},
+		{"message-bound", "cannot read bounded projection message 1"},
+		{"checksum", "projection payload checksum or byte count differs"},
+		{"missing", "projection must contain exactly two files"},
+		{"extra", "projection must contain exactly two files"},
+		{"symlink", "projection entries must be regular nonsymlink files"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expected := projectionTestExpected()
+			messages := projectionTestMessages
+			manifest := projectionTestManifest(messages)
+			switch tc.name {
+			case "invalid-expected":
+				expected.Messages[1].ThreadTS = new("missing-parent-canary")
+			case "manifest":
+				manifest = "{invalid-manifest-canary}\n"
+			case "manifest-bound":
+				manifest += strings.Repeat(" ", 16384)
+			case "late-row":
+				messages = strings.Replace(messages, "reviewed text", "changed-text-canary", 1)
+			case "trailing-data":
+				messages += "trailing-canary"
+			case "message-bound":
+				messages = strings.SplitAfter(messages, "\n")[0] + strings.Repeat("x", 16384) + "\n"
+			case "checksum":
+				manifest = strings.Replace(manifest, fmt.Sprintf("%x", sha256.Sum256([]byte(messages))), strings.Repeat("0", 64), 1)
+			}
+			dir := filepath.Join(t.TempDir(), "projection")
+			writeManualProjection(t, dir, messages, manifest)
+			switch tc.name {
+			case "missing":
+				require.NoError(t, os.Remove(filepath.Join(dir, "messages.jsonl")))
+			case "extra":
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "extra-canary"), nil, 0o600))
+			case "symlink":
+				require.NoError(t, os.Remove(filepath.Join(dir, "messages.jsonl")))
+				require.NoError(t, os.Symlink("manifest.json", filepath.Join(dir, "messages.jsonl")))
+			}
+			captured, err := CaptureProjection(context.Background(), dir, expected, projectionTestRevision)
+			require.ErrorContains(t, err, tc.failure)
+			require.NotContains(t, err.Error(), "canary")
+			require.Equal(t, CapturedProjection{}, captured)
+			gotManifest, gotMessages, receipt, err := captured.Contents()
+			require.Error(t, err)
+			require.Empty(t, gotManifest)
+			require.Empty(t, gotMessages)
+			require.Empty(t, receipt)
+		})
+	}
+}
+
+type projectionCaptureCancelContext struct {
+	context.Context
+	cancel   context.CancelFunc
+	cancelAt int
+	checks   int
+}
+
+func (c *projectionCaptureCancelContext) Err() error {
+	c.checks++
+	if c.checks == c.cancelAt {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func TestProjectionCaptureCancellation(t *testing.T) {
+	// Err is the existing checkpoint seam: entry, between rows, then after closes.
+	for _, tc := range []struct {
+		name     string
+		cancelAt int
+	}{{"entry", 1}, {"after-first-row", 3}, {"after-closes", 4}} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx := &projectionCaptureCancelContext{Context: parent, cancel: cancel, cancelAt: tc.cancelAt}
+			dir := filepath.Join(t.TempDir(), "projection")
+			writeManualProjection(t, dir, projectionTestMessages, projectionTestManifest(projectionTestMessages))
+			captured, err := CaptureProjection(ctx, dir, projectionTestExpected(), projectionTestRevision)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, tc.cancelAt, ctx.checks)
+			require.Equal(t, CapturedProjection{}, captured)
+			manifest, messages, receipt, err := captured.Contents()
+			require.Error(t, err)
+			require.Empty(t, manifest)
+			require.Empty(t, messages)
+			require.Empty(t, receipt)
+		})
+	}
+}
+
+func TestProjectionCaptureZero(t *testing.T) {
+	var captured CapturedProjection
+	manifest, messages, receipt, err := captured.Contents()
+	// Empty content is not a successful verification of an empty artifact.
+	require.Error(t, err)
+	require.Empty(t, manifest)
+	require.Empty(t, messages)
+	require.Empty(t, receipt)
+}

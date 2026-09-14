@@ -82,6 +82,14 @@ build must match the plan's producer revision. A newer verifier can verify an
 older producer's artifact using that plan, without the producing binary. Neither
 command connects the artifact to Git publishing.
 
+Internal callers can use `CaptureProjection` to retain the exact bytes accepted
+by that verifier. Its opaque snapshot exposes immutable manifest/message strings
+and a copied receipt only after all checks succeed; a zero snapshot cannot be
+used as verified content. Later file edits or removals do not change the captured
+bytes. Capture memory grows with the selected artifact size. Receipt-only
+verification keeps its existing memory behavior without a full encoded-message
+buffer. This internal API adds no CLI command or publication authorization.
+
 ## Configure the archive
 
 Add a share block to the publisher's config:
