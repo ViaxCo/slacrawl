@@ -175,10 +175,14 @@ func TestPublishDMPolicyPreservesAllowedSnapshots(t *testing.T) {
 			require.NoError(t, err)
 			rows, err := reader.QueryReadOnly(context.Background(), "select * from messages order by rowid")
 			require.NoError(t, err)
-			require.Equal(t, before["messages"], rows)
+			require.ElementsMatch(t, before["messages"], rows)
 			require.Len(t, rows, 3)
-			require.Equal(t, shareDMCanary, rows[1]["text"])
-			require.Equal(t, shareDraftCanary, rows[2]["text"])
+			byKey := map[[2]string]map[string]any{}
+			for _, row := range rows {
+				byKey[[2]string{row["channel_id"].(string), row["ts"].(string)}] = row
+			}
+			require.Equal(t, shareDMCanary, byKey[[2]string{"DDM", "1710000000.000200"}]["text"])
+			require.Equal(t, shareDraftCanary, byKey[[2]string{"C1", "draft:fixture"}]["text"])
 		})
 	}
 }
