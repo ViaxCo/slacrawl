@@ -37,6 +37,10 @@ func (a *App) runPublish(ctx context.Context, configPath string, args []string, 
 	if *noCommit && strings.TrimSpace(*tag) != "" {
 		return errors.New("publish --tag requires a commit")
 	}
+	policy := admission.FromConfig(cfg.Sync.IncludeDMs)
+	if err := share.ValidateExportPolicy(policy); err != nil {
+		return err
+	}
 	st, err := a.openStore(cfg)
 	if err != nil {
 		return err
@@ -48,6 +52,7 @@ func (a *App) runPublish(ctx context.Context, configPath string, args []string, 
 		return err
 	}
 	opts.Tag = strings.TrimSpace(*tag)
+	opts.DMPolicy = policy
 	if err := share.ValidateTag(ctx, opts); err != nil {
 		return err
 	}

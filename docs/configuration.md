@@ -582,8 +582,15 @@ then reject before acquisition, snapshot/media import, or freshness updates.
 Set `[share].auto_update = false` to continue querying the local archive or
 syncing API/native sources while retaining DM exclusion. Fresh automatic reads,
 `subscribe --no-import`, and Desktop-only sync/watch remain available.
-Omitted/true keeps the existing merge and restore behavior. This policy neither
-purges existing DMs nor filters `publish`; snapshots can still contain them.
+Omitted/true keeps the existing merge and restore behavior.
+
+Explicit `[sync].include_dms = false` also blocks `publish`, including
+`--no-commit`, `--no-media`, and tag/push modes. After flag, config and argument
+checks, publishing rejects before archive initialization, media-cache locking,
+Git work or snapshot writes. Keep the archive local. Omitted/true preserves
+unfiltered private snapshot publishing, including archived DMs and drafts;
+intake settings do not purge those rows or certify publication safety. This
+gate does not change the optional release notifier before command dispatch.
 
 ## Token Sources
 

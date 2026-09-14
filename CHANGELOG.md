@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject legacy Git snapshot publishing when `sync.include_dms = false`, before archive initialization, cache locking, Git operations or output writes. Keep the archive local; `--no-commit` and `--no-media` do not bypass the gate. Omitted/true retain unfiltered private snapshot publishing, including already archived DMs and drafts.
+
 - Verify and document importing Slackdump-converted ZIP and directory exports from database and chunk archives. Preserve real synthetic converter fixtures for thread identity, DM exclusion, source/FTS consistency and repeat-import coverage; no importer behavior or upstream dependency changes.
 
 - Track MCP channel-history completion separately from stored messages and replies. Keep failed or incomplete intervals pending, preserve completed empty scans, and retry with current retention bounds. Prevent newer replies or API/Desktop rows from skipping unread history; reject non-finite history timestamps before filtering. Keep checkpoints local to the archive and out of freshness timestamps. First intake after upgrade, fresh import or whole-snapshot restore establishes its own history checkpoint; native server window limits remain unchanged.
@@ -22,7 +24,7 @@
 
 - Report incomplete native MCP history/replies before advancing successful workspace sync state when Slack returns more-page or history/message-limit signals. Keep valid fetched writes and concrete errors; require explicit successful native responses under every DM policy without changing text adapters or tool arguments.
 
-- Reject legacy Git share imports when `sync.include_dms = false`, before acquisition or snapshot/media writes. Subscribe rejects before saving its importing configuration; automatic paths check archive staleness first. Set `share.auto_update = false` to continue local/API work. Existing rows and unfiltered publishing remain unchanged.
+- Reject legacy Git share imports when `sync.include_dms = false`, before acquisition or snapshot/media writes. Subscribe rejects before saving its importing configuration; automatic paths check archive staleness first. Set `share.auto_update = false` to continue local/API work. Existing rows remain unchanged.
 
 - Honor explicit `sync.include_dms = false` before MCP writes using fresh native conversation evidence, including explicit IDs. Text adapters stop before data calls under this policy; native adapters report excluded DMs and leave freshness untouched when nothing is eligible. Apply channel exclusions to every returned alias of a selected ID, and reject selected catalog and retained message/context/thread identity conflicts under every policy while preserving existing payload projections and previously archived rows.
 
