@@ -352,7 +352,7 @@ func TestMCPAdmittedRevivalRequeuesCanceledWork(t *testing.T) {
 			require.NoError(t, err)
 			batch := store.WriteBatch{Messages: []store.MessageWrite{toMessageWrite("TLOCAL", materialized, false, now)},
 				PendingThreads:  []store.ThreadWork{{SourceName: SourceName, WorkspaceID: "TLOCAL", ChannelID: "C123", TS: parent.TS}},
-				ThreadDiscovery: &store.ThreadWorkDiscovery{SourceName: SourceName, WorkspaceID: "TLOCAL", ChannelID: "C123", KnownWork: map[string]store.ThreadWork{parent.TS: prepared[0]}}}
+				ThreadDiscovery: &store.ThreadWorkDiscovery{SourceName: SourceName, WorkspaceID: "TLOCAL", ChannelID: "C123"}}
 			if mode == "duplicate-hint" {
 				materialized.ReplyCount = 0
 				batch.Messages = append(batch.Messages, toMessageWrite("TLOCAL", materialized, false, now))
@@ -400,6 +400,64 @@ func TestMCPAdmittedRevivalRequeuesCanceledWork(t *testing.T) {
 			require.Equal(t, "prior-success", freshness, "this composed owner proof does not run full Sync")
 		})
 	}
+}
+
+// Compose empty preparation and a competing page owner; this does not run
+// full Sync or claim a concurrent CLI/freshness execution.
+func TestMCPHistoryPreservesUnseenConcurrentWork(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "concurrent.db")
+	st, err := store.Open(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	owner, err := store.Open(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	now := time.Unix(1710000000, 0).UTC()
+	require.NoError(t, st.UpsertWorkspace(ctx, store.Workspace{ID: "TLOCAL", Name: "fixture", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "TLOCAL", Name: "fixture", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
+	require.NoError(t, st.SetSyncState(ctx, SourceName, "workspace", "TLOCAL", "prior-success"))
+	prepared, err := st.PrepareThreadWork(ctx, SourceName, "TLOCAL", "C123")
+	require.NoError(t, err)
+	require.Empty(t, prepared)
+	materialized := MessageRecord{ChannelID: "C123", TS: "1710000001.000000", Text: "root", ReplyCount: 1}
+	batch := store.WriteBatch{
+		Messages:        []store.MessageWrite{toMessageWrite("TLOCAL", materialized, false, now)},
+		PendingThreads:  []store.ThreadWork{{SourceName: SourceName, WorkspaceID: "TLOCAL", ChannelID: "C123", TS: materialized.TS}},
+		ThreadDiscovery: &store.ThreadWorkDiscovery{SourceName: SourceName, WorkspaceID: "TLOCAL", ChannelID: "C123"},
+	}
+	owned, err := owner.ApplyWriteBatch(ctx, batch)
+	require.NoError(t, err)
+	require.Len(t, owned.PendingThreads, 1)
+	before, err := owner.QueryReadOnly(ctx, "select * from sync_state order by entity_type,entity_id")
+	require.NoError(t, err)
+	written, err := st.ApplyWriteBatch(ctx, batch)
+	require.NoError(t, err)
+	require.Empty(t, written.PendingThreads, "the contender must not adopt or renew the unseen job")
+	after, err := st.QueryReadOnly(ctx, "select * from sync_state order by entity_type,entity_id")
+	require.NoError(t, err)
+	require.Equal(t, before, after, "preserve the entire owner job including its timestamp")
+	calls := 0
+	client := &Client{mcp: threadWorkSession(func(_ context.Context, tool string, args map[string]any) (string, error) {
+		calls++
+		require.Equal(t, "slack_get_thread_replies", tool)
+		require.Equal(t, map[string]any{"channel_id": "C123", "thread_ts": materialized.TS}, args)
+		return `{"ok":true,"messages":[]}`, nil
+	})}
+	work := owned.PendingThreads[0]
+	result, err := syncThread(ctx, owner, client, toolset{provider: providerReference, readThread: "slack_get_thread_replies"}, "TLOCAL", "C123", materialized.TS, false, now, &work)
+	require.NoError(t, err)
+	require.False(t, result.revoked)
+	require.Equal(t, 1, calls)
+	completed, err := owner.CompleteThreadWork(ctx, work, "")
+	require.NoError(t, err)
+	require.True(t, completed)
+	pending, err := st.PendingThreadWork(ctx, SourceName, "TLOCAL", "C123")
+	require.NoError(t, err)
+	require.Empty(t, pending)
+	freshness, err := st.GetSyncState(ctx, SourceName, "workspace", "TLOCAL")
+	require.NoError(t, err)
+	require.Equal(t, "prior-success", freshness)
 }
 
 type threadWorkSession func(context.Context, string, map[string]any) (string, error)

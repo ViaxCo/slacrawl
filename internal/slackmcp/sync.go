@@ -149,7 +149,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		if ordinaryThreads {
 			// Keep admitted child evidence with its history batch even if a later
 			// batch fails before retained-root discovery can run.
-			batch.ThreadDiscovery = &store.ThreadWorkDiscovery{SourceName: SourceName, WorkspaceID: workspaceID, ChannelID: channel.ID, KnownWork: pendingThreads}
+			batch.ThreadDiscovery = &store.ThreadWorkDiscovery{SourceName: SourceName, WorkspaceID: workspaceID, ChannelID: channel.ID}
 		}
 		writeHistoryBatch := func() error {
 			result, err := st.ApplyWriteBatch(ctx, batch)
@@ -199,8 +199,8 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			continue
 		}
 		if ordinaryThreads {
-			// Discover children retained by other writers without renewing work
-			// already owned by this attempt. Since reads only returned history roots.
+			// Discover children retained by other writers without replacing an
+			// existing generation. Since reads only returned history roots.
 			storedRoots, err := st.ChannelThreadRoots(ctx, workspaceID, channel.ID)
 			if err != nil {
 				return summary, err

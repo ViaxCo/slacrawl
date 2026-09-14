@@ -282,9 +282,11 @@ eligible retained roots before history writes can remove their reply hints.
 New hints and work identified by archived replies are saved with their message
 batch, even if a later batch fails. If admitted history revives a parent after
 its work was canceled, that transaction saves a new job without replacing any
-newer generation. The local replies queue survives request failures, incomplete
-native replies and process restarts; it does not store a server cursor or extend
-the native server's history window.
+existing generation, including work created after this sync prepared. Ordinary
+sync drains only jobs it prepared or newly queued; another sync keeps its job.
+The local replies queue survives request failures, incomplete native replies and
+process restarts; it does not store a server cursor or extend the native server's
+history window.
 
 Explicit `--since`, including `--full --since`, fetches threads only for roots
 themselves returned in history. A returned root can qualify through an archived

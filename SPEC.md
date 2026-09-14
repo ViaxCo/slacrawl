@@ -497,7 +497,9 @@ Share config:
    writes and save new page hints atomically with their message batches; drain
    selected jobs in timestamp order and retire only the matching live generation
    after complete replies; admitted revival after cancellation requeues missing
-   work without replacing an extant generation; incomplete history still prevents
+   work without replacing any extant generation, including jobs absent during this
+   invocation's preparation; ordinary drain only uses its prepared/newly queued
+   jobs. Incomplete history still prevents
    workspace freshness
 10. with explicit Since, including Full with Since, restrict roots to identities
     themselves returned in history, using final stored ownership and reply/child

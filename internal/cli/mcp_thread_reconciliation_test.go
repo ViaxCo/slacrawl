@@ -311,7 +311,7 @@ func (f *mcpReconcileFixture) serveHTTP(w http.ResponseWriter, r *http.Request) 
 				fail("unexpected thread")
 				return
 			}
-			payload["messages"] = []map[string]any{mcpWorkMessage("1710001003.000000", root, false)}
+			payload["messages"] = []map[string]any{mcpWorkMessage(root, "", false), mcpWorkMessage("1710001003.000000", root, false)}
 		default:
 			fail("unexpected tool")
 			return
