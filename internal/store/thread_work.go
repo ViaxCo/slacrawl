@@ -123,6 +123,16 @@ func validateThreadWorkSource(source string) error {
 // PrepareThreadWork preserves both saved jobs and retained reply hints before
 // history can overwrite them. Discovery and renewal share one writer snapshot.
 func (s *Store) PrepareThreadWork(ctx context.Context, source, workspaceID, channelID string, history *APIHistoryAttempt) ([]ThreadWork, error) {
+	return s.prepareThreadWork(ctx, source, workspaceID, channelID, history, nil)
+}
+
+// PrepareMCPThreadWork binds history-derived discovery and renewal to the same
+// revision check as metadata and message batches.
+func (s *Store) PrepareMCPThreadWork(ctx context.Context, history MCPHistoryWork) ([]ThreadWork, error) {
+	return s.prepareThreadWork(ctx, "mcp", history.WorkspaceID, history.ChannelID, nil, &history)
+}
+
+func (s *Store) prepareThreadWork(ctx context.Context, source, workspaceID, channelID string, history *APIHistoryAttempt, mcpHistory *MCPHistoryWork) ([]ThreadWork, error) {
 	if err := validateThreadWorkSource(source); err != nil {
 		return nil, err
 	}
@@ -132,6 +142,9 @@ func (s *Store) PrepareThreadWork(ctx context.Context, source, workspaceID, chan
 	}
 	defer rollback()
 	if _, err := checkAPIHistory(ctx, dbtx, history); err != nil {
+		return nil, err
+	}
+	if err := checkMCPHistory(ctx, dbtx, mcpHistory); err != nil {
 		return nil, err
 	}
 	pending, err := reconcileThreadWork(ctx, dbtx, source, workspaceID, channelID)

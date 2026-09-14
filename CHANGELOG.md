@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fence MCP history reads and history-derived metadata, preparation, message batches and discovery against superseding revisions. Discard stale uncommitted responses while preserving earlier commits, completed-history ordering and independent queued replies.
+
 - Publish API thread coverage and eligible skip cleanup atomically against retained history and thread work. Preserve historical coverage while temporary pending work blocks a full result, and project Status plus Doctor retained facts from one read-only snapshot without rewriting markers or promoting genuine partial coverage.
 
 - Keep API history and reply collisions durably incomplete while committing valid rows. Preserve attempted history bounds and thread jobs/skips, queue scoped collision work for ordinary retry, and renew its generation against older completions. Check retained API history during Sync, repair, Full skip cleanup and CLI Doctor; report incomplete history without changing stored-status or named-auth ownership.

@@ -169,11 +169,14 @@ func (c *Client) referenceUsers(ctx context.Context, tools toolset) ([]UserRecor
 	})
 }
 
-func (c *Client) referenceChannelMessages(ctx context.Context, tools toolset, workspaceID, channelID, oldest string) (channelPage, error) {
-	raw, err := c.mcp.CallToolText(ctx, tools.readChannel, map[string]any{
+func (c *Client) referenceChannelMessages(ctx context.Context, tools toolset, workspaceID, channelID, oldest string, current func() (bool, error)) (channelPage, error) {
+	raw, revoked, err := c.callMessages(ctx, tools.readChannel, map[string]any{
 		"channel_id": channelID,
 		"limit":      c.pageSize,
-	})
+	}, current)
+	if revoked {
+		return channelPage{revoked: true}, nil
+	}
 	if err != nil {
 		return channelPage{}, err
 	}
@@ -204,7 +207,7 @@ func (c *Client) referenceChannelMessages(ctx context.Context, tools toolset, wo
 }
 
 func (c *Client) referenceThreadMessages(ctx context.Context, tools toolset, workspaceID, channelID, threadTS string, current func() (bool, error)) (threadPage, error) {
-	raw, revoked, err := c.callThread(ctx, tools.readThread, map[string]any{
+	raw, revoked, err := c.callMessages(ctx, tools.readThread, map[string]any{
 		"channel_id": channelID,
 		"thread_ts":  threadTS,
 	}, current)

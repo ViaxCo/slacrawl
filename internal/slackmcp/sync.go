@@ -106,7 +106,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 	summary.Users = userCount
 	var coverage messageCoverage
 	for _, channel := range channels {
-		work, selected, err := st.BeginMCPHistory(ctx, store.MCPHistoryScope{
+		history, selected, err := st.BeginMCPHistory(ctx, store.MCPHistoryScope{
 			WorkspaceID: workspaceID, ChannelID: channel.ID, Adapter: string(tools.provider), Since: normalizeTimestamp(opts.Since),
 		}, store.MCPHistoryOptions{Full: opts.Full, LatestOnly: opts.LatestOnly})
 		if err != nil {
@@ -115,8 +115,19 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		if !selected {
 			continue
 		}
-		enforceRetention := work.EnforceRetention
-		channelResult, err := client.channelMessages(ctx, tools, workspaceID, channel.ID, work.Oldest)
+		enforceRetention := history.EnforceRetention
+		current := func() (bool, error) { return st.MCPHistoryCurrent(ctx, history) }
+		channelResult, err := client.channelMessages(ctx, tools, workspaceID, channel.ID, history.Oldest, current)
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return summary, cancelErr
+		}
+		owned, checkErr := current()
+		if checkErr != nil {
+			return summary, persistenceError(checkErr)
+		}
+		if !owned || channelResult.revoked {
+			return summary, store.ErrMCPHistorySuperseded
+		}
 		if err != nil {
 			return summary, fmt.Errorf("read MCP channel: %w", err)
 		}
@@ -127,7 +138,10 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		if channel.Kind == "" {
 			channel.Kind = "mcp_channel"
 		}
-		if err := st.EnsureChannel(ctx, toStoreChannel(workspaceID, channel, now)); err != nil {
+		if _, err := st.ApplyWriteBatch(ctx, store.WriteBatch{
+			MCPHistoryGuard: &history,
+			Channels:        []store.Channel{toStoreChannel(workspaceID, channel, now)},
+		}); err != nil {
 			return summary, persistenceError(err)
 		}
 		summary.Channels++
@@ -135,7 +149,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		ordinaryThreads := opts.Since == "" && tools.readThread != ""
 		pendingThreads := map[string]store.ThreadWork{}
 		if ordinaryThreads {
-			work, err := st.PrepareThreadWork(ctx, SourceName, workspaceID, channel.ID, nil)
+			work, err := st.PrepareMCPThreadWork(ctx, history)
 			if err != nil {
 				return summary, persistenceError(err)
 			}
@@ -145,7 +159,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		}
 		threadRoots := map[string]struct{}{}
 		var returnedTS []string
-		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, min(len(channelResult.Messages), maxMessageBatchSize))}
+		batch := store.WriteBatch{MCPHistoryGuard: &history, Messages: make([]store.MessageWrite, 0, min(len(channelResult.Messages), maxMessageBatchSize))}
 		if ordinaryThreads {
 			// Keep admitted child evidence with its history batch even if a later
 			// batch fails before retained-root discovery can run.
@@ -181,7 +195,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 				}
 			}
 		}
-		if len(batch.Messages) > 0 {
+		if len(batch.Messages) > 0 || len(channelResult.Messages) == 0 {
 			if err := writeHistoryBatch(); err != nil {
 				return summary, err
 			}
@@ -189,12 +203,12 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		// History owns its checkpoint independently of reply completion. A later
 		// reply/channel failure must not erase an already committed history scan.
 		if !channelResult.coverage.more && !channelResult.coverage.limited {
-			completed, err := st.CompleteMCPHistory(ctx, work, channelResult.LatestTS)
+			completed, err := st.CompleteMCPHistory(ctx, history, channelResult.LatestTS)
 			if err != nil {
 				return summary, persistenceError(err)
 			}
 			if !completed {
-				return summary, errors.New("MCP history attempt was superseded; retry sync to complete current history work")
+				return summary, store.ErrMCPHistorySuperseded
 			}
 		}
 		if tools.readThread == "" {

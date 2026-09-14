@@ -267,7 +267,7 @@ ID is not sent to custom origins; configure a dedicated `account_id_env` when
 the custom server needs one. Explicit custom-server tokens and stdio remain
 supported.
 
-`max_pages` bounds the text connector's users, channels, channel-history, and thread pagination loops and the native reference adapter's users/channels loops; hitting the bound returns an error instead of silently accepting an incomplete page set. Native history/replies tools do not accept pagination arguments. The Codex HTTP connector accepts at most 20 channel or user search results per request. With `include_dms` omitted/true, explicit channel IDs avoid global channel and user enumeration. Normal MCP sync overlaps the latest stored message timestamp per channel by one hour and rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply; `--full` removes the local channel cursor, while `--latest-only` skips channels with no local history. MCP is an explicit source and is not included in `--source all`.
+`max_pages` bounds the text connector's users, channels, channel-history, and thread pagination loops and the native reference adapter's users/channels loops; hitting the bound returns an error instead of silently accepting an incomplete page set. Native history/replies tools do not accept pagination arguments. The Codex HTTP connector accepts at most 20 channel or user search results per request. With `include_dms` omitted/true, explicit channel IDs avoid global channel and user enumeration. Normal MCP sync retries the pending checkpoint interval or overlaps the completed history-response watermark by one hour, applying current retention; stored message maxima do not establish coverage. It also rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply. `--full` removes incremental bounds, while `--latest-only` uses retained non-draft history or retention-seed eligibility. MCP is an explicit source and is not included in `--source all`.
 
 The text connector's channel search response may omit privacy metadata. With `include_dms` omitted/true, those channels remain locally searchable with kind `mcp_channel`, recording unknown classification. Legacy `publish` still includes these archive rows; that kind is not an export privacy filter.
 
@@ -343,11 +343,19 @@ over `--full` and leaves the ordinary checkpoint and thread backlog untouched.
 
 History completion is committed after history writes and before replies. A later
 reply or channel failure therefore preserves completed history while keeping
-workspace freshness unchanged. A newer attempt can supersede an older revision;
-the older invocation then reports a retryable failure instead of recording
-successful completion. This does not cancel an in-flight request or undo messages
-already committed by the older response. History progress itself does not advance
-status freshness.
+workspace freshness unchanged. A newer attempt supersedes the older history
+revision. Checks around each history tools/call discard revoked responses before
+parsing or further text pagination. Metadata, thread preparation, message batches
+and later history-derived discovery also check ownership in their write
+transaction, including empty history outcomes. The older invocation reports a
+retryable failure instead of admitting those stale writes.
+
+The matching completed revision still permits discovery after history completion.
+Previously committed batches remain; an in-flight call is not canceled and no new
+transport retry is added. Workspace/user catalogs, independent queued replies,
+no-tool tombstone reconciliation and whole-Sync workspace publication after
+completed history are outside this history-write guard. History progress itself
+does not advance status freshness.
 
 These local checkpoints are excluded from Git share exports and imports. Merge
 preserves the receiver's existing checkpoints; whole-snapshot restore clears them.
@@ -383,10 +391,12 @@ and requires a connector with thread support before retrying. With no pending
 work, the existing behavior remains. Explicit Since does not inspect or clean
 the ordinary queue.
 
-Each thread request and write checks the queued generation and live parent.
-Deletion or renewal stops stale pagination and discards the response after the
-in-flight request returns; it does not immediately cancel that request or undo
-earlier committed history or parent writes. Another writer's renewed work can
+Replies with queued work check its generation and live parent around requests
+and in writes. Scoped replies without queued work have no generation guard;
+that ownership boundary remains separate. Deletion or renewal stops stale
+pagination and discards the response after the in-flight request returns; it does
+not immediately cancel that request or undo earlier committed history or parent
+writes. Another writer's renewed work can
 remain pending even when the current sync records successful freshness.
 
 Complete replies retire their matching job even if the enclosing history is

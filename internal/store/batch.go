@@ -20,6 +20,9 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 	if _, err := checkAPIHistory(ctx, dbtx, batch.HistoryGuard); err != nil {
 		return WriteBatchResult{}, err
 	}
+	if err := checkMCPHistory(ctx, dbtx, batch.MCPHistoryGuard); err != nil {
+		return WriteBatchResult{}, err
+	}
 	if batch.ThreadGuard != nil {
 		current, err := threadWorkCurrent(ctx, dbtx, *batch.ThreadGuard)
 		if err != nil {

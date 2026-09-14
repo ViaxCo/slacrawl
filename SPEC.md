@@ -665,8 +665,24 @@ history batches commit, `CompleteMCPHistory` may update only the current pending
 revision. It preserves the previous latest on empty or older responses and runs
 before thread traversal. Incomplete history retains its logical pending interval;
 ordinary retries apply current retention even after Full. Since precedes Full and
-has an isolated checkpoint. Superseded completion is an explicit non-success;
-it does not cancel in-flight requests or undo earlier committed message writes.
+has an isolated checkpoint. Superseded history is an explicit non-success.
+
+Check cancellation and the history revision before and after each native or text
+history tools/call, before parsing or continuing text pagination. Recheck after
+materialization. Channel metadata, thread preparation, history batches (including
+empty outcomes), tombstone retirement and later history-derived discovery check
+that revision inside their write transaction. A newer pending or completed
+revision rejects these writes and discards uncommitted materialization. The
+matching completed revision remains current for discovery after history
+completion, preserving the order before replies and their later failures.
+
+This does not cancel an already dispatched call, add transport retries or undo
+earlier committed batches. Workspace/user catalogs precede this per-channel
+owner. Queued replies retain their independent thread-generation guard; scoped
+replies without queued work remain a separate ownership gap. No-tool
+reconciliation independently validates current live work and stored tombstones.
+Whole-Sync workspace publication after completed history is not fenced by this
+history-write revision.
 
 Exclude only this exact source/type from freshness and shared progress. Merge
 preserves receiver-local records; Restore clears them and cannot import foreign
@@ -722,8 +738,8 @@ unchanged. API history continues to own its separate requested horizon.
     themselves returned in history, using final stored ownership and reply/child
     evidence plus positive page hints; do not follow a returned child to an
     unreturned parent or read/change ordinary pending work
-11. check generation and live ownership before and after every native or text
-    thread request, before each parent/reply transaction and at completion;
+11. for replies with queued work, check generation and live ownership before and
+    after each native or text request, each parent/reply transaction and completion;
     revoked work discards uncommitted materialization and stops pagination,
     preserving earlier commits and any newer job
 12. during ordinary sync without a thread tool, validate selected pending work

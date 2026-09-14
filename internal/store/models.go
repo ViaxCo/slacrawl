@@ -99,6 +99,7 @@ type WriteBatch struct {
 	SyncStates               []SyncStateWrite
 	SyncStateDeletes         []SyncStateDelete
 	HistoryGuard             *APIHistoryAttempt
+	MCPHistoryGuard          *MCPHistoryWork
 	PendingThreads           []ThreadWork
 	ThreadGuard              *ThreadWork
 	ThreadDiscovery          *ThreadWorkDiscovery
