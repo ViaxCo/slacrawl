@@ -43,11 +43,31 @@ Replies require an explicitly selected parent. Channels need unambiguous retaine
 native public-channel flags as well as a public stored kind; sparse or archived
 MCP metadata without those flags remains unqualified.
 
-There is no selection command, output writer or publication integration yet.
+There is no selection command or publication integration yet.
 Current channel type cannot prove that a conversation was never a DM, and kept
 or replacement text can quote private content. Selection, labels and content
 review remain the operator's responsibility; this is not a complete sanitizer.
 Legacy snapshot publishing and its DM-exclusion gate remain unchanged.
+
+### Internal artifact writer and verifier
+
+The internal artifact API writes an explicit expected projection into a fresh
+directory containing only `manifest.json` and `messages.jsonl`. The manifest
+records labels and IDs, referenced author IDs and payload checksum/counts. It
+does not include private selection bindings, raw payloads or profiles. A caller
+supplies the producer revision; matching that value is not authentication.
+
+Writing refuses an existing destination, including symlinks. Files are created
+exclusively with private permissions, checked through write/sync/close, then
+independently reopened and verified against the expected fields and exact
+canonical JSON profile. Verification rejects extra files, symlinks, changed
+identities and field changes even when someone updates the payload checksum.
+Failed output stays in place for inspection; choose a new destination for a new
+attempt. There is no recursive cleanup or atomic/crash-durability guarantee.
+
+The receipt covers bytes observed during verification only. It does not certify
+DM origin or quoted content, authorize publication, or protect later file edits.
+This API does not add a command or connect the artifact to Git publishing.
 
 ## Configure the archive
 

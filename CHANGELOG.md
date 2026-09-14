@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an internal two-file projection artifact writer and independent verifier. Exclusively create a fresh destination, preserve explicit message fields and nullable values, and verify canonical JSON, expected content, checksums and file identities before returning a receipt. Failed output remains for inspection; this adds no CLI/Git integration or publication approval and makes no atomic visibility or crash-durability claim.
+
 - Add an internal read-only selection core for future export projections. Bind explicit workspace/channel/message rows, require retained native public-channel evidence and selected thread parents, and resolve only explicit labels and message fields with keep/replace text choices. Private plans are serializable; no CLI, output writer or publication path is added, and current type evidence does not certify historical origin or content safety.
 
 - Reject legacy Git snapshot publishing when `sync.include_dms = false`, before archive initialization, cache locking, Git operations or output writes. Keep the archive local; `--no-commit` and `--no-media` do not bypass the gate. Omitted/true retain unfiltered private snapshot publishing, including already archived DMs and drafts.
