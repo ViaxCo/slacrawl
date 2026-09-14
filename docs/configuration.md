@@ -808,6 +808,18 @@ recorded, nonfatal history skip: sync can finish with partial coverage, but does
 not retry history as though the join succeeded. Doctor's suppression of non-scope
 capability-probe errors is unchanged.
 
+Workspace-bound operations require `auth.test` to identify a nonblank workspace
+after trimming whitespace. A configured or requested workspace cannot replace
+that identity. A successful response with an unbound primary identity stops sync
+or Tail; an unbound optional user identity stops sync and repair before writes.
+Concrete optional-user authentication errors still allow bot-only history.
+Doctor rejects an unbound bot identity, reports an unbound user as unavailable,
+and uses the canonical user workspace ID for DM probing.
+
+Use a workspace-scoped bot or user token. An enterprise ID may accompany a valid
+workspace ID but cannot replace it; organization-token workspace resolution is
+not supported. The existing `users.list` request leaves `team_id` empty.
+
 ### API history completeness
 
 Native history and replies pages must report `ok: true` before any message on

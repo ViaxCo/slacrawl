@@ -2138,66 +2138,71 @@ func TestDoctorRequiresNativeAuthSuccess(t *testing.T) {
 }
 
 func TestOptionalNativeAuthFailureKeepsBotHistory(t *testing.T) {
-	for _, repair := range []bool{false, true} {
-		t.Run(fmt.Sprintf("repair=%t", repair), func(t *testing.T) {
-			ctx := context.Background()
-			st := mustStore(t)
-			defer func() { require.NoError(t, st.Close()) }()
-			now := time.Unix(1710000100, 0).UTC()
-			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Kind: "public_channel", UpdatedAt: now}))
-			require.NoError(t, st.SetSyncState(ctx, SourceBot, "workspace", "T123", "2020-01-01T00:00:00Z"))
-			require.NoError(t, st.SetSyncState(ctx, "doctor", "threads", "coverage", "partial"))
-			require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|legacy", "retained"))
-			beforeMarkers := repairKeyRows(t, st, "select * from sync_state order by source_name,entity_type,entity_id")
-			var calls []string
-			client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
-				calls = append(calls, r.URL.Path+":"+form.Get("token"))
-				if form.Get("token") == "fixture-user" {
-					require.Equal(t, "/auth.test", r.URL.Path)
-					return json.RawMessage(`{"ok":null,"team_id":"T123","team":"optional-auth-canary","user_id":"U123"}`), nil
+	for _, nativeError := range []bool{false, true} {
+		for _, repair := range []bool{false, true} {
+			t.Run(fmt.Sprintf("native-error=%t/repair=%t", nativeError, repair), func(t *testing.T) {
+				ctx := context.Background()
+				st := mustStore(t)
+				defer func() { require.NoError(t, st.Close()) }()
+				now := time.Unix(1710000100, 0).UTC()
+				require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Kind: "public_channel", UpdatedAt: now}))
+				require.NoError(t, st.SetSyncState(ctx, SourceBot, "workspace", "T123", "2020-01-01T00:00:00Z"))
+				require.NoError(t, st.SetSyncState(ctx, "doctor", "threads", "coverage", "partial"))
+				require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|legacy", "retained"))
+				beforeMarkers := repairKeyRows(t, st, "select * from sync_state order by source_name,entity_type,entity_id")
+				var calls []string
+				client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
+					calls = append(calls, r.URL.Path+":"+form.Get("token"))
+					if form.Get("token") == "fixture-user" {
+						require.Equal(t, "/auth.test", r.URL.Path)
+						if nativeError {
+							return json.RawMessage(`{"ok":false,"error":"invalid_auth","team_id":"T123","team":"optional-auth-canary"}`), nil
+						}
+						return json.RawMessage(`{"ok":null,"team_id":"T123","team":"optional-auth-canary","user_id":"U123"}`), nil
+					}
+					require.Equal(t, "fixture-bot", form.Get("token"))
+					switch r.URL.Path {
+					case "/auth.test", "/users.list":
+						return primaryOwnerResponse(r.URL.Path), nil
+					case "/conversations.list":
+						require.Equal(t, "public_channel,private_channel", form.Get("types"))
+						return primaryOwnerResponse(r.URL.Path), nil
+					case "/conversations.history":
+						return json.RawMessage(`{"ok":true,"messages":[{"ts":"1710000000.000000","text":"bot parent","reply_count":1}]}`), nil
+					default:
+						t.Fatalf("unexpected data request %s", r.URL.Path)
+						return nil, nil
+					}
+				}).WithDMPolicy(admission.Include)
+				client.now = func() time.Time { return now }
+				if repair {
+					require.NoError(t, client.repairWorkspace(ctx, st, "T123"))
+					require.Equal(t, []string{"/auth.test:fixture-user", "/conversations.list:fixture-bot", "/conversations.history:fixture-bot"}, calls)
+				} else {
+					require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123", Full: true}))
+					require.Equal(t, []string{"/auth.test:fixture-bot", "/auth.test:fixture-user", "/conversations.list:fixture-bot", "/conversations.history:fixture-bot", "/users.list:fixture-bot"}, calls)
 				}
-				require.Equal(t, "fixture-bot", form.Get("token"))
-				switch r.URL.Path {
-				case "/auth.test", "/users.list":
-					return primaryOwnerResponse(r.URL.Path), nil
-				case "/conversations.list":
-					require.Equal(t, "public_channel,private_channel", form.Get("types"))
-					return primaryOwnerResponse(r.URL.Path), nil
-				case "/conversations.history":
-					return json.RawMessage(`{"ok":true,"messages":[{"ts":"1710000000.000000","text":"bot parent","reply_count":1}]}`), nil
-				default:
-					t.Fatalf("unexpected data request %s", r.URL.Path)
-					return nil, nil
+				require.Equal(t, []map[string]any{{"channel_id": "C123", "ts": "1710000000.000000", "text": "bot parent", "source_name": SourceBot}}, repairKeyRows(t, st, "select channel_id,ts,text,source_name from messages"))
+				coverage, err := st.GetSyncState(ctx, "doctor", "threads", "coverage")
+				require.NoError(t, err)
+				require.Equal(t, "partial", coverage)
+				for _, row := range beforeMarkers {
+					if repair || row["entity_type"] == "thread_skip" {
+						require.Contains(t, repairKeyRows(t, st, "select * from sync_state"), row)
+					}
 				}
-			}).WithDMPolicy(admission.Include)
-			client.now = func() time.Time { return now }
-			if repair {
-				require.NoError(t, client.repairWorkspace(ctx, st, "T123"))
-				require.Equal(t, []string{"/auth.test:fixture-user", "/conversations.list:fixture-bot", "/conversations.history:fixture-bot"}, calls)
-			} else {
-				require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123", Full: true}))
-				require.Equal(t, []string{"/auth.test:fixture-bot", "/auth.test:fixture-user", "/conversations.list:fixture-bot", "/conversations.history:fixture-bot", "/users.list:fixture-bot"}, calls)
-			}
-			require.Equal(t, []map[string]any{{"channel_id": "C123", "ts": "1710000000.000000", "text": "bot parent", "source_name": SourceBot}}, repairKeyRows(t, st, "select channel_id,ts,text,source_name from messages"))
-			coverage, err := st.GetSyncState(ctx, "doctor", "threads", "coverage")
-			require.NoError(t, err)
-			require.Equal(t, "partial", coverage)
-			for _, row := range beforeMarkers {
-				if repair || row["entity_type"] == "thread_skip" {
-					require.Contains(t, repairKeyRows(t, st, "select * from sync_state"), row)
+				pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+				require.NoError(t, err)
+				if repair {
+					require.Empty(t, pending)
+				} else {
+					require.Len(t, pending, 1)
+					require.Equal(t, "1710000000.000000", pending[0].TS)
+					require.NotEmpty(t, pending[0].Generation)
 				}
-			}
-			pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
-			require.NoError(t, err)
-			if repair {
-				require.Empty(t, pending)
-			} else {
-				require.Len(t, pending, 1)
-				require.Equal(t, "1710000000.000000", pending[0].TS)
-				require.NotEmpty(t, pending[0].Generation)
-			}
-			assertAdmissionCanariesAbsent(t, st, "", "optional-auth-canary")
-		})
+				assertAdmissionCanariesAbsent(t, st, "", "optional-auth-canary")
+			})
+		}
 	}
 }
 

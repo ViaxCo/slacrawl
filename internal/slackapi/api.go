@@ -131,22 +131,27 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 		if err != nil {
 			return diag, err
 		}
-		diag.BotAuthTeamID = resp.TeamID
+		workspaceID, err := authenticatedWorkspaceID(resp, "")
+		if err != nil {
+			return diag, err
+		}
+		diag.BotAuthTeamID = workspaceID
 		diag.BotAuthTeam = resp.Team
 		diag.AppTailAvailable = c.tokens.App != ""
 	}
 
 	if c.tokens.User != "" {
 		userAuth, err := c.authTest(ctx, c.tokens.User)
+		var workspaceID string
 		if err == nil {
-			_, err = authenticatedWorkspaceID(userAuth, diag.BotAuthTeamID)
+			workspaceID, err = authenticatedWorkspaceID(userAuth, diag.BotAuthTeamID)
 		}
 		if err == nil {
 			diag.UserAuthAvailable = true
 			diag.ThreadCoverage = "full"
 			if c.dmPolicy.Enabled(c.tokens.User != "") {
 				diag.DMsIncluded = true
-				diag.DMsMissingScope = c.dmMissingScope(ctx, userAuth.TeamID)
+				diag.DMsMissingScope = c.dmMissingScope(ctx, workspaceID)
 			}
 		} else {
 			diag.UserAuthError = authErrorReason(err)
@@ -354,6 +359,9 @@ func (c *Client) fetchChannelsWithToken(ctx context.Context, token string, works
 
 func authenticatedWorkspaceID(auth *slack.AuthTestResponse, requested string) (string, error) {
 	authTeamID := strings.TrimSpace(auth.TeamID)
+	if authTeamID == "" {
+		return "", errors.New("auth.test did not identify a workspace; use a workspace-scoped bot or user token")
+	}
 	requested = strings.TrimSpace(requested)
 	if requested != "" {
 		if authTeamID != requested {

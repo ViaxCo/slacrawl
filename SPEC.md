@@ -474,6 +474,20 @@ history skips; only a successful join permits the history retry. Auth response
 headers remain private cloned metadata, excluded from archived JSON. Socket Mode
 still owns the bot SDK client; HTTP operations use explicit token strings.
 
+Workspace-bound API operations also require a nonblank `auth.test` team ID after
+trimming whitespace. A requested workspace only checks that identity; it never
+supplies a missing authenticated identity. Successful but unbound primary auth
+stops Sync and Tail before archive writes or Socket Mode startup. Successful but
+unbound optional user auth stops Sync and repair before writes, while concrete
+optional-user authentication failures retain bot-only fallback. Doctor treats an
+unbound bot identity as fatal and an unbound user identity as unavailable, and
+uses the canonical user workspace ID for its DM probe.
+
+Use workspace-scoped bot or user tokens. A valid workspace ID can accompany an
+enterprise ID, but the enterprise ID alone does not identify a workspace. This
+does not add organization-token resolution or a configured-workspace fallback;
+the existing `users.list` request still leaves `team_id` empty.
+
 ### Slack export import
 
 1. Read all four workspace JSON catalog roles and reserve every ID/name locator
