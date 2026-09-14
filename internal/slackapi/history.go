@@ -73,7 +73,6 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		if source.retainedThreads && work == nil {
 			return nil
 		}
-		syncedThreads[threadTS] = struct{}{}
 		threadKey := workspaceID + "|" + channel.ID + "|" + threadTS
 		saveSkip := func(reason string) (bool, error) {
 			if work == nil {
@@ -87,11 +86,18 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		}
 		if source.threadSkip != nil {
 			if reason, ok := source.threadSkip.SkipReason(channel.ID, threadSkipScope(channel)); ok {
-				_, err := saveSkip(reason)
+				saved, err := saveSkip(reason)
+				if saved && err == nil {
+					syncedThreads[threadTS] = struct{}{}
+				}
 				return err
 			}
 		}
 		outcome, err := c.syncThread(ctx, st, workspaceID, channel.ID, threadTS, enforceRetention, now, work)
+		if outcome == threadSyncUnattempted {
+			return err
+		}
+		syncedThreads[threadTS] = struct{}{}
 		if err != nil {
 			if isThreadRepliesSkipped(err) {
 				saved, saveErr := saveSkip(channelSkipReason(err))
@@ -269,21 +275,26 @@ type threadSyncResult uint8
 const (
 	threadSyncComplete threadSyncResult = iota
 	threadSyncRevoked
+	threadSyncUnattempted
 )
 
 func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID string, channelID string, threadTS string, enforceRetention bool, now time.Time, work *store.ThreadWork) (threadSyncResult, error) {
 	cursor := ""
 	seen := map[string]bool{}
+	// Rejection before the first request must leave a later page free to
+	// process newly admitted work; revocation after a request still counts.
+	revokedResult := threadSyncUnattempted
 	for {
 		if work != nil {
 			current, err := st.ThreadWorkCurrent(ctx, *work)
 			if err != nil {
-				return threadSyncComplete, err
+				return revokedResult, err
 			}
 			if !current {
-				return threadSyncRevoked, nil
+				return revokedResult, nil
 			}
 		}
+		revokedResult = threadSyncRevoked
 		resp, err := c.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{
 			ChannelID: channelID,
 			Timestamp: threadTS,

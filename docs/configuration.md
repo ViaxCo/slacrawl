@@ -624,9 +624,16 @@ page arrives later. If that page admits thread evidence after cancellation, its
 transaction queues fresh work while preserving every existing generation, including
 work another sync created after this sync prepared. Ordinary replies requests use
 only generations prepared or newly queued by this invocation; a competing sync
-keeps ownership of its response and skip state. Roots successfully completed
-during this sync stay excluded. A revoked attempt
-is not completion and can leave newly queued work for the next sync.
+keeps ownership of its response and skip state across those history commits.
+Roots successfully completed during this sync stay excluded. If a generation
+is rejected before any replies request or committed cached skip, a later page
+can admit and process fresh work. Revocation after a request still counts as an
+attempt and can leave newly queued work for the next sync.
+
+Starting a new ordinary preparation renews selected retained generations, even
+without replies capability, and can supersede an earlier replies worker. The
+replacement work remains pending with partial coverage. Capability-aware thread
+preparation and concurrent-sync fairness remain follow-up work.
 
 Successful replies retire only the generation that was processed. Retained
 requests and writes recheck that generation and the parent's live ownership;

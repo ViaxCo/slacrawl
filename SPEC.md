@@ -395,14 +395,17 @@ Share config:
 10. for bot-primary history only, when `auto_join` is enabled, attempt public-channel join and retry once on `not_in_channel`; user-primary history never joins and does not suppress ordinary `missing_scope` failures
 11. backfill thread replies when the user token authenticates to the selected workspace; reuse primary user authentication without another auth call
     - ordinary sync with empty `Since`, including Full, durably queues eligible retained roots before history and page-discovered roots with their message transaction; post-history discovery runs after completeness checks
+    - starting ordinary preparation renews selected retained generations even without replies capability; it can supersede earlier work, which remains durably pending with partial coverage
     - use `api-user`-owned workspace/channel/root jobs with generation-conditional completion; preserve jobs when hints disappear, replies fail or replies capability is unavailable
     - reconcile retained work before completed history coverage; do not re-enqueue roots completed during the same attempt
     - recheck every scoped candidate in the history write transaction: admitted revival after cancellation queues fresh work, all extant generations remain unchanged, and revoked completion does not exclude later work
     - ordinary replies require a generation prepared or newly queued by this invocation; an unowned page hint does not claim another sync's work or prevent a later page from acquiring canceled work
+    - deduplicate only after a replies attempt starts or a cached skip commits; initial generation rejection leaves later admitted work eligible, while revocation after a request still consumes the attempt
     - explicit Since, Full+Since, Tail repair and excluded conversations leave ordinary jobs untouched
     - committed stored tombstones (nonempty `deleted_ts` or `subtype=message_deleted`) and purge cancel matching jobs; preparation reconciles already-stored tombstones before fetching
     - hidden deletion events are not returned by Slack history polling; do not infer deletion from absent hints or claim polling discovers deletions
     - pending jobs stay local across Git share, do not advance freshness timestamps, and keep API Doctor thread coverage partial; MCP consumption remains a separate change
+    - capability-aware thread preparation and concurrent-sync fairness remain a separate follow-up; history-commit preservation does not change preparation renewal
 12. validate every message channel ID in the complete history/replies page, including nested message, previous-message, and root fields, before normalizing or writing that page; earlier pages remain resumable on failure
    - missing message channel IDs inherit the requested conversation
    - after identity validation, require a nonblank top-level timestamp under every policy, including periodic repair; preserve accepted timestamp bytes

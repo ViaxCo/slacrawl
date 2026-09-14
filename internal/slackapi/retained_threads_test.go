@@ -638,6 +638,120 @@ func TestRetainedThreadUnownedHintCanAcquireLaterPage(t *testing.T) {
 	require.Equal(t, []map[string]any{{"thread_ts": rootTS, "source_name": SourceUser}}, rows)
 }
 
+func TestRetainedThreadUnattemptedRevocationCanAcquireLaterPage(t *testing.T) {
+	for _, mode := range []string{"replies", "cached-skip"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			st := mustStore(t)
+			defer func() { require.NoError(t, st.Close()) }()
+			const firstTS, secondTS, childTS = "1710000001.000000", "1710000002.000000", "1710000003.000000"
+			retainedOwnerSeed(t, st, firstTS)
+			retainedOwnerSeed(t, st, secondTS)
+			now := time.Unix(1710000400, 0).UTC()
+			histories := 0
+			var calls []string
+			var preparedSecond store.ThreadWork
+			client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
+				switch r.URL.Path {
+				case "/conversations.history":
+					histories++
+					require.Equal(t, "C123", form.Get("channel"))
+					calls = append(calls, "history:"+form.Get("cursor"))
+					second := map[string]any{"ts": secondTS, "text": "revived second root", "reply_count": 1}
+					if histories == 1 {
+						require.Empty(t, form.Get("cursor"))
+						pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+						require.NoError(t, err)
+						require.Len(t, pending, 2)
+						require.Equal(t, secondTS, pending[1].TS)
+						preparedSecond = pending[1]
+						return map[string]any{"ok": true, "messages": []any{
+							map[string]any{"ts": firstTS, "text": "first root", "reply_count": 1}, second,
+						}, "response_metadata": map[string]any{"next_cursor": "next-history"}}, nil
+					}
+					require.Equal(t, 2, histories)
+					require.Equal(t, "next-history", form.Get("cursor"))
+					require.Equal(t, []string{"history:", "replies:" + firstTS, "history:next-history"}, calls)
+					current, err := st.ThreadWorkCurrent(ctx, preparedSecond)
+					require.NoError(t, err)
+					require.False(t, current)
+					rows, err := st.QueryReadOnly(ctx, "select deleted_ts from messages where ts='"+secondTS+"'")
+					require.NoError(t, err)
+					require.Equal(t, []map[string]any{{"deleted_ts": secondTS}}, rows)
+					rows, err = st.QueryReadOnly(ctx, "select * from sync_state where entity_type='thread_skip' and entity_id='T123|C123|"+secondTS+"'")
+					require.NoError(t, err)
+					require.Empty(t, rows, "the canceled generation cannot commit a cached skip")
+					return map[string]any{"ok": true, "messages": []any{second}}, nil
+				case "/conversations.replies":
+					require.Equal(t, "C123", form.Get("channel"))
+					require.Empty(t, form.Get("cursor"))
+					calls = append(calls, "replies:"+form.Get("ts"))
+					if form.Get("ts") == firstTS {
+						require.Equal(t, 1, histories)
+						// Both page jobs are committed before A's request cancels B.
+						require.NoError(t, st.MarkMessageDeleted(ctx, store.Message{
+							WorkspaceID: "T123", ChannelID: "C123", TS: secondTS, DeletedTS: secondTS,
+							SourceName: SourceBot, SourceRank: 2, RawJSON: `{}`, UpdatedAt: now,
+						}, nil))
+						if mode == "cached-skip" {
+							return map[string]any{"ok": false, "error": "missing_scope"}, nil
+						}
+						return map[string]any{"ok": true, "messages": []any{}}, nil
+					}
+					require.Equal(t, "replies", mode, "cached missing_scope must avoid B's RPC")
+					require.Equal(t, secondTS, form.Get("ts"))
+					require.Equal(t, 2, histories)
+					pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+					require.NoError(t, err)
+					require.Len(t, pending, 1)
+					require.Equal(t, secondTS, pending[0].TS)
+					require.NotEqual(t, preparedSecond.Generation, pending[0].Generation)
+					return map[string]any{"ok": true, "messages": []any{
+						map[string]any{"ts": childTS, "thread_ts": secondTS, "text": "later B reply <@U1>"},
+					}}, nil
+				}
+				return primaryOwnerResponse(r.URL.Path), nil
+			})
+			client.now = func() time.Time { return now }
+			require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"}))
+			wantCalls := []string{"history:", "replies:" + firstTS, "history:next-history"}
+			if mode == "replies" {
+				wantCalls = append(wantCalls, "replies:"+secondTS)
+			}
+			require.Equal(t, wantCalls, calls)
+			pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+			require.NoError(t, err)
+			skips, err := st.ListSyncState(ctx, SourceUser, "thread_skip", 20)
+			require.NoError(t, err)
+			rows, err := st.QueryReadOnly(ctx, "select ts,thread_ts,source_name,source_rank from messages where ts='"+childTS+"'")
+			require.NoError(t, err)
+			if mode == "cached-skip" {
+				require.Len(t, pending, 2)
+				require.Equal(t, secondTS, pending[1].TS)
+				require.NotEqual(t, preparedSecond.Generation, pending[1].Generation)
+				current, err := st.ThreadWorkCurrent(ctx, pending[1])
+				require.NoError(t, err)
+				require.True(t, current)
+				require.ElementsMatch(t, []store.SyncStateRow{
+					{SourceName: SourceUser, EntityType: "thread_skip", EntityID: "T123|C123|" + firstTS, Value: "missing_scope"},
+					{SourceName: SourceUser, EntityType: "thread_skip", EntityID: "T123|C123|" + secondTS, Value: "missing_scope"},
+				}, skips)
+				require.Empty(t, rows)
+			} else {
+				require.Empty(t, pending)
+				require.Empty(t, skips)
+				require.Equal(t, []map[string]any{{"ts": childTS, "thread_ts": secondTS, "source_name": SourceUser, "source_rank": int64(1)}}, rows)
+			}
+			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			require.NoError(t, err)
+			require.Equal(t, historyCoverage{Complete: true, Latest: "1710000400.000000"}, coverage)
+			status, err := st.Status(ctx)
+			require.NoError(t, err)
+			require.Equal(t, map[bool]string{true: "partial", false: "full"}[mode == "cached-skip"], status.ThreadState)
+		})
+	}
+}
+
 func TestTailDeletionRetiresPendingThread(t *testing.T) {
 	st := mustStore(t)
 	defer func() { require.NoError(t, st.Close()) }()
