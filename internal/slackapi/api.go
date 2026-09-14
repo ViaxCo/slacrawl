@@ -32,17 +32,18 @@ func defaultHTTPClient() *http.Client {
 }
 
 type Diagnostics struct {
-	BotConfigured     bool   `json:"bot_configured"`
-	AppConfigured     bool   `json:"app_configured"`
-	UserConfigured    bool   `json:"user_configured"`
-	ThreadCoverage    string `json:"thread_coverage"`
-	DMsIncluded       bool   `json:"dms_included"`
-	DMsMissingScope   string `json:"dms_missing_scope,omitempty"`
-	BotAuthTeamID     string `json:"bot_auth_team_id,omitempty"`
-	BotAuthTeam       string `json:"bot_auth_team,omitempty"`
-	UserAuthAvailable bool   `json:"user_auth_available"`
-	UserAuthError     string `json:"user_auth_error,omitempty"`
-	AppTailAvailable  bool   `json:"app_tail_available"`
+	BotConfigured        bool   `json:"bot_configured"`
+	AppConfigured        bool   `json:"app_configured"`
+	UserConfigured       bool   `json:"user_configured"`
+	ThreadCoverage       string `json:"thread_coverage"`
+	ThreadCoverageReason string `json:"thread_coverage_reason,omitempty"`
+	DMsIncluded          bool   `json:"dms_included"`
+	DMsMissingScope      string `json:"dms_missing_scope,omitempty"`
+	BotAuthTeamID        string `json:"bot_auth_team_id,omitempty"`
+	BotAuthTeam          string `json:"bot_auth_team,omitempty"`
+	UserAuthAvailable    bool   `json:"user_auth_available"`
+	UserAuthError        string `json:"user_auth_error,omitempty"`
+	AppTailAvailable     bool   `json:"app_tail_available"`
 }
 
 type SyncOptions struct {

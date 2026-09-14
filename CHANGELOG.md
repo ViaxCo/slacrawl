@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Explain retained API thread skips or pending work in Doctor's partial-coverage output instead of blaming missing user authentication. Add an optional JSON reason while preserving global/named coverage decisions, authentication results and stored status.
+
 - Preserve legacy API thread-skip diagnostics during bounded or incomplete Full syncs. Require unrestricted channel and DM traversal before bulk cleanup, retain the atomic pending-work guard, and record current-sync partial coverage when admission, scope access or ownership collisions omit work. Successful individual replies still clear their own skips.
 
 - Add internal capture of exact independently verified projection bytes, so later consumers can use immutable manifest/message contents without reopening changed files. Return no usable snapshot on failure; retain the receipt-only verifier path and existing content/publication limits.

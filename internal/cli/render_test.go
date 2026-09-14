@@ -27,6 +27,34 @@ func TestNormalizeValueHandlesTimePointers(t *testing.T) {
 	require.Nil(t, row["missing"])
 }
 
+func TestDoctorCoverageReasonFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name, coverage, reason, want string
+	}{
+		{"absent-reason", "partial", "", "partial"},
+		{"unknown-reason", "partial", "unknown-reason-canary", "partial"},
+		{"full-with-stale-reason", "full", "retained_api_thread_work", "full historical replies"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			diag := map[string]any{"thread_coverage": tc.coverage, "user_auth_available": true}
+			if tc.reason != "" {
+				diag["thread_coverage_reason"] = tc.reason
+			}
+			var output strings.Builder
+			renderBlock(&output, "Doctor", map[string]any{"slack_api": diag})
+			var detail string
+			for _, line := range strings.Split(stripANSI(output.String()), "\n") {
+				if _, after, ok := strings.Cut(line, "thread coverage"); ok {
+					require.Empty(t, detail)
+					detail = strings.TrimSpace(after)
+				}
+			}
+			require.Equal(t, tc.want, detail)
+			require.NotContains(t, output.String(), "unknown-reason-canary")
+		})
+	}
+}
+
 func TestTrimToKeepsValidUTF8(t *testing.T) {
 	// Byte slicing cut multi-byte runes in half, so search and messages output
 	// could emit text that is not valid UTF-8 at all.

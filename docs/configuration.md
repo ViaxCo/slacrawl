@@ -688,6 +688,15 @@ Individual `workspace_api` diagnostics and stored `status.thread_state` remain
 unchanged. Recent channel skips combine `api-bot` and `api-user`, newest first
 with channel-ID tie ordering and one limit of 20.
 
+If retained API work changes global coverage from full to partial, Doctor adds
+`slack_api.thread_coverage_reason = "retained_api_thread_work"` and displays
+`partial: retained API thread skips or pending work`. It does not describe a
+valid user session as missing. An already-partial global auth result keeps the
+authentication explanation, even when retained work also lowers the named
+aggregate. JSON omits an unset reason; `--format log` includes
+`thread_coverage_reason="-"`. With valid user auth and no recognized reason,
+human output reports `partial` without guessing the cause.
+
 ### Retained API threads
 
 Ordinary API sync and `--full` without `--since` revisit eligible roots already

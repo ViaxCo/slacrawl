@@ -189,6 +189,13 @@ Nested `slack_api.thread_coverage` belongs to global-token diagnostics. Top-leve
 `api-user/thread_skip` rows or pending API thread work downgrade either full result to partial in both
 fields, without changing individual workspace diagnostics or persisted status.
 
+When retained work changes global coverage from full to partial, Doctor sets
+optional `slack_api.thread_coverage_reason` to `retained_api_thread_work`.
+Human output names the retained API skips or pending work instead of reporting
+missing user authentication. An already-partial global auth diagnosis keeps its
+original meaning; valid user auth without a recognized reason renders neutral
+`partial`. JSON omits an unset reason; log output includes it as `"-"`.
+
 ### `purge`
 
 Purpose:

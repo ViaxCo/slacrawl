@@ -28,7 +28,16 @@ func renderDoctorBlock(w *strings.Builder, value any) bool {
 		}
 		writeCheck(w, "app tail", truthy(slackAPI["app_tail_available"]), tailReason)
 		coverage := shortValue(slackAPI["thread_coverage"])
-		writeCheck(w, "thread coverage", coverage == "full", ternary(coverage == "full", "full historical replies", "partial without user auth"))
+		coverageDetail := "partial"
+		switch {
+		case coverage == "full":
+			coverageDetail = "full historical replies"
+		case slackAPI["thread_coverage_reason"] == "retained_api_thread_work":
+			coverageDetail = "partial: retained API thread skips or pending work"
+		case !truthy(slackAPI["user_auth_available"]):
+			coverageDetail = "partial without user auth"
+		}
+		writeCheck(w, "thread coverage", coverage == "full", coverageDetail)
 		if truthy(slackAPI["dms_included"]) {
 			missing := shortValue(slackAPI["dms_missing_scope"])
 			if missing == "" {
