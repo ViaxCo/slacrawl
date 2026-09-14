@@ -654,9 +654,40 @@ default), then message channel ID, timestamp, user ID, chosen text, thread
 timestamp and edit timestamp. Text requires an explicit keep or replace choice;
 replacement may be empty. Nullable emitted scalars preserve NULL versus empty.
 Raw payloads, source bindings, deletion/draft metadata and derived content remain
-private. This core has no CLI, file writer or publishing path. Current native
+private. Selection itself has no CLI or publishing path and writes no files. Current native
 type evidence does not establish lifetime DM origin or review quoted private
 content. Operators remain responsible for selection, labels and text choices.
+
+### Projection artifact profile
+
+`WriteProjection` and `VerifyProjection` accept the expected in-memory projection
+and an explicit lowercase 40-hex producer revision. The revision is compared
+exactly, not authenticated. Inputs must have nonempty ordered unique channel and
+message selections with same-channel selected-root closure; no implicit reorder.
+
+The artifact contains exactly `manifest.json` and `messages.jsonl`. The manifest
+contains format/version/revision, workspace identity and explicit label, channel
+identities/labels, sorted unique nonempty referenced author IDs, and the payload
+path, SHA256, byte count and row count. Message rows contain exactly the six
+projection fields, preserving NULL versus empty user/thread/edit values. Both
+files use the closed canonical JSON profile: one compact object plus one LF per
+record, with explicit required arrays and fields. No raw data, profile expansion,
+source or private selection bindings enter the artifact.
+
+The writer exclusively creates a fresh directory with mode 0700, then fixed
+messages/manifest files with mode 0600 and exclusive creation. It checks writes,
+sync and close, then reopens the independent verifier before returning a receipt.
+Failure leaves incomplete output for inspection and returns no receipt. It does
+not overwrite, recursively clean up, or promise atomic visibility/crash durability.
+
+Verification uses a confined opened root, exact entry inventory, distinct regular
+nonsymlink files and pathname/open-handle identity checks. It hashes and parses
+the same handles, checks canonical bytes, exact expected fields and referential
+closure, then rechecks inventory and identity. Bounds derive from expected
+content. A receipt identifies the bytes observed during verification; later
+mutation invalidates that observation. This is not lifetime DM-origin proof,
+content review, producer authentication, or a commit/push authorization gate.
+No CLI, Git integration or schema change is part of this profile.
 
 ### Desktop-local sync
 
