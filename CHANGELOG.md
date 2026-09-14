@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Verify and document importing Slackdump-converted ZIP and directory exports from database and chunk archives. Preserve real synthetic converter fixtures for thread identity, DM exclusion, source/FTS consistency and repeat-import coverage; no importer behavior or upstream dependency changes.
+
 - Track MCP channel-history completion separately from stored messages and replies. Keep failed or incomplete intervals pending, preserve completed empty scans, and retry with current retention bounds. Prevent newer replies or API/Desktop rows from skipping unread history; reject non-finite history timestamps before filtering. Keep checkpoints local to the archive and out of freshness timestamps. First intake after upgrade, fresh import or whole-snapshot restore establishes its own history checkpoint; native server window limits remain unchanged.
 
 - Persist unfinished MCP replies across lost history hints and restarts. Save work identified by archived replies in the same history batch, including before later batch failures. Ordinary sync drains retained work with generation checks around every thread request and write, and requeues work when admitted history revives a canceled parent. Preserve existing generations at each history commit, including jobs created by a concurrent sync. Explicit Since, including Full with Since, selects returned roots using retained child evidence without consuming older backlog. Ordinary sync without a thread tool reconciles stored tombstones before reporting surviving pending work; fresh archives keep their existing behavior.

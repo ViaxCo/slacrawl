@@ -1,0 +1,244 @@
+{
+  "schema": 1,
+  "description": "Synthetic standard Slack exports produced by real Slackdump database and chunk-directory backends. ZIP and directory bytes are preserved exactly; tests do not invoke Slackdump.",
+  "upstream": {
+    "repository": "https://github.com/rusq/slackdump",
+    "commit": "f7319928b0993b23d7e9bd8af5e4c69b6f1d2af4",
+    "tree": "9b0568bc31804ca8be9d4475d6ce9e54b5fba25f",
+    "source_archive_sha256": "7f0d838894c6afcf68cc4ed71299e6e6aa84710a7dd1ca9f2f529e93388717c0"
+  },
+  "recorder": {
+    "sha256": "2c2c21cfa1cd5d4eaa2a614dbeef57aec0488f927c239c4eaffe8f2e66174d62",
+    "workspace": "TTEST",
+    "users": [
+      "UME",
+      "UOTHER"
+    ],
+    "sequence": [
+      "WorkspaceInfo",
+      "Users",
+      "Channels",
+      "ChannelInfo and ChannelUsers before each conversation",
+      "Messages(parent, standalone)",
+      "ThreadMessages(parent, reply one, reply two)"
+    ],
+    "database_completion": "rec.Close, dbp.Finish, conn.Close",
+    "chunks_completion": "rec.Close, erc.Finish, cd.Close"
+  },
+  "conversion": {
+    "go": "1.27.1",
+    "process_timezone": "UTC",
+    "user_timezone": "UTC",
+    "date_zone": "America/Los_Angeles",
+    "commands": [
+      [
+        "slackdump",
+        "convert",
+        "-f",
+        "export",
+        "-files=false",
+        "-avatars=false",
+        "-o",
+        "database/export",
+        "synthetic/database"
+      ],
+      [
+        "slackdump",
+        "convert",
+        "-f",
+        "export",
+        "-files=false",
+        "-avatars=false",
+        "-o",
+        "database/export.zip",
+        "synthetic/database"
+      ],
+      [
+        "slackdump",
+        "convert",
+        "-f",
+        "export",
+        "-files=false",
+        "-avatars=false",
+        "-o",
+        "chunks/export",
+        "synthetic/chunks"
+      ],
+      [
+        "slackdump",
+        "convert",
+        "-f",
+        "export",
+        "-files=false",
+        "-avatars=false",
+        "-o",
+        "chunks/export.zip",
+        "synthetic/chunks"
+      ]
+    ]
+  },
+  "qualification": {
+    "slacrawl_commit": "477f93571ca5ef71689903a3db40843904627e55",
+    "synthetic_only": true,
+    "conversions": 4,
+    "fresh_imports": 6,
+    "strict_repeat": 1,
+    "result": "passed",
+    "capture_sha256": "620188c9b7c44528821c0d5311e1650ce123def6f52fa125ce30cf25482755ce"
+  },
+  "expected_identities": {
+    "CMODERN": [
+      [
+        "1767225600.000001",
+        "slackdump-modern-canary",
+        ""
+      ]
+    ],
+    "CPUBLIC": [
+      [
+        "1767225600.000001",
+        "slackdump-public-parent",
+        "1767225600.000001"
+      ],
+      [
+        "1767225600.000002",
+        "slackdump-public-reply-one",
+        "1767225600.000001"
+      ],
+      [
+        "1767312000.000001",
+        "slackdump-public-reply-two",
+        "1767225600.000001"
+      ],
+      [
+        "1767312000.000002",
+        "slackdump-public-standalone",
+        ""
+      ]
+    ],
+    "DDIRECT": [
+      [
+        "1767225600.000001",
+        "slackdump-dm-canary",
+        ""
+      ]
+    ],
+    "GLEGACY": [
+      [
+        "1767225600.000001",
+        "slackdump-legacy-canary",
+        ""
+      ]
+    ],
+    "GMULTI": [
+      [
+        "1767225600.000001",
+        "slackdump-mpim-canary",
+        ""
+      ]
+    ]
+  },
+  "known_limits": [
+    "Chunk export parent metadata includes the parent itself among three embedded replies references; database export has two references. Both retain exactly eight distinct top-level messages, reply_count2 and correct thread associations. Upstream metadata follow-up: SLACKDUMP-CHUNK-PARENT-REPLY-REFERENCE.",
+    "Explicit include_dms=false normalizes CMODERN to private_channel; omitted/true compatibility retains public_channel with is_private=true. No importer behavior change is made here.",
+    "DM exclusion does not purge prior rows or certify a safe publication. No live Slack capture, attachments or avatar conversion was exercised."
+  ],
+  "files": {
+    "chunks/export.zip": {
+      "bytes": 5393,
+      "sha256": "2fa487478f6a5d9dcc6ac4941b8b415864ce10c639f65d6b135964fc5848bc7b"
+    },
+    "chunks/export/DDIRECT/2025-12-31.json": {
+      "bytes": 630,
+      "sha256": "1398743a1a1306e3309452a4f74b629b7fc22f221edc234bce18085e526e6ddc"
+    },
+    "chunks/export/channels.json": {
+      "bytes": 1734,
+      "sha256": "852e0b71548b901d734c1c5f341054d09b632972048499b265d182f6d9022fa2"
+    },
+    "chunks/export/dms.json": {
+      "bytes": 102,
+      "sha256": "c76aa1556b00da1fc257dc8af3a4c68b7a6b15fd066540bb922c0eb93d49314c"
+    },
+    "chunks/export/groups.json": {
+      "bytes": 868,
+      "sha256": "285b245524015b2fc6efcea98de44b90749c55cd811fcf964ccd1f83d34cf61b"
+    },
+    "chunks/export/legacy/2025-12-31.json": {
+      "bytes": 634,
+      "sha256": "3d62ffc1cfd90a6a2c3c7c4f407384ae43627ebe8b5a71a059085921149514ea"
+    },
+    "chunks/export/modern/2025-12-31.json": {
+      "bytes": 634,
+      "sha256": "b12f39105e051fa0ff42f84845db93c138be186c2d2081ed5ed5decf7ec6844a"
+    },
+    "chunks/export/mpims.json": {
+      "bytes": 866,
+      "sha256": "e91c15df78369cf4295409536639dcf8e76745f49c54990e7ec112d0eaec6bdd"
+    },
+    "chunks/export/multi/2025-12-31.json": {
+      "bytes": 631,
+      "sha256": "63442132cbf67e2133eb58a5024b6ed904bbf08a2eedccb2a36a9dfa8988477f"
+    },
+    "chunks/export/public/2025-12-31.json": {
+      "bytes": 1720,
+      "sha256": "0b0ff6a5f98cdceb9737ab0702d5776048e4d6cd72c559cdab9f85f1199288d3"
+    },
+    "chunks/export/public/2026-01-01.json": {
+      "bytes": 1310,
+      "sha256": "42d2d370d5a3d41a5416c8b6554aa6cad55b4132cb7dc52723eb0874ae7ba7c5"
+    },
+    "chunks/export/users.json": {
+      "bytes": 2351,
+      "sha256": "97070cf4af620625cd83c9fbd884f3e403df907756c84dc8eb9656fadbafc8f0"
+    },
+    "database/export.zip": {
+      "bytes": 5392,
+      "sha256": "716214480f87b9a4e0943bd4429522051f7d56f6863a0118d6201d119bf860f6"
+    },
+    "database/export/DDIRECT/2025-12-31.json": {
+      "bytes": 630,
+      "sha256": "1398743a1a1306e3309452a4f74b629b7fc22f221edc234bce18085e526e6ddc"
+    },
+    "database/export/channels.json": {
+      "bytes": 1734,
+      "sha256": "852e0b71548b901d734c1c5f341054d09b632972048499b265d182f6d9022fa2"
+    },
+    "database/export/dms.json": {
+      "bytes": 102,
+      "sha256": "c76aa1556b00da1fc257dc8af3a4c68b7a6b15fd066540bb922c0eb93d49314c"
+    },
+    "database/export/groups.json": {
+      "bytes": 868,
+      "sha256": "285b245524015b2fc6efcea98de44b90749c55cd811fcf964ccd1f83d34cf61b"
+    },
+    "database/export/legacy/2025-12-31.json": {
+      "bytes": 634,
+      "sha256": "3d62ffc1cfd90a6a2c3c7c4f407384ae43627ebe8b5a71a059085921149514ea"
+    },
+    "database/export/modern/2025-12-31.json": {
+      "bytes": 634,
+      "sha256": "b12f39105e051fa0ff42f84845db93c138be186c2d2081ed5ed5decf7ec6844a"
+    },
+    "database/export/mpims.json": {
+      "bytes": 866,
+      "sha256": "e91c15df78369cf4295409536639dcf8e76745f49c54990e7ec112d0eaec6bdd"
+    },
+    "database/export/multi/2025-12-31.json": {
+      "bytes": 631,
+      "sha256": "63442132cbf67e2133eb58a5024b6ed904bbf08a2eedccb2a36a9dfa8988477f"
+    },
+    "database/export/public/2025-12-31.json": {
+      "bytes": 1646,
+      "sha256": "a719c5c0c348ad3389ea02e789aeba97f3572de8fabe9c215353fe5f99c6021c"
+    },
+    "database/export/public/2026-01-01.json": {
+      "bytes": 1310,
+      "sha256": "42d2d370d5a3d41a5416c8b6554aa6cad55b4132cb7dc52723eb0874ae7ba7c5"
+    },
+    "database/export/users.json": {
+      "bytes": 2351,
+      "sha256": "97070cf4af620625cd83c9fbd884f3e403df907756c84dc8eb9656fadbafc8f0"
+    }
+  }
+}
