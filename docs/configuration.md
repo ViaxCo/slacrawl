@@ -785,8 +785,11 @@ fetch when enabled-DM sync receives an empty user result.
 Catalog responses now use the same whole-body reader as history/replies, rejecting
 trailing JSON and read errors after a valid object. Non-200 responses use SDK
 status errors; bounded retries remain limited to rate limits with Retry-After.
-This validation does not certify collection presence or complete payload shape,
-or change Doctor probe-error handling.
+Successful catalog pages must also contain a `channels` or `members` array.
+Missing/null collections leave the page uncertified; nonarrays fail decoding.
+Explicit `[]` remains valid, including on pages with a continuation cursor. This
+archive-completeness rule does not label all omitted/null Slack responses invalid
+or certify the rest of their payload shape. Doctor probe-error handling is unchanged.
 
 ### API authentication, lookups and joins
 
@@ -827,6 +830,14 @@ that page is admitted. Missing, null or false success with blank or absent error
 text stops sync or repair with a method-specific error. Concrete Slack errors
 keep their existing type and details; previously committed pages survive, and
 the pending interval remains available for a corrected retry.
+
+Successful history/replies pages must contain a `messages` array. Missing/null
+collections leave the page uncertified instead of completing an empty interval;
+explicit `[]` remains valid. Earlier writes, completed horizons and pending work
+retain their existing retry behavior. The array requirement also applies to
+one-message capability probes, but Doctor still suppresses non-scope probe
+errors and those diagnostics do not certify complete history. Authentication,
+conversation-info and join responses are outside this page-only check.
 
 API sync and periodic tail repair follow every nonempty history/replies cursor,
 even when a page is short or empty. After writing a valid page and handling its

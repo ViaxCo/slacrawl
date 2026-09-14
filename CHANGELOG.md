@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Require present collection arrays before certifying native API history, replies, channel catalogs or user catalogs. Missing/null collections preserve retry work instead of completing an empty page; explicit empty arrays remain valid. Keep prior valid writes, native error handling and Doctor's existing probe-error behavior.
+
 - Require a nonblank authenticated workspace ID before workspace-bound API operations. Reject successful but unbound primary or optional-user identities before sync/repair writes, preserve concrete optional-auth fallback, and use canonical workspace IDs in Doctor diagnostics and DM probes. Requested workspace and enterprise IDs do not replace missing authentication identity.
 
 - Require explicit native success for authentication, conversation-info lookups and join attempts. Stop failed primary auth before archive writes or Socket Mode startup, reject unsuccessful Tail lookups before writes and acknowledgement, and keep failed joins as recorded history skips. Preserve optional-user fallback policy, token routing, private auth headers and bounded rate-limit retries; reject trailing JSON and late read errors through the shared response owner.

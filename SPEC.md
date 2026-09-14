@@ -416,7 +416,7 @@ Share config:
     - pending jobs stay local across Git share, do not advance freshness timestamps, and keep API Doctor thread coverage partial; MCP consumption remains a separate change
     - capability-aware thread preparation and concurrent-sync fairness remain a separate follow-up; history-commit preservation does not change preparation renewal
 12. validate every message channel ID in the complete history/replies page, including nested message, previous-message, and root fields, before normalizing or writing that page; earlier pages remain resumable on failure
-   - require explicit native `ok: true` before converting history/replies messages; preserve concrete Slack errors, and reject missing/null/false success with blank or absent error text without admitting that page
+   - require explicit native `ok: true` and a present `messages` array before converting history/replies messages; preserve concrete Slack errors, and reject missing/null/false success with blank or absent error text without admitting that page
    - missing message channel IDs inherit the requested conversation
    - after identity validation, require a nonblank top-level timestamp under every policy, including periodic repair; preserve accepted timestamp bytes
    - nested metadata and catalog latest-message timestamps remain optional; native replies may echo the requested parent timestamp
@@ -453,8 +453,23 @@ Catalogs share the history/replies whole-body reader: trailing JSON and a read
 error after a valid object are rejected. Non-200 responses use the SDK's typed
 status error; only rate limits with Retry-After use the existing bounded retry
 policy. Typed catalog decoding still precedes success validation; this does not
-certify collection presence or complete payload shape, or expose suppressed
-Doctor probe errors.
+certify complete payload shape or expose suppressed Doctor probe errors.
+
+After native success, page admission requires a present array: `messages` for
+history/replies, `channels` for conversation catalogs, and `members` for user
+catalogs. Missing or null collections leave the page uncertified; nonarrays fail
+typed decoding. This is an archive-completeness requirement, not a claim that
+Slack defines every omitted/null collection as invalid. Explicit `[]` remains a
+valid empty page, and available cursors still continue pagination. Empty user
+catalogs retain the existing nil accumulator and enabled-DM second fetch.
+
+Earlier valid history/replies writes and pending work survive collection failure;
+catalog failures discard that catalog operation's collected pages. Corrected
+retries use the existing pending interval or restart the catalog. One-message
+capability probes also require arrays, without certifying scan completion.
+Doctor still suppresses non-scope probe failures. Authentication, info and join
+responses do not use this page-collection gate. The SDK's existing `ok: true`
+error short-circuit is unchanged.
 
 Authentication, conversation-info lookups and join attempts use the same native
 response owner. Each must report `ok: true` before its decoded result can be used;

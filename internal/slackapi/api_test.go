@@ -1024,6 +1024,8 @@ func newRepairSlackServer(t *testing.T) *mockSlackServer {
 			_, _ = w.Write([]byte(`{"ok":true,"messages":[{"type":"message","user":"U234","text":"new repair message","ts":"1710001200.000200"}],"response_metadata":{"next_cursor":""}}`))
 		case "/conversations.replies":
 			_, _ = w.Write([]byte(`{"ok":true,"has_more":false,"messages":[{"type":"message","subtype":"message_replied","user":"U234","text":"thread repair","thread_ts":"1710000000.000100","ts":"1710000001.000200"}],"response_metadata":{"next_cursor":""}}`))
+		case "/users.list":
+			_, _ = w.Write([]byte(`{"ok":true,"members":[]}`))
 		default:
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		}

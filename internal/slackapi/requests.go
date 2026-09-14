@@ -112,7 +112,7 @@ func (c *Client) getConversations(ctx context.Context, token string, params *sla
 		if _, err := c.postSlackForm(ctx, token, "conversations.list", values, &response); err != nil {
 			return result{}, err
 		}
-		if err := nativeResponseSuccess("conversations.list", response.SlackResponse); err != nil {
+		if err := nativePageSuccess("conversations.list", response.SlackResponse, response.Channels != nil); err != nil {
 			return result{}, err
 		}
 		return result{channels: response.Channels, nextCursor: response.Metadata.NextCursor}, nil
@@ -166,7 +166,7 @@ func (c *Client) getConversationHistory(ctx context.Context, token string, param
 		if _, err := c.postSlackForm(ctx, token, "conversations.history", values, &resp); err != nil {
 			return nil, err
 		}
-		if err := nativeResponseSuccess("conversations.history", resp.SlackResponse); err != nil {
+		if err := nativePageSuccess("conversations.history", resp.SlackResponse, resp.Messages != nil); err != nil {
 			return nil, err
 		}
 		messages, err := rawConversationMessages(resp.Messages)
@@ -189,7 +189,7 @@ func (c *Client) getConversationReplies(ctx context.Context, params *slack.GetCo
 		if _, err := c.postSlackForm(ctx, c.tokens.User, "conversations.replies", values, &resp); err != nil {
 			return nil, err
 		}
-		if err := nativeResponseSuccess("conversations.replies", resp.SlackResponse); err != nil {
+		if err := nativePageSuccess("conversations.replies", resp.SlackResponse, resp.Messages != nil); err != nil {
 			return nil, err
 		}
 		messages, err := rawConversationMessages(resp.Messages)
@@ -202,6 +202,18 @@ func (c *Client) getConversationReplies(ctx context.Context, params *slack.GetCo
 			NextCursor: resp.ResponseMetaData.NextCursor,
 		}, nil
 	})
+}
+
+func nativePageSuccess(method string, response slack.SlackResponse, collectionPresent bool) error {
+	if err := nativeResponseSuccess(method, response); err != nil {
+		return err
+	}
+	// Freshly decoded slices distinguish an explicit empty array from missing
+	// or null data, which cannot certify an empty archive page.
+	if !collectionPresent {
+		return fmt.Errorf("%s response did not provide a collection array; page remains uncertified", method)
+	}
+	return nil
 }
 
 func nativeResponseSuccess(method string, response slack.SlackResponse) error {
@@ -353,7 +365,7 @@ func (c *Client) getUsers(ctx context.Context, token string) ([]slack.User, erro
 			if _, err := c.postSlackForm(ctx, token, "users.list", values, &response); err != nil {
 				return result{}, err
 			}
-			if err := nativeResponseSuccess("users.list", response.SlackResponse); err != nil {
+			if err := nativePageSuccess("users.list", response.SlackResponse, response.Members != nil); err != nil {
 				return result{}, err
 			}
 			return result{users: response.Members, nextCursor: response.Metadata.Cursor}, nil

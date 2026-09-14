@@ -176,91 +176,106 @@ func TestRetainedThreadFailuresKeepWork(t *testing.T) {
 }
 
 func TestRetainedThreadPageSuccessKeepsCurrentWork(t *testing.T) {
-	ctx := context.Background()
-	st := mustStore(t)
-	defer func() { require.NoError(t, st.Close()) }()
-	const rootTS = "1710000001.000000"
-	retainedOwnerSeed(t, st, rootTS)
-	initial, err := st.PrepareThreadWork(ctx, SourceUser, "T123", "C123")
-	require.NoError(t, err)
-	require.Len(t, initial, 1)
-	require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|C123|"+rootTS, "not_in_channel"))
-	require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1709900000.000000"}))
-	require.NoError(t, st.SetSyncState(ctx, SourceBot, "workspace", "T123", "2020-01-01T00:00:00Z"))
-	require.NoError(t, st.SetSyncState(ctx, "doctor", "threads", "coverage", "stored-status"))
-	const skipQuery = "select * from sync_state where source_name='api-user' and entity_type='thread_skip'"
-	const progressQuery = "select * from sync_state where entity_type='workspace' or source_name='doctor' order by source_name,entity_id"
-	beforeSkip, beforeProgress, beforeParent := repairKeyRows(t, st, skipQuery), repairKeyRows(t, st, progressQuery), repairKeyParent(t, st)
-	corrected := false
-	var attempts []store.ThreadWork
-	var cursors []string
-	client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
-		if r.URL.Path != "/conversations.replies" {
-			return primaryOwnerResponse(r.URL.Path), nil
-		}
-		require.Equal(t, "fixture-user", form.Get("token"))
-		require.Equal(t, "C123", form.Get("channel"))
-		require.Equal(t, rootTS, form.Get("ts"))
-		cursors = append(cursors, form.Get("cursor"))
-		work, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
-		require.NoError(t, err)
-		require.Len(t, work, 1)
-		current, err := st.ThreadWorkCurrent(ctx, work[0])
-		require.NoError(t, err)
-		require.True(t, current)
-		if form.Get("cursor") == "" {
-			attempts = append(attempts, work[0])
-			reply := repairKeyMessage("earlier-reply", "1710000002.000000")
-			reply["thread_ts"] = rootTS
-			return map[string]any{"ok": true, "messages": []any{reply}, "response_metadata": map[string]any{"next_cursor": "second"}}, nil
-		}
-		require.Equal(t, "second", form.Get("cursor"))
-		require.Equal(t, attempts[len(attempts)-1], work[0])
-		text := "rejected-reply-canary"
-		if corrected {
-			text = "recovered-reply"
-		}
-		reply := repairKeyMessage(text, "1710000003.000000")
-		reply["thread_ts"] = rootTS
-		return map[string]any{"ok": corrected, "error": " \t ", "messages": []any{reply}}, nil
-	})
-	client.now = func() time.Time { return time.Unix(1710000200, 0).UTC() }
-	runErr := client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"})
-	require.EqualError(t, runErr, "conversations.replies response did not report success")
-	require.Equal(t, []string{"", "second"}, cursors)
-	require.Len(t, attempts, 1)
-	require.NotEmpty(t, attempts[0].Generation)
-	require.NotEqual(t, initial[0].Generation, attempts[0].Generation, "ordinary preparation renews the generation before HTTP")
-	wantWork := initial[0]
-	wantWork.Generation = attempts[0].Generation
-	require.Equal(t, wantWork, attempts[0])
-	pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
-	require.NoError(t, err)
-	require.Equal(t, attempts, pending)
-	require.Equal(t, beforeSkip, repairKeyRows(t, st, skipQuery))
-	require.Equal(t, beforeProgress, repairKeyRows(t, st, progressQuery))
-	require.Equal(t, beforeParent, repairKeyParent(t, st))
-	coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
-	require.NoError(t, err)
-	require.Equal(t, historyCoverage{Complete: true, Latest: "1709900000.000000", Pending: new("1709896400.000000")}, coverage)
-	require.Equal(t, []string{"1710000002.000000|FEARLIERREPLY|earlier-reply.txt|UEARLIERREPLY"}, repairKeyDerived(t, st))
-	assertAdmissionCanariesAbsent(t, st, runErr.Error(), "rejected-reply-canary", "UREJECTEDREPLYCANARY", "FREJECTEDREPLYCANARY")
-	corrected = true
-	require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"}))
-	require.Equal(t, []string{"", "second", "", "second"}, cursors)
-	require.Len(t, attempts, 2)
-	require.NotEqual(t, attempts[0].Generation, attempts[1].Generation)
-	pending, err = st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
-	require.NoError(t, err)
-	require.Empty(t, pending)
-	require.Empty(t, repairKeyRows(t, st, skipQuery))
-	require.Equal(t, beforeParent, repairKeyParent(t, st))
-	coverage, err = loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
-	require.NoError(t, err)
-	require.Equal(t, historyCoverage{Complete: true, Latest: "1710000200.000000"}, coverage)
-	require.Equal(t, []map[string]any{{"ts": rootTS, "thread_ts": rootTS}, {"ts": "1710000002.000000", "thread_ts": rootTS}, {"ts": "1710000003.000000", "thread_ts": rootTS}}, repairKeyRows(t, st, "select ts,thread_ts from messages order by ts"))
-	require.Equal(t, []string{"1710000002.000000|FEARLIERREPLY|earlier-reply.txt|UEARLIERREPLY", "1710000003.000000|FRECOVEREDREPLY|recovered-reply.txt|URECOVEREDREPLY"}, repairKeyDerived(t, st))
-	assertAdmissionCanariesAbsent(t, st, "", "rejected-reply-canary", "UREJECTEDREPLYCANARY", "FREJECTEDREPLYCANARY")
+	for _, failure := range []string{"unsuccessful", "absent", "null"} {
+		t.Run(failure, func(t *testing.T) {
+			ctx := context.Background()
+			st := mustStore(t)
+			defer func() { require.NoError(t, st.Close()) }()
+			const rootTS = "1710000001.000000"
+			retainedOwnerSeed(t, st, rootTS)
+			initial, err := st.PrepareThreadWork(ctx, SourceUser, "T123", "C123")
+			require.NoError(t, err)
+			require.Len(t, initial, 1)
+			require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|C123|"+rootTS, "not_in_channel"))
+			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1709900000.000000"}))
+			require.NoError(t, st.SetSyncState(ctx, SourceBot, "workspace", "T123", "2020-01-01T00:00:00Z"))
+			require.NoError(t, st.SetSyncState(ctx, "doctor", "threads", "coverage", "stored-status"))
+			const skipQuery = "select * from sync_state where source_name='api-user' and entity_type='thread_skip'"
+			const progressQuery = "select * from sync_state where entity_type='workspace' or source_name='doctor' order by source_name,entity_id"
+			beforeSkip, beforeProgress, beforeParent := repairKeyRows(t, st, skipQuery), repairKeyRows(t, st, progressQuery), repairKeyParent(t, st)
+			corrected := false
+			var attempts []store.ThreadWork
+			var cursors []string
+			client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
+				if r.URL.Path != "/conversations.replies" {
+					return primaryOwnerResponse(r.URL.Path), nil
+				}
+				require.Equal(t, "fixture-user", form.Get("token"))
+				require.Equal(t, "C123", form.Get("channel"))
+				require.Equal(t, rootTS, form.Get("ts"))
+				cursors = append(cursors, form.Get("cursor"))
+				work, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+				require.NoError(t, err)
+				require.Len(t, work, 1)
+				current, err := st.ThreadWorkCurrent(ctx, work[0])
+				require.NoError(t, err)
+				require.True(t, current)
+				if form.Get("cursor") == "" {
+					attempts = append(attempts, work[0])
+					reply := repairKeyMessage("earlier-reply", "1710000002.000000")
+					reply["thread_ts"] = rootTS
+					return map[string]any{"ok": true, "messages": []any{reply}, "response_metadata": map[string]any{"next_cursor": "second"}}, nil
+				}
+				require.Equal(t, "second", form.Get("cursor"))
+				require.Equal(t, attempts[len(attempts)-1], work[0])
+				if !corrected && failure != "unsuccessful" {
+					payload := map[string]any{"ok": true}
+					if failure == "null" {
+						payload["messages"] = nil
+					}
+					return payload, nil
+				}
+				text := "rejected-reply-canary"
+				if corrected {
+					text = "recovered-reply"
+				}
+				reply := repairKeyMessage(text, "1710000003.000000")
+				reply["thread_ts"] = rootTS
+				return map[string]any{"ok": corrected, "error": " \t ", "messages": []any{reply}}, nil
+			})
+			client.now = func() time.Time { return time.Unix(1710000200, 0).UTC() }
+			runErr := client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"})
+			wantError := "conversations.replies response did not report success"
+			if failure != "unsuccessful" {
+				wantError = "conversations.replies response did not provide a collection array; page remains uncertified"
+			}
+			require.EqualError(t, runErr, wantError)
+			require.Equal(t, []string{"", "second"}, cursors)
+			require.Len(t, attempts, 1)
+			require.NotEmpty(t, attempts[0].Generation)
+			require.NotEqual(t, initial[0].Generation, attempts[0].Generation, "ordinary preparation renews the generation before HTTP")
+			wantWork := initial[0]
+			wantWork.Generation = attempts[0].Generation
+			require.Equal(t, wantWork, attempts[0])
+			pending, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+			require.NoError(t, err)
+			require.Equal(t, attempts, pending)
+			require.Equal(t, beforeSkip, repairKeyRows(t, st, skipQuery))
+			require.Equal(t, beforeProgress, repairKeyRows(t, st, progressQuery))
+			require.Equal(t, beforeParent, repairKeyParent(t, st))
+			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			require.NoError(t, err)
+			require.Equal(t, historyCoverage{Complete: true, Latest: "1709900000.000000", Pending: new("1709896400.000000")}, coverage)
+			require.Equal(t, []string{"1710000002.000000|FEARLIERREPLY|earlier-reply.txt|UEARLIERREPLY"}, repairKeyDerived(t, st))
+			assertAdmissionCanariesAbsent(t, st, runErr.Error(), "rejected-reply-canary", "UREJECTEDREPLYCANARY", "FREJECTEDREPLYCANARY")
+			corrected = true
+			require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"}))
+			require.Equal(t, []string{"", "second", "", "second"}, cursors)
+			require.Len(t, attempts, 2)
+			require.NotEqual(t, attempts[0].Generation, attempts[1].Generation)
+			pending, err = st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+			require.NoError(t, err)
+			require.Empty(t, pending)
+			require.Empty(t, repairKeyRows(t, st, skipQuery))
+			require.Equal(t, beforeParent, repairKeyParent(t, st))
+			coverage, err = loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			require.NoError(t, err)
+			require.Equal(t, historyCoverage{Complete: true, Latest: "1710000200.000000"}, coverage)
+			require.Equal(t, []map[string]any{{"ts": rootTS, "thread_ts": rootTS}, {"ts": "1710000002.000000", "thread_ts": rootTS}, {"ts": "1710000003.000000", "thread_ts": rootTS}}, repairKeyRows(t, st, "select ts,thread_ts from messages order by ts"))
+			require.Equal(t, []string{"1710000002.000000|FEARLIERREPLY|earlier-reply.txt|UEARLIERREPLY", "1710000003.000000|FRECOVEREDREPLY|recovered-reply.txt|URECOVEREDREPLY"}, repairKeyDerived(t, st))
+			assertAdmissionCanariesAbsent(t, st, "", "rejected-reply-canary", "UREJECTEDREPLYCANARY", "FREJECTEDREPLYCANARY")
+		})
+	}
 }
 
 func TestHistoryPageChildrenPersistThreadWork(t *testing.T) {
