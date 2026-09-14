@@ -276,6 +276,159 @@ func TestMCPHistoryCheckpointsFromCLI(t *testing.T) {
 	}
 }
 
+func TestMCPNativeCollectionRetryFromCLI(t *testing.T) {
+	for _, source := range []string{"mcp", "connector"} {
+		for _, target := range []string{"history", "replies"} {
+			for _, shape := range []string{"missing", "null"} {
+				t.Run(source+"/"+target+"/"+shape, func(t *testing.T) {
+					ctx := context.Background()
+					fixture := &mcpHistoryFixture{mode: "collection"}
+					server := httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
+					defer server.Close()
+					cfg, path := userPrimaryConfig(t)
+					cfg.Slack.Bot.Enabled, cfg.Slack.User.Enabled, cfg.Slack.App.Enabled = false, false, false
+					cfg.Sync.IncludeDMs = nil
+					cfg.Slack.MCP.Enabled, cfg.Slack.MCP.Transport, cfg.Slack.MCP.BaseURL = true, "http", server.URL
+					cfg.Slack.MCP.TokenEnv, cfg.Slack.MCP.AccountIDEnv = "SLACRAWL_HISTORY_TOKEN", "SLACRAWL_HISTORY_ACCOUNT"
+					cfg.Slack.MCP.ConnectorID = ""
+					cfg.Slack.MCP.PageSize, cfg.Slack.MCP.SearchLimit, cfg.Slack.MCP.MaxPages = 100, 20, 2
+					t.Setenv(cfg.Slack.MCP.TokenEnv, "synthetic-history-token")
+					t.Setenv(cfg.Slack.MCP.AccountIDEnv, "")
+					require.NoError(t, cfg.Save(path))
+					beforeConfig, err := os.ReadFile(path)
+					require.NoError(t, err)
+					st, err := store.Open(cfg.DBPath)
+					require.NoError(t, err)
+					seedTime := time.Unix(1700000000, 0).UTC()
+					require.NoError(t, st.EnsureWorkspace(ctx, store.Workspace{ID: "TLOCAL", Name: "collection fixture", RawJSON: "{}", UpdatedAt: seedTime}))
+					for _, channel := range []string{"CONE", "CTWO"} {
+						require.NoError(t, st.EnsureChannel(ctx, store.Channel{ID: channel, WorkspaceID: "TLOCAL", Name: "collection fixture", Kind: "public_channel", RawJSON: "{}", UpdatedAt: seedTime}))
+					}
+					require.NoError(t, st.UpsertMessage(ctx, store.Message{WorkspaceID: "TLOCAL", ChannelID: "CTWO", TS: mcpHistoryRoot, Text: "retained root", NormalizedText: "retained root", ReplyCount: 1, SourceName: "mcp", SourceRank: 4, RawJSON: "{}", UpdatedAt: seedTime}, nil))
+					progress, err := json.Marshal(mcpHistoryProgress{Complete: true, Latest: mcpHistoryOld, Revision: "seed-history-revision"})
+					require.NoError(t, err)
+					for _, state := range [][3]string{
+						{"workspace", "TLOCAL", "2020-01-01T00:00:00Z"},
+						{"history_work_v1", mcpHistoryKey("CTWO", "reference", ""), string(progress)},
+						{"thread_pending_v1", retainedCLIKey("TLOCAL", "CTWO", mcpHistoryRoot), "seed-thread-generation"},
+					} {
+						_, err := st.DB().ExecContext(ctx, "insert into sync_state(source_name,entity_type,entity_id,value,updated_at) values(?,?,?,?,?)", "mcp", state[0], state[1], state[2], "2020-01-01T00:00:00Z")
+						require.NoError(t, err)
+					}
+					require.NoError(t, st.Close())
+					before := shareArchiveSnapshot(t, cfg.DBPath)
+					checkpoints := func(snapshot map[string][]map[string]any, channel string) mcpHistoryProgress {
+						rows := mcpHistoryStateRows(snapshot["sync_state"], "history_work_v1", mcpHistoryKey(channel, "reference", ""))
+						require.Len(t, rows, 1)
+						var value mcpHistoryProgress
+						require.NoError(t, json.Unmarshal([]byte(rows[0]["value"].(string)), &value))
+						return value
+					}
+					jobs := func(snapshot map[string][]map[string]any) []map[string]any {
+						return mcpHistoryStateRows(snapshot["sync_state"], "thread_pending_v1", retainedCLIKey("TLOCAL", "CTWO", mcpHistoryRoot))
+					}
+					atResponse := make(chan map[string][]map[string]any, 1)
+					targetTool := "slack_get_channel_history"
+					if target == "replies" {
+						targetTool = "slack_get_thread_replies"
+					}
+					fixture.mu.Lock()
+					fixture.response = func(tool string, args, payload map[string]any) {
+						if tool != targetTool || args["channel_id"] != "CTWO" {
+							return
+						}
+						// Capture the actual committed boundary after Begin/preparation,
+						// not the earlier seed generation or an invocation-wide snapshot.
+						atResponse <- shareArchiveSnapshot(t, cfg.DBPath)
+						delete(payload, "messages")
+						if shape == "null" {
+							payload["messages"] = nil
+						}
+					}
+					fixture.mu.Unlock()
+					args := []string{"--config", path, "--no-color", "sync", "--source", source, "--workspace", "TLOCAL", "--channels", "CONE,CTWO", "--with-media=false"}
+					var stdout, stderr bytes.Buffer
+					runErr := (&App{Stdout: &stdout, Stderr: &stderr}).Run(ctx, args)
+					prefix := "read MCP channel: "
+					if target == "replies" {
+						prefix = "read MCP thread: "
+					}
+					require.EqualError(t, runErr, prefix+"native MCP "+target+" did not provide a messages array; page remains uncertified")
+					require.Empty(t, stdout.String())
+					require.Len(t, atResponse, 1)
+					after := shareArchiveSnapshot(t, cfg.DBPath)
+					require.Equal(t, <-atResponse, after, "rejected collection must not alter any of the eleven archive tables")
+					require.Equal(t, mcpHistoryStateRows(before["sync_state"], "workspace", "TLOCAL"), mcpHistoryStateRows(after["sync_state"], "workspace", "TLOCAL"))
+					require.Equal(t, mcpHistoryProgress{Complete: true, Latest: mcpHistoryRoot, Revision: checkpoints(after, "CONE").Revision}, checkpoints(after, "CONE"))
+					first := checkpoints(after, "CTWO")
+					require.NotEmpty(t, first.Revision)
+					require.NotEqual(t, "seed-history-revision", first.Revision)
+					require.True(t, first.Complete)
+					if target == "history" {
+						require.Equal(t, mcpHistoryOld, first.Latest)
+						require.Equal(t, new("1709896400.000000"), first.Pending)
+						require.Equal(t, jobs(before), jobs(after))
+					} else {
+						require.Equal(t, mcpHistoryRoot, first.Latest)
+						require.Nil(t, first.Pending)
+						require.Len(t, jobs(after), 1)
+						require.NotEqual(t, "seed-thread-generation", jobs(after)[0]["value"])
+					}
+					st, err = store.OpenReadOnly(cfg.DBPath)
+					require.NoError(t, err)
+					require.Len(t, apiKeyRows(t, st, "select * from messages where channel_id='CONE' and ts='1710000000.000000'"), 1)
+					require.NotEmpty(t, apiKeyRows(t, st, "select * from message_events where channel_id='CONE' and ts='1710000000.000000'"))
+					require.Len(t, apiKeyRows(t, st, "select * from message_fts where message_key='CONE|1710000000.000000'"), 1)
+					require.Empty(t, apiKeyRows(t, st, "select * from messages where channel_id='CTWO' and ts='1710020000.000000'"))
+					status, err := st.Status(ctx)
+					require.NoError(t, err)
+					require.Equal(t, "2020-01-01T00:00:00Z", status.LastSyncAt.UTC().Format(time.RFC3339))
+					require.NoError(t, st.Close())
+					historyCall := func(channel string) mcpCoverageCall {
+						return mcpCoverageCall{"slack_get_channel_history", map[string]any{"channel_id": channel, "limit": float64(100)}}
+					}
+					wantCalls := []mcpCoverageCall{historyCall("CONE"), historyCall("CTWO")}
+					replyCall := mcpCoverageCall{"slack_get_thread_replies", map[string]any{"channel_id": "CTWO", "thread_ts": mcpHistoryRoot}}
+					if target == "replies" {
+						wantCalls = append(wantCalls, replyCall)
+					}
+					fixture.mu.Lock()
+					failedCalls, failedErrors := fixture.calls, fixture.errors
+					fixture.response, fixture.calls, fixture.errors = nil, nil, nil
+					fixture.mu.Unlock()
+					require.Equal(t, wantCalls, failedCalls)
+					require.Empty(t, failedErrors)
+					stdout.Reset()
+					stderr.Reset()
+					require.NoError(t, (&App{Stdout: &stdout, Stderr: &stderr}).Run(ctx, args))
+					require.Contains(t, stdout.String(), "Completed")
+					retried := shareArchiveSnapshot(t, cfg.DBPath)
+					completed := checkpoints(retried, "CTWO")
+					require.True(t, completed.Complete)
+					require.Equal(t, mcpHistoryRoot, completed.Latest)
+					require.Nil(t, completed.Pending)
+					require.NotEqual(t, first.Revision, completed.Revision)
+					require.Empty(t, jobs(retried))
+					require.NotEqual(t, mcpHistoryStateRows(before["sync_state"], "workspace", "TLOCAL"), mcpHistoryStateRows(retried["sync_state"], "workspace", "TLOCAL"))
+					st, err = store.OpenReadOnly(cfg.DBPath)
+					require.NoError(t, err)
+					require.Equal(t, []map[string]any{{"thread_ts": mcpHistoryRoot}}, apiKeyRows(t, st, "select thread_ts from messages where channel_id='CTWO' and ts='1710020000.000000'"))
+					require.Len(t, apiKeyRows(t, st, "select * from message_fts where message_key='CTWO|1710020000.000000'"), 1)
+					require.NoError(t, st.Close())
+					fixture.mu.Lock()
+					retryCalls, retryErrors := fixture.calls, fixture.errors
+					fixture.mu.Unlock()
+					require.Equal(t, []mcpCoverageCall{historyCall("CONE"), historyCall("CTWO"), replyCall}, retryCalls)
+					require.Empty(t, retryErrors)
+					afterConfig, err := os.ReadFile(path)
+					require.NoError(t, err)
+					require.Equal(t, beforeConfig, afterConfig)
+				})
+			}
+		}
+	}
+}
+
 // Pending null means idle; a non-nil empty string is unfinished unbounded work.
 // Complete plus empty Latest records a completed empty history, not absence.
 type mcpHistoryProgress struct {
@@ -352,12 +505,13 @@ func mcpHistoryExpectedCalls(mode string, text bool, attempt int) []mcpCoverageC
 }
 
 type mcpHistoryFixture struct {
-	mu      sync.Mutex
-	mode    string
-	text    bool
-	attempt int
-	calls   []mcpCoverageCall
-	errors  []string
+	mu       sync.Mutex
+	mode     string
+	text     bool
+	attempt  int
+	calls    []mcpCoverageCall
+	errors   []string
+	response func(string, map[string]any, map[string]any)
 }
 
 func (f *mcpHistoryFixture) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -403,10 +557,10 @@ func (f *mcpHistoryFixture) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case "tools/call":
 		f.mu.Lock()
 		f.calls = append(f.calls, mcpCoverageCall{req.Params.Name, req.Params.Arguments})
-		attempt := f.attempt
+		attempt, response := f.attempt, f.response
 		f.mu.Unlock()
 		channel, _ := req.Params.Arguments["channel_id"].(string)
-		if channel != "CONE" && !(channel == "CTWO" && f.mode == "later-channel-failure") {
+		if channel != "CONE" && !(channel == "CTWO" && (f.mode == "later-channel-failure" || f.mode == "collection")) {
 			fail("unexpected channel")
 			return
 		}
@@ -439,6 +593,8 @@ func (f *mcpHistoryFixture) serveHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			case "later-channel-failure", "other-source-maximum":
 				messages = append(messages, message(mcpHistoryRoot, "", false))
+			case "collection":
+				messages = append(messages, message(mcpHistoryRoot, "", channel == "CTWO"))
 			case "native-incomplete-retry":
 				messages = append(messages, message(mcpHistoryReply, "", false))
 				if attempt == 0 {
@@ -499,6 +655,9 @@ func (f *mcpHistoryFixture) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			fail("unexpected tool")
 			return
+		}
+		if response != nil {
+			response(req.Params.Name, req.Params.Arguments, payload)
 		}
 		raw, err := json.Marshal(payload)
 		if err != nil {

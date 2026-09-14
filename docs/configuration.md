@@ -295,6 +295,16 @@ Under every DM policy, native history and replies require `ok=true` before
 processing that response. A missing or false value stops the sync; earlier
 committed batches remain. The text connector's response contract is unchanged.
 
+Native channel catalogs require a `channels` array, user catalogs a `members`
+array, and history/replies a `messages` array after the existing decode, error
+and success checks. Missing or null collections leave that page uncertified;
+they cannot complete empty history or retire a thread job. Explicit `[]` remains
+valid, including empty replies. This archive-certification requirement does not
+claim that Slack defines every omitted/null collection as invalid. The existing
+strict-catalog success check and default-catalog/users OK policies stay unchanged.
+Rejected pages preserve earlier commits and retry work; corrected responses can
+complete a later retry.
+
 Native `has_more=true` or a nonblank `response_metadata.next_cursor` reports
 additional pages. The reference tools cannot request those pages. Slacrawl
 processes valid fetched messages and later selected conversations, then returns

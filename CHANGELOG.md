@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Require present arrays in native MCP channel, user, history and reply responses before accepting the page. Missing/null collections cannot certify empty completion; explicit empty arrays remain valid. Preserve earlier writes, pending retry work and existing error/success policies.
+
 - Give scoped MCP replies shared thread generations before requests. Renew only eligible returned roots, reject superseded parent/reply writes, retire complete or empty work conditionally, and retain failed selected work while preserving unselected backlog and API jobs.
 
 - Fence MCP history reads and history-derived metadata, preparation, message batches and discovery against superseding revisions. Discard stale uncommitted responses while preserving earlier commits, completed-history ordering and independent queued replies.

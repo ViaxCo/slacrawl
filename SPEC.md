@@ -720,6 +720,11 @@ unchanged. API history continues to own its separate requested horizon.
    Insert-only channel metadata preserves every existing row, including older
    lossy MCP records; routine sync does not repair their missing native evidence
 7. require explicit `ok=true` on native history/replies under every DM policy;
+   after existing decode/error/OK checks, require present arrays for native
+   catalog `channels`, users `members`, and history/replies `messages` before
+   projection, pagination or completion. Missing/null collections leave the page
+   uncertified; explicit `[]` remains valid, including empty replies. Preserve
+   the existing default-catalog/users OK policy and text adapter contract;
    retain response `has_more`/nonblank next-cursor and `is_limited` facts before
    local filtering, accumulating them across later successes and empty results
 8. process valid bounded writes, but return a fixed incomplete-coverage error

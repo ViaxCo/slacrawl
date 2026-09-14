@@ -119,6 +119,9 @@ func (c *Client) referenceChannels(ctx context.Context, tools toolset, requireSu
 		if requireSuccess && !response.OK {
 			return page[ChannelRecord]{}, errors.New("native MCP catalog did not report successful Slack response")
 		}
+		if response.Channels == nil {
+			return page[ChannelRecord]{}, errors.New("native MCP catalog did not provide a channels array; page remains uncertified")
+		}
 		channels := make([]ChannelRecord, 0, len(response.Channels))
 		for _, channel := range response.Channels {
 			kind := "public_channel"
@@ -153,6 +156,9 @@ func (c *Client) referenceUsers(ctx context.Context, tools toolset) ([]UserRecor
 		if err := decodeReferenceResponse(raw, &response); err != nil {
 			return page[UserRecord]{}, fmt.Errorf("decode reference Slack users: %w", err)
 		}
+		if response.Members == nil {
+			return page[UserRecord]{}, errors.New("native MCP users did not provide a members array; page remains uncertified")
+		}
 		users := make([]UserRecord, 0, len(response.Members))
 		for _, user := range response.Members {
 			users = append(users, UserRecord{
@@ -186,6 +192,9 @@ func (c *Client) referenceChannelMessages(ctx context.Context, tools toolset, wo
 	}
 	if !response.OK {
 		return channelPage{}, errors.New("native MCP history did not report successful Slack response")
+	}
+	if response.Messages == nil {
+		return channelPage{}, errors.New("native MCP history did not provide a messages array; page remains uncertified")
 	}
 	if err := validateReferenceMessages(response.Messages, workspaceID, channelID, ""); err != nil {
 		return channelPage{}, err
@@ -223,6 +232,9 @@ func (c *Client) referenceThreadMessages(ctx context.Context, tools toolset, wor
 	}
 	if !response.OK {
 		return threadPage{}, errors.New("native MCP replies did not report successful Slack response")
+	}
+	if response.Messages == nil {
+		return threadPage{}, errors.New("native MCP replies did not provide a messages array; page remains uncertified")
 	}
 	if err := validateReferenceMessages(response.Messages, workspaceID, channelID, threadTS); err != nil {
 		return threadPage{}, err
