@@ -238,7 +238,8 @@ func isLocalSyncProgress(table string, row map[string]any) bool {
 		return false
 	}
 	return (row["entity_type"] == "history_coverage_v1" && (row["source_name"] == "api-bot" || row["source_name"] == "api-user")) ||
-		(row["entity_type"] == "thread_pending_v1" && (row["source_name"] == "api-user" || row["source_name"] == "mcp"))
+		(row["entity_type"] == "thread_pending_v1" && (row["source_name"] == "api-user" || row["source_name"] == "mcp")) ||
+		(row["entity_type"] == "history_work_v1" && row["source_name"] == "mcp")
 }
 
 func synthesizeLegacySubordinateTombstone(ctx context.Context, tx *sql.Tx, row map[string]any) error {

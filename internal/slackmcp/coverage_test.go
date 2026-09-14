@@ -179,6 +179,9 @@ func TestMCPNativeCoverageConcreteErrorsWin(t *testing.T) {
 			require.Equal(t, before, coverageFreshness(t, st))
 			wantRows := []string{"alpha", "beta", "gamma", "delta"}
 			wantCalls := []coverageCall{{"CFIRST", ""}, {"CFIRST", "1710000000.000001"}, {"CFIRST", "1710000010.000003"}, {"CSECOND", ""}}
+			if kind == "later-store" {
+				wantCalls = wantCalls[:3]
+			}
 			if kind == "invalid-old-message" {
 				wantRows = []string{}
 				wantCalls = wantCalls[:1]

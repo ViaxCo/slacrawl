@@ -260,37 +260,29 @@ func TestSyncPlanOverlapsAndHonorsLatestOnly(t *testing.T) {
 	_, err = st.PurgeMessages(ctx, store.PurgeOptions{Before: cutoff, WorkspaceID: "T1", Delete: true})
 	require.NoError(t, err)
 
-	channels := []ChannelRecord{{ID: "C1"}, {ID: "C2"}}
-	oldest, selected, err := syncPlan(ctx, st, "T1", channels, Options{LatestOnly: true})
-	require.NoError(t, err)
-	require.Equal(t, []ChannelRecord{{ID: "C1"}}, selected)
-	require.Equal(t, "1772577698.999999", oldest["C1"])
-
-	oldest, selected, err = syncPlan(ctx, st, "T1", channels, Options{Full: true})
-	require.NoError(t, err)
-	require.Len(t, selected, 2)
-	require.Empty(t, oldest["C1"])
-
-	oldest, selected, err = syncPlan(ctx, st, "T1", channels, Options{Since: "2026-03-08T12:00:00Z"})
-	require.NoError(t, err)
-	require.Len(t, selected, 2)
-	require.Equal(t, "1772971200.000000", oldest["C1"])
-
-	enforce, err := syncEnforcesRetention(ctx, st, "T1", "C1", "1772971200.000000", true)
-	require.NoError(t, err)
-	require.True(t, enforce)
-	enforce, err = syncEnforcesRetention(ctx, st, "T1", "C1", "1772570000.000000", true)
-	require.NoError(t, err)
-	require.False(t, enforce)
-	enforce, err = syncEnforcesRetention(ctx, st, "T1", "C1", "", true)
-	require.NoError(t, err)
-	require.False(t, enforce)
-}
-
-func TestPreviousMicrosecondTimestamp(t *testing.T) {
-	require.Equal(t, "1772577698.999999", previousMicrosecondTimestamp("1772577699.000000"))
-	require.Equal(t, "1772577699.000099", previousMicrosecondTimestamp("1772577699.000100"))
-	require.Equal(t, "invalid", previousMicrosecondTimestamp("invalid"))
+	begin := func(channel string, opts Options) (store.MCPHistoryWork, bool) {
+		work, selected, err := st.BeginMCPHistory(ctx, store.MCPHistoryScope{WorkspaceID: "T1", ChannelID: channel, Adapter: "codex", Since: normalizeTimestamp(opts.Since)}, store.MCPHistoryOptions{Full: opts.Full, LatestOnly: opts.LatestOnly})
+		require.NoError(t, err)
+		return work, selected
+	}
+	work, selected := begin("C1", Options{LatestOnly: true})
+	require.True(t, selected)
+	require.Equal(t, "1772577698.999999", work.Oldest)
+	require.True(t, work.EnforceRetention)
+	_, selected = begin("C2", Options{LatestOnly: true})
+	require.False(t, selected)
+	for _, channel := range []string{"C1", "C2"} {
+		work, selected = begin(channel, Options{Full: true})
+		require.True(t, selected)
+		require.Empty(t, work.Oldest)
+		require.False(t, work.EnforceRetention)
+		work, selected = begin(channel, Options{Since: "2026-03-08T12:00:00Z", Full: true})
+		require.True(t, selected)
+		require.Equal(t, "1772971200.000000", work.Oldest)
+		require.True(t, work.EnforceRetention)
+	}
+	work, _ = begin("C1", Options{Since: "1772570000.000000"})
+	require.False(t, work.EnforceRetention)
 }
 
 func TestWalkPagesRejectsTruncation(t *testing.T) {

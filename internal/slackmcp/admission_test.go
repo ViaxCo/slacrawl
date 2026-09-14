@@ -672,6 +672,32 @@ func TestMCPMessageAdmissionPrecedesAffectedWrites(t *testing.T) {
 				if mode == "history-old" || mode == "history-empty-ts" {
 					opts.Since = "100.000000"
 				}
+				assertHistory := func(row map[string]any, complete bool) {
+					t.Helper()
+					adapter := "codex"
+					if native {
+						adapter = "reference"
+					}
+					key, keyErr := json.Marshal([]string{"TLOCAL", "CONE", adapter, normalizeTimestamp(opts.Since)})
+					require.NoError(t, keyErr)
+					value, ok := row["value"].(string)
+					require.True(t, ok)
+					var state store.MCPHistoryState
+					require.NoError(t, json.Unmarshal([]byte(value), &state))
+					require.NotEmpty(t, state.Revision)
+					expected := store.MCPHistoryState{Complete: complete, Revision: state.Revision}
+					if complete {
+						expected.Latest = "1710000000.000001"
+					} else {
+						expected.Pending = new(normalizeTimestamp(opts.Since))
+					}
+					require.Equal(t, expected, state)
+					updated, ok := row["updated_at"].(string)
+					require.True(t, ok)
+					_, timeErr := time.Parse(time.RFC3339Nano, updated)
+					require.NoError(t, timeErr)
+					require.Equal(t, map[string]any{"source_name": SourceName, "entity_type": store.MCPHistoryEntityType, "entity_id": string(key), "value": value, "updated_at": updated}, row)
+				}
 				var err error
 				var admitted map[string][]map[string]any
 				if thread {
@@ -690,8 +716,19 @@ func TestMCPMessageAdmissionPrecedesAffectedWrites(t *testing.T) {
 					// Valid history owns durable work before replies admission; a
 					// rejected payload must preserve that entire committed snapshot.
 					admitted = admissionTableSnapshot(t, st)
-					require.Len(t, admitted["sync_state"], 1)
-					pending := admitted["sync_state"][0]
+					require.Len(t, admitted["sync_state"], 2)
+					var pending map[string]any
+					historyCount := 0
+					for _, row := range admitted["sync_state"] {
+						if row["entity_type"] == store.MCPHistoryEntityType {
+							assertHistory(row, true)
+							historyCount++
+						} else {
+							pending = row
+						}
+					}
+					require.Equal(t, 1, historyCount)
+					require.NotNil(t, pending)
 					generation, ok := pending["value"].(string)
 					require.True(t, ok)
 					require.NotEmpty(t, generation)
@@ -728,7 +765,12 @@ func TestMCPMessageAdmissionPrecedesAffectedWrites(t *testing.T) {
 					rows := after[table]
 					require.NotContains(t, fmt.Sprint(rows), admissionCanary, table)
 					if !thread {
-						require.Empty(t, rows, table)
+						if table == "sync_state" {
+							require.Len(t, rows, 1)
+							assertHistory(rows[0], false)
+						} else {
+							require.Empty(t, rows, table)
+						}
 					}
 				}
 				status, err := st.Status(ctx)

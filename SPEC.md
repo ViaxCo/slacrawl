@@ -463,6 +463,32 @@ Share config:
    complete capture, historical DM-origin proof, or safe-export qualification.
    Import retention and concurrent priority atomicity remain separate work.
 
+### MCP history ownership
+
+Persist local `mcp/history_work_v1` records keyed by workspace, channel, discovered
+adapter and normalized Since. Each record contains complete presence, a raw latest
+history timestamp, nullable logical pending oldest and an attempt revision.
+`BeginMCPHistory` uses one immediate transaction to check existing channel ownership,
+read current progress and retention, derive bounds and acquire a fresh revision.
+A missing channel permits first intake; a foreign owner rejects before history HTTP.
+Latest-only retains non-draft-message/retention-seed eligibility independently of
+checkpoint presence. Stored message maxima never supply MCP history coverage.
+
+Validate every returned history timestamp as finite before local filtering and
+choose its numeric maximum without changing the raw key. After all admitted
+history batches commit, `CompleteMCPHistory` may update only the current pending
+revision. It preserves the previous latest on empty or older responses and runs
+before thread traversal. Incomplete history retains its logical pending interval;
+ordinary retries apply current retention even after Full. Since precedes Full and
+has an isolated checkpoint. Superseded completion is an explicit non-success;
+it does not cancel in-flight requests or undo earlier committed message writes.
+
+Exclude only this exact source/type from freshness and shared progress. Merge
+preserves receiver-local records; Restore clears them and cannot import foreign
+coverage. First intake without a checkpoint establishes coverage from history,
+subject to retention. Native request arguments and bounded-window limitations stay
+unchanged. API history continues to own its separate requested horizon.
+
 ### MCP sync
 
 1. discover the configured MCP adapter; explicit `include_dms = false` rejects
@@ -480,7 +506,8 @@ Share config:
    before selected payloads proceed; explicit false with no eligible conversations
    records that outcome and leaves workspace/user/freshness state untouched
 5. validate each channel page and every thread parent/reply before affected writes;
-   require nonblank top-level timestamps and reply timestamps distinct from the parent;
+   require finite numeric history timestamps, nonblank thread timestamps, and
+   replies distinct from the parent;
    check native explicit channel/context/thread fields before filtering/conversion;
    nested metadata and catalog latest-message timestamps remain optional
 6. retain existing priority, retention, request defaults, and payload projections
@@ -492,7 +519,7 @@ Share config:
 8. process valid bounded writes, but return a fixed incomplete-coverage error
    before final MCP workspace freshness if any native history/replies response reports more pages
    or a Slack history/message limit; concrete errors win and the prior complete
-   freshness row remains unchanged, while metadata/message-derived cursors may change
+   freshness row remains unchanged, while metadata and valid message rows may change
 9. with empty Since and a thread tool, preserve retained reply hints before history
    writes and save new page hints atomically with their message batches; drain
    selected jobs in timestamp order and retire only the matching live generation
