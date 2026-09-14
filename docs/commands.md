@@ -205,6 +205,12 @@ See [Retention purge](retention.md) for thread behavior, event compaction, cache
 | `subscribe` | Configure a reader, clone a snapshot repository, and import it. |
 | `update` | Pull and merge a newer snapshot, or explicitly restore an exact snapshot. |
 
+`publish` rejects explicit `[sync].include_dms = false` before opening the
+archive, locking the media cache, Git operations or snapshot writes. Keep the
+archive local; `--no-commit`, `--no-media` and tag/push options do not bypass this
+gate. Omitted/true retains unfiltered private snapshots, including stored DMs
+and drafts. This does not certify an archive as safe to publish.
+
 See [Git archive sharing](git-archive-sharing.md) for setup and command examples.
 
 ## Output modes

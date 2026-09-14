@@ -16,8 +16,17 @@ before saving an importing subscribe configuration or acquiring/importing
 snapshot data, media, or successful-import state. Automatic paths still open
 the archive to check staleness.
 
-Publishing remains an unfiltered snapshot of the archive tables. This policy
-does not purge archived DMs or certify a snapshot as safe to publish.
+Explicit `[sync].include_dms = false` also blocks `publish`. Legacy table
+snapshots cannot enforce DM exclusion across existing rows and derived data.
+Keep this archive local. The publish command checks after flag, config and
+argument validation, before opening the archive, locking the media cache,
+running Git, validating tags or writing snapshots. `--no-commit`, `--no-media`
+and tag/push options do not bypass the gate.
+
+With the policy omitted or true, publishing keeps its existing unfiltered
+behavior, including archived DMs and drafts. Intake settings do not purge those
+rows or certify a snapshot as safe to publish. The publication gate does not
+change the optional release notifier that runs before command dispatch.
 
 ## Configure the archive
 

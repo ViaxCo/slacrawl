@@ -31,6 +31,36 @@ func admissionSnapshot(t *testing.T, st *store.Store) map[string][]map[string]an
 	return snapshot
 }
 
+func TestExportPolicyRejectsBeforeOwnerSideEffects(t *testing.T) {
+	for _, includeMedia := range []bool{false, true} {
+		name := "no-media"
+		if includeMedia {
+			name = "media"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := Options{
+				RepoPath: filepath.Join(dir, "repo"), Remote: filepath.Join(dir, "remote.git"),
+				CacheDir: filepath.Join(dir, "cache"), IncludeMedia: includeMedia, DMPolicy: admission.Exclude,
+			}
+			t.Setenv("PATH", t.TempDir())
+			t.Setenv("TMPDIR", filepath.Join(dir, "absent-temp"))
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			for range 2 {
+				// A nil Store and unavailable Git must never precede the policy error.
+				manifest, err := Export(ctx, nil, opts)
+				require.EqualError(t, err, "legacy Git share exports cannot enforce sync.include_dms=false; keep this archive local")
+				require.Equal(t, Manifest{}, manifest)
+				for _, path := range []string{opts.RepoPath, opts.Remote, opts.CacheDir, os.Getenv("TMPDIR")} {
+					require.NoDirExists(t, path)
+					require.NoFileExists(t, path)
+				}
+			}
+		})
+	}
+}
+
 func TestImportPolicyRejectsBeforeOwnerSideEffects(t *testing.T) {
 	for _, manifest := range []string{"missing", "malformed"} {
 		for _, entry := range []string{"import", "restore", "if-changed", "historical", "blank-ref"} {
@@ -115,8 +145,8 @@ func TestImportPolicyGuardsUnchangedManifestMediaAndFreshness(t *testing.T) {
 		SourceRank: 2, SourceName: "api-bot", UpdatedAt: now,
 		Files: []store.MessageFile{{FileID: "F1", Name: "fixture.txt", MediaPath: mediaPath, ContentSHA256: hash, ContentSize: int64(len(body)), FetchStatus: "fetched", RawJSON: "{}"}},
 	}, nil))
-	opts := Options{RepoPath: filepath.Join(dir, "repo"), CacheDir: sourceCache, IncludeMedia: true, DMPolicy: admission.Exclude}
-	// The intake policy does not turn publishing into a filtered export.
+	opts := Options{RepoPath: filepath.Join(dir, "repo"), CacheDir: sourceCache, IncludeMedia: true, DMPolicy: admission.Include}
+	// An allowed publisher retains the DM canary for the importing policy checks.
 	manifest, err := Export(ctx, source, opts)
 	require.NoError(t, err)
 	require.NotNil(t, manifest.Media)

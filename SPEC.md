@@ -367,7 +367,9 @@ Share config:
 - explicit `[sync].include_dms = false` rejects legacy Git snapshot imports because the format has no DM admission evidence; omitted/true preserve import behavior
 - subscribe checks this policy before saving an importing configuration; update/restore check before opening the archive or acquiring Git data
 - automatic paths first open the archive to check staleness, then reject before Git acquisition, snapshot/media import, or successful-import state changes
-- `subscribe --no-import`, fresh automatic reads, `auto_update = false`, and observation-only status/doctor remain available; publish is not a DM filter
+- `subscribe --no-import`, fresh automatic reads, `auto_update = false`, and observation-only status/doctor remain available
+- explicit `[sync].include_dms = false` also rejects legacy snapshot publishing; the shared export owner checks before cache locking, Git work, store access or snapshot writes, and the CLI checks after flag/config/argument validation but before archive initialization or tag validation
+- publication rejection leaves the archive local; `--no-commit`, `--no-media`, and tag/push options cannot bypass it. Omitted/true preserve unfiltered private snapshots, including archived DMs and drafts; neither intake policy purges stored rows nor certifies publication safety
 - `publish --tag <name>` creates an immutable tag for a committed snapshot
 - routine `update` imports merge by stable row identity, preserve destination-only rows and newer tombstones, and never infer deletion from a row missing in the snapshot
 - `update --restore` is the explicit exact-replacement mode
@@ -615,6 +617,11 @@ existing order. No request/checkpoint format changes, existing-DM purge, or
 safe-export qualification are implied; `include_drafts` remains Desktop-only.
 
 ### Git share sync
+
+Publishing rejects explicit DM exclusion before export work. Legacy table
+snapshots cannot enforce that policy across archived content and derived state;
+keep the archive local instead. This boundary covers publish work, not the
+optional release notifier that runs before CLI dispatch.
 
 1. reject explicit DM exclusion before snapshot acquisition/import; every importing owner entry point checks the same policy, including unchanged-manifest and historical restore paths
 2. clone or open the configured share repo and read `manifest.json`
