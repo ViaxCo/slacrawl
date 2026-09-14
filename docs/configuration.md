@@ -832,10 +832,19 @@ This also protects optional-auth Doctor JSON, failed-join state and progress log
 when they report these failures. Existing retry and partial-work behavior stays
 unchanged; the diagnostic no longer includes the underlying failure detail.
 
+For decoded unsuccessful responses, these exact native codes remain readable:
+`missing_scope`, `not_in_channel`, `channel_not_found`, `invalid_auth`,
+`not_authed`, `account_inactive`, `token_expired`, `token_revoked` and
+`is_archived`. Other error strings produce `slack <method> API response failed`;
+whitespace, case changes or added text do not qualify. Repeated channel, DM, user,
+history and replies cursors report the method without reflecting the cursor.
+The SDK's explicit-success error-field bypass, exact skip classification, retries
+and pending-work behavior remain unchanged.
+
 Causes remain available to code using `errors.Is`, `errors.As` or unwrapping and
-may still contain private data. Concrete Slack error strings/details and reflected
-continuation cursors remain unchanged and need separate treatment. This is not
-redaction of error objects, successful archives or every diagnostic surface.
+may still contain private native codes, details or metadata. This is not redaction
+of error objects, identities, progress names, successful metadata or archive data,
+previously stored diagnostics, or every diagnostic surface.
 
 ### API history completeness
 

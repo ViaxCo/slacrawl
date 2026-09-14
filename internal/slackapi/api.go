@@ -154,7 +154,7 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 				diag.DMsMissingScope = c.dmMissingScope(ctx, workspaceID)
 			}
 		} else {
-			diag.UserAuthError = authErrorReason(err)
+			diag.UserAuthError = err.Error()
 		}
 	}
 	return diag, nil
@@ -350,7 +350,7 @@ func (c *Client) fetchChannelsWithToken(ctx context.Context, token string, works
 			return channels, nil
 		}
 		if seen[nextCursor] {
-			return nil, fmt.Errorf("conversations.list repeated cursor %q", nextCursor)
+			return nil, errors.New("conversations.list repeated cursor")
 		}
 		seen[nextCursor] = true
 		cursor = nextCursor

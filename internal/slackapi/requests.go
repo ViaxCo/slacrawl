@@ -218,7 +218,7 @@ func nativePageSuccess(method string, response slack.SlackResponse, collectionPr
 
 func nativeResponseSuccess(method string, response slack.SlackResponse) error {
 	if err := response.Err(); err != nil {
-		return err
+		return &nativeDiagnosticError{method: method, phase: "API response", safeCode: safeNativeErrorCode(response.Error), cause: err}
 	}
 	// Slack's Err permits blank-error responses from non-JSON methods. Native
 	// API responses must affirm success before callers can use their payloads.
@@ -228,16 +228,29 @@ func nativeResponseSuccess(method string, response slack.SlackResponse) error {
 	return nil
 }
 
-// Causes can contain private response text or URLs. Render only caller-owned
-// method/phase labels; explicit cause inspection still exposes the original error.
+func safeNativeErrorCode(code string) string {
+	switch code {
+	case "missing_scope", "not_in_channel", "channel_not_found", "invalid_auth", "not_authed",
+		"account_inactive", "token_expired", "token_revoked", "is_archived":
+		return code
+	}
+	return ""
+}
+
+// Causes can contain private response text or URLs. Render only exact selected
+// codes or caller-owned labels; explicit cause inspection exposes the original.
 type nativeDiagnosticError struct {
-	method string
-	phase  string
-	status int
-	cause  error
+	method   string
+	phase    string
+	status   int
+	cause    error
+	safeCode string
 }
 
 func (e *nativeDiagnosticError) Error() string {
+	if e.safeCode != "" {
+		return e.safeCode
+	}
 	if e.status != 0 {
 		return fmt.Sprintf("slack %s %s failed (HTTP %d)", e.method, e.phase, e.status)
 	}
@@ -396,7 +409,7 @@ func (c *Client) getUsers(ctx context.Context, token string) ([]slack.User, erro
 			return users, nil
 		}
 		if seen[page.nextCursor] {
-			return nil, fmt.Errorf("users.list repeated cursor %q", page.nextCursor)
+			return nil, errors.New("users.list repeated cursor")
 		}
 		seen[page.nextCursor] = true
 		cursor = page.nextCursor

@@ -122,7 +122,9 @@ func TestUserPrimaryCoverageOwnership(t *testing.T) {
 			})
 			client.now = func() time.Time { return time.Unix(1710000200, 0).UTC() }
 			opts := SyncOptions{WorkspaceID: "T123", Since: tc.since, Full: tc.full}
-			require.ErrorContains(t, client.Sync(ctx, st, opts), "synthetic_history_failure")
+			syncErr := client.Sync(ctx, st, opts)
+			require.ErrorContains(t, syncErr, "slack conversations.history API response failed")
+			requireNativeErrorCode(t, syncErr, "synthetic_history_failure")
 			pending, err := loadHistoryCoverage(ctx, st, SourceUser, "T123", "C123", tc.since)
 			require.NoError(t, err)
 			require.Equal(t, old.Complete, pending.Complete)

@@ -350,7 +350,7 @@ func TestFullThreadSkipCleanupAfterJoin(t *testing.T) {
 			}
 			joinState, err := st.GetSyncState(ctx, SourceBot, "channel_join", "C123")
 			require.NoError(t, err)
-			require.Equal(t, map[bool]string{true: "joined", false: "failed:restricted_action"}[joins], joinState)
+			require.Equal(t, map[bool]string{true: "joined", false: "failed:slack conversations.join API response failed"}[joins], joinState)
 			coverage, err := st.GetSyncState(ctx, "doctor", "threads", "coverage")
 			require.NoError(t, err)
 			require.Equal(t, map[bool]string{true: "full", false: "partial"}[joins], coverage)
@@ -359,7 +359,7 @@ func TestFullThreadSkipCleanupAfterJoin(t *testing.T) {
 }
 
 func TestNativeJoinSuccessControlsHistoryRetry(t *testing.T) {
-	for _, outcome := range []string{"unsuccessful", "success", "decode"} {
+	for _, outcome := range []string{"unsuccessful", "success", "decode", "native-error"} {
 		joins := outcome == "success"
 		t.Run(outcome, func(t *testing.T) {
 			ctx := context.Background()
@@ -387,6 +387,9 @@ func TestNativeJoinSuccessControlsHistoryRetry(t *testing.T) {
 				case "/conversations.join":
 					joinCalls++
 					require.Equal(t, url.Values{"token": {"fixture-bot"}, "channel": {"C123"}}, form)
+					if outcome == "native-error" {
+						return map[string]any{"ok": false, "error": "join-content-canary"}, nil
+					}
 					if outcome == "decode" {
 						return json.RawMessage(`{"ok":true,"errors":[{"private":"join-content-canary"}],"channel":{"id":"C123","is_channel":true}}`), nil
 					}
@@ -403,7 +406,7 @@ func TestNativeJoinSuccessControlsHistoryRetry(t *testing.T) {
 			require.Equal(t, map[bool]int{true: 2, false: 1}[joins], histories)
 			joinState, err := st.GetSyncState(ctx, SourceBot, "channel_join", "C123")
 			require.NoError(t, err)
-			require.Equal(t, map[string]string{"success": "joined", "unsuccessful": "failed:conversations.join response did not report success", "decode": "failed:slack conversations.join response decode failed"}[outcome], joinState)
+			require.Equal(t, map[string]string{"success": "joined", "unsuccessful": "failed:conversations.join response did not report success", "decode": "failed:slack conversations.join response decode failed", "native-error": "failed:slack conversations.join API response failed"}[outcome], joinState)
 			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			require.True(t, coverage.Complete)

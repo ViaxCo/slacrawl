@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- Keep native API transport and decoding payloads out of rendered errors, progress logs, optional-auth Doctor diagnostics and failed-join state. Preserve inspectable causes, typed status/cancellation checks, retries and pending work; concrete Slack error strings and reflected continuation cursors remain separate diagnostic boundaries.
+- Keep arbitrary native API error strings and repeated cursor values out of rendered diagnostics, Doctor output and failed-join state. Retain nine exact readable machine codes and inspectable native causes without changing success, skip, retry or pending-work behavior.
+
+- Keep native API transport and decoding payloads out of rendered errors, progress logs, optional-auth Doctor diagnostics and failed-join state. Preserve inspectable causes, typed status/cancellation checks, retries and pending work.
 
 - Require present collection arrays before certifying native API history, replies, channel catalogs or user catalogs. Missing/null collections preserve retry work instead of completing an empty page; explicit empty arrays remain valid. Keep prior valid writes, native error handling and Doctor's existing probe-error behavior.
 

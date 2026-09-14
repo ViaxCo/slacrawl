@@ -155,7 +155,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 					}
 					continue
 				}
-				if setErr := st.SetSyncState(ctx, source.sourceName, "channel_join", channel.ID, "failed:"+authErrorReason(joinErr)); setErr != nil {
+				if setErr := st.SetSyncState(ctx, source.sourceName, "channel_join", channel.ID, "failed:"+joinErr.Error()); setErr != nil {
 					return setErr
 				}
 			}
@@ -226,7 +226,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			break
 		}
 		if seen[resp.NextCursor] {
-			return fmt.Errorf("conversations.history repeated cursor %q", resp.NextCursor)
+			return errors.New("conversations.history repeated cursor")
 		}
 		seen[resp.NextCursor] = true
 		cursor = resp.NextCursor
@@ -354,7 +354,7 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 			return threadSyncComplete, nil
 		}
 		if seen[resp.NextCursor] {
-			return threadSyncComplete, fmt.Errorf("conversations.replies repeated cursor %q", resp.NextCursor)
+			return threadSyncComplete, errors.New("conversations.replies repeated cursor")
 		}
 		seen[resp.NextCursor] = true
 		cursor = resp.NextCursor
@@ -795,6 +795,8 @@ func threadSkipScope(channel slack.Channel) string {
 	return "public_channel"
 }
 
+// Return the original code only for exact machine comparisons. Diagnostics
+// must use err.Error() so arbitrary provider text cannot bypass redaction.
 func channelSkipReason(err error) string {
 	var slackErr slack.SlackErrorResponse
 	if errors.As(err, &slackErr) && slackErr.Err != "" {
@@ -893,11 +895,4 @@ func (c *Client) userAuthAvailable(ctx context.Context, workspaceID string) (boo
 		return false, fmt.Errorf("user token: %w", err)
 	}
 	return true, nil
-}
-
-func authErrorReason(err error) string {
-	if reason := channelSkipReason(err); reason != "" {
-		return reason
-	}
-	return err.Error()
 }

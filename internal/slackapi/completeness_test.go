@@ -151,7 +151,11 @@ func TestConversationPageSuccessPreservesNativeErrors(t *testing.T) {
 	}
 	// Direct helper input proves metadata passthrough. Page decoding's existing
 	// response_metadata cursor field does not populate the embedded metadata.
-	require.Equal(t, response.Err(), nativePageSuccess("conversations.history", response, false))
+	var cause slack.SlackErrorResponse
+	helperErr := nativePageSuccess("conversations.history", response, false)
+	require.ErrorAs(t, helperErr, &cause)
+	require.Equal(t, response.Err(), cause)
+	require.EqualError(t, helperErr, "missing_scope")
 	for _, method := range []string{"history", "replies"} {
 		for _, collection := range []string{"records", "absent", "null"} {
 			t.Run(method+"/"+collection, func(t *testing.T) {
@@ -411,9 +415,11 @@ func TestHistoryCompletenessAcrossSources(t *testing.T) {
 }
 
 func TestHistoryPageSuccessRetriesPendingInterval(t *testing.T) {
-	for _, failure := range []string{"unsuccessful", "absent", "null", "decode"} {
+	for _, failure := range []string{"unsuccessful", "absent", "null", "decode", "native-error"} {
 		failureReason := "conversations.history response did not report success"
-		if failure == "decode" {
+		if failure == "native-error" {
+			failureReason = "slack conversations.history API response failed"
+		} else if failure == "decode" {
 			failureReason = "slack conversations.history message decode failed"
 		} else if failure != "unsuccessful" {
 			failureReason = "conversations.history response did not provide a collection array; page remains uncertified"
@@ -454,6 +460,9 @@ func TestHistoryPageSuccessRetriesPendingInterval(t *testing.T) {
 					}
 					require.Equal(t, "second", form.Get("cursor"))
 					if !corrected {
+						if failure == "native-error" {
+							return map[string]any{"ok": false, "error": "rejected-page-canary"}, nil
+						}
 						if failure == "decode" {
 							message := repairKeyMessage("rejected-page-canary", "1710000002.000000")
 							message["blocks"] = []any{map[string]any{"type": "input", "element": map[string]any{"type": "rejected-page-canary"}}}
@@ -479,9 +488,12 @@ func TestHistoryPageSuccessRetriesPendingInterval(t *testing.T) {
 				}
 				runErr := run()
 				require.EqualError(t, runErr, "channel C123 history: "+failureReason)
-				if failure == "decode" {
+				if failure == "native-error" {
+					requireNativeErrorCode(t, runErr, "rejected-page-canary")
+				}
+				if failure == "decode" || failure == "native-error" {
 					require.Contains(t, logs.String(), "state=failed")
-					require.Contains(t, logs.String(), "slack conversations.history message decode failed")
+					require.Contains(t, logs.String(), failureReason)
 					require.NotContains(t, logs.String(), "state=finished")
 				}
 				require.Equal(t, []string{"", "second"}, cursors)
@@ -567,8 +579,11 @@ func TestHistoryCompletenessKeepsConcreteFailures(t *testing.T) {
 			if mode == "cancellation" {
 				require.ErrorIs(t, err, context.Canceled)
 			} else {
-				want := map[string]string{"request": "synthetic_request_failure", "decode": "slack conversations.history message decode failed", "identity": "message channel does not match requested conversation", "timestamp": "message is missing a timestamp", "store": "synthetic_write_failure", "thread": "synthetic_thread_failure"}
+				want := map[string]string{"request": "slack conversations.history API response failed", "decode": "slack conversations.history message decode failed", "identity": "message channel does not match requested conversation", "timestamp": "message is missing a timestamp", "store": "synthetic_write_failure", "thread": "slack conversations.replies API response failed"}
 				require.ErrorContains(t, err, want[mode])
+				if mode == "request" || mode == "thread" {
+					requireNativeErrorCode(t, err, map[string]string{"request": "synthetic_request_failure", "thread": "synthetic_thread_failure"}[mode])
+				}
 				if mode == "decode" {
 					var typeErr *json.UnmarshalTypeError
 					require.ErrorAs(t, err, &typeErr)

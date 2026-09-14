@@ -76,7 +76,8 @@ func TestConcurrentSyncPreservesWorkerErrorBeforeSiblingCancellation(t *testing.
 	}
 	close(releaseFailure)
 	err := <-result
-	require.ErrorContains(t, err, "channel C111 history: synthetic_failure")
+	require.EqualError(t, err, "channel C111 history: slack conversations.history API response failed")
+	requireNativeErrorCode(t, err, "synthetic_failure")
 	require.NotErrorIs(t, err, context.Canceled)
 	require.Contains(t, logs.String(), "state=failed")
 	require.NotContains(t, logs.String(), "state=finished")

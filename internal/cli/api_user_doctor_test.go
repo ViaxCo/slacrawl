@@ -22,7 +22,7 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 	for _, tc := range []struct {
 		name                                             string
 		globalFull, globalInvalid, namedPartial, noNamed bool
-		missingDB, retainedSkip, otherSkip               bool
+		missingDB, retainedSkip, otherSkip, unsafeError  bool
 		wantGlobal, wantTop                              string
 		wantReason, wantText                             string
 	}{
@@ -34,6 +34,7 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 		{name: "global-full/named-full/unrelated-skips", globalFull: true, otherSkip: true, wantGlobal: "full", wantTop: "full", wantText: "full historical replies"},
 		{name: "global-invalid/named-full/missing", globalInvalid: true, missingDB: true, wantGlobal: "partial", wantTop: "full", wantText: "partial without user auth"},
 		{name: "global-invalid/named-full/skipped", globalInvalid: true, retainedSkip: true, wantGlobal: "partial", wantTop: "partial", wantText: "partial without user auth"},
+		{name: "global-unsafe/named-unsafe/missing", globalInvalid: true, namedPartial: true, unsafeError: true, missingDB: true, wantGlobal: "partial", wantTop: "partial", wantText: "partial without user auth"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -87,6 +88,10 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 				require.NoError(t, st.Close())
 			}
 			before := shareArchiveSnapshot(t, cfg.DBPath)
+			authCode, authDisplay := "invalid_auth", "invalid_auth"
+			if tc.unsafeError {
+				authCode, authDisplay = "doctor-error-canary", "slack auth.test API response failed"
+			}
 			var roles, problems []string
 			transport := cliRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 				role := cliSlackToken(r)
@@ -96,7 +101,7 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 				}
 				payload := map[string]any{"ok": true, "team_id": teamByRole[role], "team": "Fixture " + teamByRole[role]}
 				if teamByRole[role] == "" {
-					payload = map[string]any{"ok": false, "error": "invalid_auth"}
+					payload = map[string]any{"ok": false, "error": authCode}
 				}
 				data, err := json.Marshal(payload)
 				if err != nil {
@@ -107,6 +112,7 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 			var output bytes.Buffer
 			app := &App{Stdout: &output, Stderr: &output, apiURL: "https://fixture.invalid/", httpClient: &http.Client{Transport: transport}}
 			require.NoError(t, app.Run(ctx, []string{"--config", configPath, "--json", "doctor"}))
+			require.NotContains(t, output.String(), "doctor-error-canary")
 			var report map[string]any
 			require.NoError(t, json.Unmarshal(output.Bytes(), &report))
 			diag := report["slack_api"].(map[string]any)
@@ -123,7 +129,7 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 			require.Equal(t, tc.globalFull || tc.globalInvalid, diag["user_configured"])
 			require.Equal(t, tc.globalFull, diag["user_auth_available"])
 			if tc.globalInvalid {
-				require.Equal(t, "invalid_auth", diag["user_auth_error"])
+				require.Equal(t, authDisplay, diag["user_auth_error"])
 			} else {
 				require.Nil(t, diag["user_auth_error"])
 			}
@@ -139,7 +145,7 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 					require.Equal(t, map[bool]string{true: "full", false: "partial"}[full], d["thread_coverage"])
 					require.Equal(t, full, d["user_auth_available"])
 					if !full {
-						require.Equal(t, "invalid_auth", d["user_auth_error"])
+						require.Equal(t, authDisplay, d["user_auth_error"])
 					}
 				}
 			}
@@ -153,6 +159,7 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 				output.Reset()
 				roles, problems = nil, nil
 				require.NoError(t, app.Run(ctx, []string{"--config", configPath, "--format", format, "doctor"}))
+				require.NotContains(t, output.String(), "doctor-error-canary")
 				if format == "text" {
 					require.Contains(t, output.String(), tc.wantText)
 					if tc.globalFull {

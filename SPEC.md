@@ -512,10 +512,20 @@ Underlying causes remain inspectable through `errors.Is`/`errors.As` and unwrapp
 the error objects themselves are not redacted. Body closure, retries, admission,
 optional-auth fallback and pending-work ownership remain unchanged.
 
-This boundary does not redact concrete `SlackErrorResponse.Err` strings/details,
-reflected continuation cursors, unrelated diagnostics or successful archive data.
-Native response success and channel-skip classification remain unchanged; this
-is not a global diagnostic privacy guarantee.
+For decoded unsuccessful responses, render a native error code only when it
+exactly equals `missing_scope`, `not_in_channel`, `channel_not_found`,
+`invalid_auth`, `not_authed`, `account_inactive`, `token_expired`,
+`token_revoked` or `is_archived`. Other codes render
+`slack <method> API response failed`; whitespace, case changes and added text do
+not qualify. Explicit `ok: true` retains the SDK's error-field bypass. Channel
+skip/retry decisions inspect the original code through exact machine comparisons.
+Repeated channel, DM, user, history and replies cursors report only the method
+and repeated-cursor condition, never the cursor value.
+
+Underlying native codes, details and metadata remain inspectable in error causes.
+This does not redact error objects, identities, progress names, successful response
+metadata, successful archive data or previously stored diagnostics. This is not
+a global diagnostic privacy guarantee.
 
 ### Slack export import
 
