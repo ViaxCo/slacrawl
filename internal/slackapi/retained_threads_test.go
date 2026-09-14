@@ -581,6 +581,7 @@ func TestRetainedThreadUnownedHintCanAcquireLaterPage(t *testing.T) {
 	defer func() { require.NoError(t, other.Close()) }()
 	const rootTS, childTS = "1710000001.000000", "1710000002.000000"
 	const workQuery = "select * from sync_state where source_name='api-user' and entity_type in ('thread_pending_v1','thread_skip') order by entity_type,entity_id"
+	now := time.Unix(1710000400, 0).UTC()
 	var previous []map[string]any
 	var priorGeneration string
 	histories, replies := 0, 0
@@ -608,7 +609,13 @@ func TestRetainedThreadUnownedHintCanAcquireLaterPage(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, previous, after)
 				require.NoError(t, other.MarkMessageDeleted(ctx, store.Message{WorkspaceID: "T123", ChannelID: "C123", TS: rootTS,
-					DeletedTS: rootTS, SourceName: SourceBot, SourceRank: 2, RawJSON: `{}`, UpdatedAt: time.Unix(1710000010, 0)}, nil))
+					DeletedTS: rootTS, SourceName: SourceBot, SourceRank: 2, RawJSON: `{}`, UpdatedAt: now}, nil))
+				deleted, err := other.QueryReadOnly(ctx, "select deleted_ts from messages where workspace_id='T123' and channel_id='C123' and ts='"+rootTS+"'")
+				require.NoError(t, err)
+				require.Equal(t, []map[string]any{{"deleted_ts": rootTS}}, deleted)
+				after, err = other.QueryReadOnly(ctx, workQuery)
+				require.NoError(t, err)
+				require.Empty(t, after, "committed deletion must retire the prior generation and skip")
 			}
 			payload := map[string]any{"ok": true, "messages": []any{map[string]any{"ts": rootTS, "text": "revived root", "reply_count": 1}}}
 			if histories == 1 {
@@ -627,6 +634,7 @@ func TestRetainedThreadUnownedHintCanAcquireLaterPage(t *testing.T) {
 		}
 		return primaryOwnerResponse(r.URL.Path), nil
 	})
+	client.now = func() time.Time { return now }
 	require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"}))
 	require.Equal(t, 2, histories)
 	require.Equal(t, 1, replies)
