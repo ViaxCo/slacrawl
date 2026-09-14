@@ -359,8 +359,9 @@ func TestFullThreadSkipCleanupAfterJoin(t *testing.T) {
 }
 
 func TestNativeJoinSuccessControlsHistoryRetry(t *testing.T) {
-	for _, joins := range []bool{false, true} {
-		t.Run(fmt.Sprintf("join-succeeds=%t", joins), func(t *testing.T) {
+	for _, outcome := range []string{"unsuccessful", "success", "decode"} {
+		joins := outcome == "success"
+		t.Run(outcome, func(t *testing.T) {
 			ctx := context.Background()
 			st := mustStore(t)
 			defer func() { require.NoError(t, st.Close()) }()
@@ -386,6 +387,9 @@ func TestNativeJoinSuccessControlsHistoryRetry(t *testing.T) {
 				case "/conversations.join":
 					joinCalls++
 					require.Equal(t, url.Values{"token": {"fixture-bot"}, "channel": {"C123"}}, form)
+					if outcome == "decode" {
+						return json.RawMessage(`{"ok":true,"errors":[{"private":"join-content-canary"}],"channel":{"id":"C123","is_channel":true}}`), nil
+					}
 					if !joins {
 						return json.RawMessage(`{"ok":false,"channel":{"id":"C123","is_channel":true,"name":"join-content-canary"}}`), nil
 					}
@@ -399,7 +403,7 @@ func TestNativeJoinSuccessControlsHistoryRetry(t *testing.T) {
 			require.Equal(t, map[bool]int{true: 2, false: 1}[joins], histories)
 			joinState, err := st.GetSyncState(ctx, SourceBot, "channel_join", "C123")
 			require.NoError(t, err)
-			require.Equal(t, map[bool]string{true: "joined", false: "failed:conversations.join response did not report success"}[joins], joinState)
+			require.Equal(t, map[string]string{"success": "joined", "unsuccessful": "failed:conversations.join response did not report success", "decode": "failed:slack conversations.join response decode failed"}[outcome], joinState)
 			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			require.True(t, coverage.Complete)

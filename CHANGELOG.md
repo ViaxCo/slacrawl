@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep native API transport and decoding payloads out of rendered errors, progress logs, optional-auth Doctor diagnostics and failed-join state. Preserve inspectable causes, typed status/cancellation checks, retries and pending work; concrete Slack error strings and reflected continuation cursors remain separate diagnostic boundaries.
+
 - Require present collection arrays before certifying native API history, replies, channel catalogs or user catalogs. Missing/null collections preserve retry work instead of completing an empty page; explicit empty arrays remain valid. Keep prior valid writes, native error handling and Doctor's existing probe-error behavior.
 
 - Require a nonblank authenticated workspace ID before workspace-bound API operations. Reject successful but unbound primary or optional-user identities before sync/repair writes, preserve concrete optional-auth fallback, and use canonical workspace IDs in Doctor diagnostics and DM probes. Requested workspace and enterprise IDs do not replace missing authentication identity.

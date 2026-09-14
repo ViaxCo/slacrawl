@@ -503,6 +503,20 @@ enterprise ID, but the enterprise ID alone does not identify a workspace. This
 does not add organization-token resolution or a configured-workspace fallback;
 the existing `users.list` request still leaves `team_id` empty.
 
+Native request construction/execution, Retry-After parsing, HTTP status, body-read
+and envelope-decode failures render only the trusted method, fixed failure phase
+and optional numeric HTTP status. History/replies message-decode failures use the
+same diagnostic wrapper. SDK decode errors can contain response payloads, so their
+text is never appended to ordinary diagnostics, progress logs or failed-join state.
+Underlying causes remain inspectable through `errors.Is`/`errors.As` and unwrapping;
+the error objects themselves are not redacted. Body closure, retries, admission,
+optional-auth fallback and pending-work ownership remain unchanged.
+
+This boundary does not redact concrete `SlackErrorResponse.Err` strings/details,
+reflected continuation cursors, unrelated diagnostics or successful archive data.
+Native response success and channel-skip classification remain unchanged; this
+is not a global diagnostic privacy guarantee.
+
 ### Slack export import
 
 1. Read all four workspace JSON catalog roles and reserve every ID/name locator

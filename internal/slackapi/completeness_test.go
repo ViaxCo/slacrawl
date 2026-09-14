@@ -411,10 +411,12 @@ func TestHistoryCompletenessAcrossSources(t *testing.T) {
 }
 
 func TestHistoryPageSuccessRetriesPendingInterval(t *testing.T) {
-	for _, failure := range []string{"unsuccessful", "absent", "null"} {
-		failureReason := "response did not report success"
-		if failure != "unsuccessful" {
-			failureReason = "response did not provide a collection array; page remains uncertified"
+	for _, failure := range []string{"unsuccessful", "absent", "null", "decode"} {
+		failureReason := "conversations.history response did not report success"
+		if failure == "decode" {
+			failureReason = "slack conversations.history message decode failed"
+		} else if failure != "unsuccessful" {
+			failureReason = "conversations.history response did not provide a collection array; page remains uncertified"
 		}
 		for _, tc := range []struct {
 			name, source, token string
@@ -452,6 +454,11 @@ func TestHistoryPageSuccessRetriesPendingInterval(t *testing.T) {
 					}
 					require.Equal(t, "second", form.Get("cursor"))
 					if !corrected {
+						if failure == "decode" {
+							message := repairKeyMessage("rejected-page-canary", "1710000002.000000")
+							message["blocks"] = []any{map[string]any{"type": "input", "element": map[string]any{"type": "rejected-page-canary"}}}
+							return map[string]any{"ok": true, "messages": []any{message}}, nil
+						}
 						if failure != "unsuccessful" {
 							payload := map[string]any{"ok": true}
 							if failure == "null" {
@@ -471,7 +478,12 @@ func TestHistoryPageSuccessRetriesPendingInterval(t *testing.T) {
 					return client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"})
 				}
 				runErr := run()
-				require.EqualError(t, runErr, "channel C123 history: conversations.history "+failureReason)
+				require.EqualError(t, runErr, "channel C123 history: "+failureReason)
+				if failure == "decode" {
+					require.Contains(t, logs.String(), "state=failed")
+					require.Contains(t, logs.String(), "slack conversations.history message decode failed")
+					require.NotContains(t, logs.String(), "state=finished")
+				}
 				require.Equal(t, []string{"", "second"}, cursors)
 				require.Equal(t, beforeProgress, repairKeyRows(t, st, progressQuery))
 				coverage, err := loadHistoryCoverage(ctx, st, tc.source, "T123", "C123", "")
@@ -555,8 +567,13 @@ func TestHistoryCompletenessKeepsConcreteFailures(t *testing.T) {
 			if mode == "cancellation" {
 				require.ErrorIs(t, err, context.Canceled)
 			} else {
-				want := map[string]string{"request": "synthetic_request_failure", "decode": "cannot unmarshal number", "identity": "message channel does not match requested conversation", "timestamp": "message is missing a timestamp", "store": "synthetic_write_failure", "thread": "synthetic_thread_failure"}
+				want := map[string]string{"request": "synthetic_request_failure", "decode": "slack conversations.history message decode failed", "identity": "message channel does not match requested conversation", "timestamp": "message is missing a timestamp", "store": "synthetic_write_failure", "thread": "synthetic_thread_failure"}
 				require.ErrorContains(t, err, want[mode])
+				if mode == "decode" {
+					var typeErr *json.UnmarshalTypeError
+					require.ErrorAs(t, err, &typeErr)
+					require.Equal(t, "number", typeErr.Value)
+				}
 			}
 			require.NotContains(t, err.Error(), "continuation cursor")
 			require.NotContains(t, err.Error(), "uncertified")
@@ -1446,6 +1463,35 @@ func nativeResponseCall(t *testing.T, ctx context.Context, client *Client, metho
 		return err
 	case "conversations.join":
 		return client.joinConversation(ctx, "C123")
+	case "conversations.list":
+		rows, cursor, err := client.getConversations(ctx, client.tokens.User, &slack.GetConversationsParameters{})
+		if err != nil {
+			require.Nil(t, rows)
+			require.Empty(t, cursor)
+		}
+		return err
+	case "users.list":
+		rows, err := client.getUsers(ctx, client.tokens.User)
+		if err != nil {
+			require.Nil(t, rows)
+		}
+		return err
+	case "conversations.history":
+		page, err := client.getConversationHistory(ctx, client.tokens.User, &slack.GetConversationHistoryParameters{ChannelID: "C123"})
+		if err != nil {
+			require.Nil(t, page)
+		} else {
+			require.NotNil(t, page)
+		}
+		return err
+	case "conversations.replies":
+		page, err := client.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"})
+		if err != nil {
+			require.Nil(t, page)
+		} else {
+			require.NotNil(t, page)
+		}
+		return err
 	default:
 		t.Fatalf("unexpected native method %q", method)
 		return nil

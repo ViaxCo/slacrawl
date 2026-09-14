@@ -823,6 +823,20 @@ Use a workspace-scoped bot or user token. An enterprise ID may accompany a valid
 workspace ID but cannot replace it; organization-token workspace resolution is
 not supported. The existing `users.list` request leaves `team_id` empty.
 
+### API request diagnostics
+
+Native request/response failures report a fixed operation and phase, with numeric
+HTTP status when relevant. Endpoint URLs, transport/read error text, invalid
+Retry-After values and SDK decode snippets are omitted from these rendered errors.
+This also protects optional-auth Doctor JSON, failed-join state and progress logs
+when they report these failures. Existing retry and partial-work behavior stays
+unchanged; the diagnostic no longer includes the underlying failure detail.
+
+Causes remain available to code using `errors.Is`, `errors.As` or unwrapping and
+may still contain private data. Concrete Slack error strings/details and reflected
+continuation cursors remain unchanged and need separate treatment. This is not
+redaction of error objects, successful archives or every diagnostic surface.
+
 ### API history completeness
 
 Native history and replies pages must report `ok: true` before any message on
@@ -858,8 +872,9 @@ but the previous coverage `Latest` and `Complete` stay unchanged, the attempted
 lower bound remains in `Pending`, and ordinary workspace success does not
 advance. A corrected retry resumes that pending interval and can complete it.
 Concrete request, validation, write, and cancellation failures keep their
-existing errors. One-message capability probes require successful page responses
-but remain independent of scan completion. Doctor's existing suppression of
+precedence; native transport/decode failures use the bounded diagnostics above.
+One-message capability probes require successful page responses but remain
+independent of scan completion. Doctor's existing suppression of
 non-scope probe errors is unchanged.
 
 See Slack's [history contract](https://docs.slack.dev/reference/methods/conversations.history/#message-types),
