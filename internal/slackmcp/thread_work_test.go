@@ -333,7 +333,7 @@ func TestMCPAdmittedRevivalRequeuesCanceledWork(t *testing.T) {
 			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "TLOCAL", Name: "fixture", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
 			require.NoError(t, st.UpsertMessage(ctx, parent, nil))
 			require.NoError(t, st.SetSyncState(ctx, SourceName, "workspace", "TLOCAL", "prior-success"))
-			prepared, err := st.PrepareThreadWork(ctx, SourceName, "TLOCAL", "C123")
+			prepared, err := st.PrepareThreadWork(ctx, SourceName, "TLOCAL", "C123", nil)
 			require.NoError(t, err)
 			require.Len(t, prepared, 1)
 			materialized := MessageRecord{ChannelID: "C123", TS: parent.TS, Text: "revived root", ReplyCount: 1}
@@ -345,7 +345,7 @@ func TestMCPAdmittedRevivalRequeuesCanceledWork(t *testing.T) {
 			require.Empty(t, pending)
 			if mode == "renewed" {
 				require.NoError(t, other.UpsertMessage(ctx, parent, nil))
-				_, err := other.PrepareThreadWork(ctx, SourceName, "TLOCAL", "C123")
+				_, err := other.PrepareThreadWork(ctx, SourceName, "TLOCAL", "C123", nil)
 				require.NoError(t, err)
 			}
 			before, err := st.QueryReadOnly(ctx, "select * from sync_state order by entity_type,entity_id")
@@ -388,7 +388,7 @@ func TestMCPAdmittedRevivalRequeuesCanceledWork(t *testing.T) {
 				require.NoError(t, err)
 				require.False(t, result.revoked)
 				require.Equal(t, 1, calls)
-				completed, err := st.CompleteThreadWork(ctx, work, "")
+				completed, err := st.CompleteThreadWork(ctx, work, "", nil)
 				require.NoError(t, err)
 				require.True(t, completed)
 				pending, err = st.PendingThreadWork(ctx, SourceName, "TLOCAL", "C123")
@@ -417,7 +417,7 @@ func TestMCPHistoryPreservesUnseenConcurrentWork(t *testing.T) {
 	require.NoError(t, st.UpsertWorkspace(ctx, store.Workspace{ID: "TLOCAL", Name: "fixture", RawJSON: "{}", UpdatedAt: now}))
 	require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "TLOCAL", Name: "fixture", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
 	require.NoError(t, st.SetSyncState(ctx, SourceName, "workspace", "TLOCAL", "prior-success"))
-	prepared, err := st.PrepareThreadWork(ctx, SourceName, "TLOCAL", "C123")
+	prepared, err := st.PrepareThreadWork(ctx, SourceName, "TLOCAL", "C123", nil)
 	require.NoError(t, err)
 	require.Empty(t, prepared)
 	materialized := MessageRecord{ChannelID: "C123", TS: "1710000001.000000", Text: "root", ReplyCount: 1}
@@ -449,7 +449,7 @@ func TestMCPHistoryPreservesUnseenConcurrentWork(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.revoked)
 	require.Equal(t, 1, calls)
-	completed, err := owner.CompleteThreadWork(ctx, work, "")
+	completed, err := owner.CompleteThreadWork(ctx, work, "", nil)
 	require.NoError(t, err)
 	require.True(t, completed)
 	pending, err := st.PendingThreadWork(ctx, SourceName, "TLOCAL", "C123")

@@ -17,6 +17,9 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 		return WriteBatchResult{}, err
 	}
 	defer rollback()
+	if _, err := checkAPIHistory(ctx, dbtx, batch.HistoryGuard); err != nil {
+		return WriteBatchResult{}, err
+	}
 	if batch.ThreadGuard != nil {
 		current, err := threadWorkCurrent(ctx, dbtx, *batch.ThreadGuard)
 		if err != nil {
@@ -90,6 +93,12 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 			return WriteBatchResult{}, err
 		}
 	}
+	// A committed collision invalidates an older ordinary completion even when
+	// discovery preserves extant generations. Enqueue against the requested
+	// root's final live ownership, never the skipped message's identity.
+	if len(result.CollisionsSkipped) > 0 && batch.PendingThreadOnCollision != nil {
+		requests = append(requests, *batch.PendingThreadOnCollision)
+	}
 	result.PendingThreads, err = enqueueThreadWork(ctx, dbtx, requests)
 	if err != nil {
 		return WriteBatchResult{}, err
@@ -99,6 +108,11 @@ func (s *Store) ApplyWriteBatch(ctx context.Context, batch WriteBatch) (WriteBat
 			SourceName: state.SourceName, EntityType: state.EntityType, EntityID: state.EntityID,
 			Value: state.Value, UpdatedAt: formatDBTime(time.Now().UTC()),
 		}); err != nil {
+			return WriteBatchResult{}, err
+		}
+	}
+	for _, state := range batch.SyncStateDeletes {
+		if err := qtx.DeleteSyncState(ctx, storedb.DeleteSyncStateParams{SourceName: state.SourceName, EntityType: state.EntityType, EntityID: state.EntityID}); err != nil {
 			return WriteBatchResult{}, err
 		}
 	}

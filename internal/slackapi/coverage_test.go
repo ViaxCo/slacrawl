@@ -2,6 +2,7 @@ package slackapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -58,29 +59,31 @@ func TestHistoryCoverageRetriesIncompleteInterval(t *testing.T) {
 			channels := []slack.Channel{{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}, Name: "test"}}}
 			_, plan, err := client.channelSyncPlan(ctx, st, "T123", channels, SyncOptions{})
 			require.NoError(t, err)
-			require.Empty(t, plan["C123"])
+			require.Equal(t, store.APIHistoryOptions{}, plan)
 			source := channelSyncSource{token: "test", sourceName: SourceBot, sourceRank: 2}
-			err = client.syncChannelMessagesWithSource(ctx, st, "T123", channels[0], plan["C123"], false, now, threadFailure, source)
+			err = client.syncChannelMessagesWithSource(ctx, st, "T123", channels[0], plan, now, threadFailure, source)
 			require.ErrorContains(t, err, map[bool]string{false: "slack conversations.history API response failed", true: "slack conversations.replies API response failed"}[threadFailure])
 			requireNativeErrorCode(t, err, "synthetic_failure")
-			state, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			state, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			require.NotNil(t, state.Pending)
 			require.False(t, state.Complete)
 			_, plan, err = client.channelSyncPlan(ctx, st, "T123", channels, SyncOptions{})
 			require.NoError(t, err)
-			require.Empty(t, plan["C123"])
+			require.Equal(t, store.APIHistoryOptions{}, plan)
 			fail = false
-			require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channels[0], plan["C123"], false, now, threadFailure, source))
+			require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channels[0], plan, now, threadFailure, source))
 			require.Equal(t, []string{"", ""}, oldest)
-			state, err = loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			state, err = readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			require.True(t, state.Complete)
 			require.Nil(t, state.Pending)
 			require.Equal(t, "1710000200.000000", state.Latest)
 			_, plan, err = client.channelSyncPlan(ctx, st, "T123", channels, SyncOptions{})
 			require.NoError(t, err)
-			require.Equal(t, "1709996600.000000", plan["C123"])
+			attempt, err := st.BeginAPIHistory(ctx, store.APIHistoryScope{SourceName: SourceBot, WorkspaceID: "T123", ChannelID: "C123"}, plan, "1710000200.000000")
+			require.NoError(t, err)
+			require.Equal(t, "1709996600.000000", attempt.Oldest)
 			rows, err := st.SearchMessages(ctx, store.SearchOptions{Query: "older", Mode: store.SearchModeRawFTS, Limit: 10})
 			require.NoError(t, err)
 			require.Len(t, rows, 1)
@@ -96,6 +99,7 @@ func TestHistoryCoverageAdvancesEmptyAndSparseScans(t *testing.T) {
 			defer st.Close()
 			now := time.Unix(1710000200, 123456000).UTC()
 			channel := slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}}
+			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", UpdatedAt: now}))
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				require.NoError(t, r.ParseForm())
 				require.Equal(t, "1710000200.123456", r.Form.Get("latest"))
@@ -105,15 +109,17 @@ func TestHistoryCoverageAdvancesEmptyAndSparseScans(t *testing.T) {
 			defer server.Close()
 			client := NewWithOptions(config.Tokens{Bot: "test"}, server.URL+"/", server.Client())
 			source := channelSyncSource{token: "test", sourceName: SourceBot, sourceRank: 2}
-			require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channel, "", false, now, false, source))
-			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channel, store.APIHistoryOptions{}, now, false, source))
+			coverage, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			require.True(t, coverage.Complete)
 			require.Nil(t, coverage.Pending)
 			require.Equal(t, "1710000200.123456", coverage.Latest)
 			_, plan, err := client.channelSyncPlan(ctx, st, "T123", []slack.Channel{channel}, SyncOptions{})
 			require.NoError(t, err)
-			require.Equal(t, repairOldest(coverage.Latest, time.Hour), plan["C123"])
+			attempt, err := st.BeginAPIHistory(ctx, store.APIHistoryScope{SourceName: SourceBot, WorkspaceID: "T123", ChannelID: "C123"}, plan, "1710000200.123456")
+			require.NoError(t, err)
+			require.Equal(t, "1709996600.123456", attempt.Oldest)
 		})
 	}
 }
@@ -122,29 +128,30 @@ func TestHistoryCoverageScopeAndExplicitBounds(t *testing.T) {
 	ctx := context.Background()
 	st := mustStore(t)
 	defer st.Close()
-	channel := slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}}
 	pending := "1700000000.000000"
-	require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1710000000.000000", Pending: &pending}))
-	client := &Client{}
-	for _, tc := range []struct {
-		source, workspace string
-		opts              SyncOptions
-		want              string
-	}{
-		{SourceBot, "T123", SyncOptions{}, pending},
-		{SourceUser, "T123", SyncOptions{}, ""},
-		{SourceBot, "T999", SyncOptions{}, ""},
-		{SourceBot, "T123", SyncOptions{Since: "1690000000.000000"}, "1690000000.000000"},
-		{SourceBot, "T123", SyncOptions{Full: true}, ""},
-	} {
-		_, plan, err := client.channelSyncPlan(ctx, st, tc.workspace, []slack.Channel{channel}, tc.opts, tc.source)
-		require.NoError(t, err)
-		require.Equal(t, tc.want, plan["C123"])
+	for _, owner := range []struct{ workspace, channel string }{{"T123", "C123"}, {"T999", "C999"}, {"Tnew", "CNEW"}} {
+		require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: owner.channel, WorkspaceID: owner.workspace}))
 	}
-	require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "Tnew", "C123", "recent", historyCoverage{Complete: true, Latest: "1710000000.000000"}))
-	_, plan, err := client.channelSyncPlan(ctx, st, "Tnew", []slack.Channel{channel}, SyncOptions{})
+	require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", store.APIHistoryState{Complete: true, Latest: "1710000000.000000", Pending: &pending}))
+	for _, tc := range []struct {
+		source, workspace, channel, since string
+		opts                              store.APIHistoryOptions
+		want                              string
+	}{
+		{SourceBot, "T123", "C123", "", store.APIHistoryOptions{}, pending},
+		{SourceUser, "T123", "C123", "", store.APIHistoryOptions{}, ""},
+		{SourceBot, "T999", "C999", "", store.APIHistoryOptions{}, ""},
+		{SourceBot, "T123", "C123", "1690000000.000000", store.APIHistoryOptions{RestoreRequested: true}, "1690000000.000000"},
+		{SourceBot, "T123", "C123", "", store.APIHistoryOptions{Full: true, RestoreRequested: true}, ""},
+	} {
+		attempt, err := st.BeginAPIHistory(ctx, store.APIHistoryScope{SourceName: tc.source, WorkspaceID: tc.workspace, ChannelID: tc.channel, Since: tc.since}, tc.opts, "1710000200.000000")
+		require.NoError(t, err)
+		require.Equal(t, tc.want, attempt.Oldest)
+	}
+	require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "Tnew", "CNEW", "1690000000.000000", store.APIHistoryState{Complete: true, Latest: "1710000000.000000"}))
+	attempt, err := st.BeginAPIHistory(ctx, store.APIHistoryScope{SourceName: SourceBot, WorkspaceID: "Tnew", ChannelID: "CNEW"}, store.APIHistoryOptions{}, "1710000200.000000")
 	require.NoError(t, err)
-	require.Empty(t, plan["C123"])
+	require.Empty(t, attempt.Oldest)
 }
 
 func TestRepairWorkspaceRetriesPendingHistory(t *testing.T) {
@@ -158,7 +165,7 @@ func TestRepairWorkspaceRetriesPendingHistory(t *testing.T) {
 		Text: "seed", NormalizedText: "seed", SourceRank: 2, SourceName: SourceBot,
 		RawJSON: "{}", UpdatedAt: now,
 	}, nil))
-	require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1709900000.000000"}))
+	require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", store.APIHistoryState{Complete: true, Latest: "1709900000.000000"}))
 	fail := true
 	var oldest []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -187,14 +194,14 @@ func TestRepairWorkspaceRetriesPendingHistory(t *testing.T) {
 	repairErr := client.repairWorkspace(ctx, st, "T123")
 	require.ErrorContains(t, repairErr, "slack conversations.history API response failed")
 	requireNativeErrorCode(t, repairErr, "synthetic_failure")
-	coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+	coverage, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 	require.NoError(t, err)
 	require.NotNil(t, coverage.Pending)
 	require.Equal(t, "1709896400.000000", *coverage.Pending)
 	fail = false
 	require.NoError(t, client.repairWorkspace(ctx, st, "T123"))
 	require.Equal(t, []string{"1709896400.000000", "1709896400.000000"}, oldest)
-	coverage, err = loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+	coverage, err = readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 	require.NoError(t, err)
 	require.Nil(t, coverage.Pending)
 	require.True(t, coverage.Complete)
@@ -225,7 +232,7 @@ func TestHistoryMigrationAndRestoreRequireLocalCoverage(t *testing.T) {
 						require.NoError(t, st.SetSyncState(ctx, "retention", "channel_floor", "T123|C123", floor))
 						require.NoError(t, st.SetSyncState(ctx, "retention", "channel_seed", "T123|C123", "1"))
 					}
-					require.NoError(t, saveHistoryCoverage(ctx, st, sourceName, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1710000100.000000"}))
+					require.NoError(t, seedAPIHistory(ctx, st, sourceName, "T123", "C123", "", store.APIHistoryState{Complete: true, Latest: "1710000100.000000"}))
 					requests, fail := 0, true
 					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						requests++
@@ -255,41 +262,61 @@ func TestHistoryMigrationAndRestoreRequireLocalCoverage(t *testing.T) {
 						require.NoError(t, err)
 					}
 					require.Zero(t, requests, "opening or restoring must not contact the provider")
-					coverage, err := loadHistoryCoverage(ctx, st, sourceName, "T123", "C123", "")
+					coverage, err := readAPIHistory(ctx, st, sourceName, "T123", "C123", "")
 					require.NoError(t, err)
-					require.Equal(t, historyCoverage{}, coverage)
+					require.Equal(t, store.APIHistoryState{}, coverage)
 					client := NewWithOptions(config.Tokens{Bot: "fixture", User: "fixture"}, server.URL+"/", server.Client())
-					_, plan, err := client.channelSyncPlan(ctx, st, "T123", []slack.Channel{channel}, SyncOptions{}, sourceName)
+					_, plan, err := client.channelSyncPlan(ctx, st, "T123", []slack.Channel{channel}, SyncOptions{})
 					require.NoError(t, err)
-					require.Equal(t, floor, plan["C123"], "newest saved message is not coverage")
+					require.Equal(t, store.APIHistoryOptions{}, plan, "selection does not derive coverage from message maxima")
 					source := channelSyncSource{token: "fixture", sourceName: sourceName, sourceRank: 2}
-					err = client.syncChannelMessagesWithSource(ctx, st, "T123", channel, plan["C123"], false, now, false, source)
+					err = client.syncChannelMessagesWithSource(ctx, st, "T123", channel, plan, now, false, source)
 					require.ErrorContains(t, err, "slack conversations.history API response failed")
 					requireNativeErrorCode(t, err, "synthetic_failure")
 					require.NoError(t, st.Close())
 					st, err = store.Open(dbPath)
 					require.NoError(t, err)
-					coverage, err = loadHistoryCoverage(ctx, st, sourceName, "T123", "C123", "")
+					coverage, err = readAPIHistory(ctx, st, sourceName, "T123", "C123", "")
 					require.NoError(t, err)
 					require.False(t, coverage.Complete)
 					require.NotNil(t, coverage.Pending)
 					require.Equal(t, floor, *coverage.Pending)
 					fail = false
-					require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channel, floor, false, now, false, source))
+					require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channel, store.APIHistoryOptions{}, now, false, source))
 					require.NoError(t, st.Close())
 					st, err = store.Open(dbPath)
 					require.NoError(t, err)
-					coverage, err = loadHistoryCoverage(ctx, st, sourceName, "T123", "C123", "")
+					coverage, err = readAPIHistory(ctx, st, sourceName, "T123", "C123", "")
 					require.NoError(t, err)
 					require.True(t, coverage.Complete)
 					require.Nil(t, coverage.Pending)
 					require.Equal(t, "1710000200.000000", coverage.Latest)
 					require.Equal(t, 2, requests)
-					_, plan, err = client.channelSyncPlan(ctx, st, "T123", []slack.Channel{channel}, SyncOptions{}, sourceName)
+					_, plan, err = client.channelSyncPlan(ctx, st, "T123", []slack.Channel{channel}, SyncOptions{})
 					require.NoError(t, err)
-					require.Equal(t, (store.ChannelSyncCursor{RetentionFloor: floor}).ApplyRetentionFloor(repairOldest(coverage.Latest, time.Hour)), plan["C123"])
+					attempt, err := st.BeginAPIHistory(ctx, store.APIHistoryScope{SourceName: sourceName, WorkspaceID: "T123", ChannelID: "C123"}, plan, "1710000200.000000")
+					require.NoError(t, err)
+					require.Equal(t, (store.ChannelSyncCursor{RetentionFloor: floor}).ApplyRetentionFloor("1709996600.000000"), attempt.Oldest)
 				})
 			}
 		}
 	}
+}
+
+// Fixtures seed the existing wire format directly; production mutation is owned
+// exclusively by BeginAPIHistory and guarded completion.
+func seedAPIHistory(ctx context.Context, st *store.Store, source, workspace, channel, since string, state store.APIHistoryState) error {
+	key, err := json.Marshal([3]string{workspace, channel, since})
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return st.SetSyncState(ctx, source, store.APIHistoryEntityType, string(key), string(raw))
+}
+
+func readAPIHistory(ctx context.Context, st *store.Store, source, workspace, channel, since string) (store.APIHistoryState, error) {
+	return st.APIHistory(ctx, store.APIHistoryScope{SourceName: source, WorkspaceID: workspace, ChannelID: channel, Since: since})
 }

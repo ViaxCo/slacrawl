@@ -87,7 +87,7 @@ func TestThreadWorkReconciliationDoesNotRenewOrDiscover(t *testing.T) {
 			root.ReplyCount = 1
 			require.NoError(t, st.UpsertMessage(ctx, root, nil))
 			if mode != "fresh" {
-				_, err := st.PrepareThreadWork(ctx, "mcp", "T1", "C1")
+				_, err := st.PrepareThreadWork(ctx, "mcp", "T1", "C1", nil)
 				require.NoError(t, err)
 				require.NoError(t, st.SetSyncState(ctx, "api-user", "thread_skip", "T1|C1|"+root.TS, "existing skip"))
 			}
@@ -115,7 +115,7 @@ func TestThreadWorkReconciliationDoesNotRenewOrDiscover(t *testing.T) {
 				foreign := root
 				foreign.WorkspaceID, foreign.ChannelID = "T2", "C2"
 				require.NoError(t, st.UpsertMessage(ctx, foreign, nil))
-				_, err := st.PrepareThreadWork(ctx, "mcp", "T2", "C2")
+				_, err := st.PrepareThreadWork(ctx, "mcp", "T2", "C2", nil)
 				require.NoError(t, err)
 				_, err = st.DB().ExecContext(ctx, "update messages set subtype='message_deleted' where channel_id='C2'")
 				require.NoError(t, err)

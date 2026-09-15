@@ -187,7 +187,7 @@ func TestAPIRejectsWholeMessagePageBeforePersistence(t *testing.T) {
 					st := mustStore(t)
 					defer st.Close()
 					oldLatest := "1709900000.000000"
-					require.NoError(t, saveHistoryCoverage(context.Background(), st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: oldLatest}))
+					require.NoError(t, seedAPIHistory(context.Background(), st, SourceBot, "T123", "C123", "", store.APIHistoryState{Complete: true, Latest: oldLatest}))
 					err := client.Sync(context.Background(), st, SyncOptions{})
 					require.ErrorContains(t, err, "message channel does not match requested conversation")
 					if endpoint == "conversations.history" {
@@ -197,7 +197,7 @@ func TestAPIRejectsWholeMessagePageBeforePersistence(t *testing.T) {
 					rows, err := st.SearchMessages(context.Background(), store.SearchOptions{Query: "earlier", Mode: store.SearchModeRawFTS, Limit: 10})
 					require.NoError(t, err)
 					require.Len(t, rows, 1, "the previously committed page survives")
-					coverage, err := loadHistoryCoverage(context.Background(), st, SourceBot, "T123", "C123", "")
+					coverage, err := readAPIHistory(context.Background(), st, SourceBot, "T123", "C123", "")
 					require.NoError(t, err)
 					require.Equal(t, oldLatest, coverage.Latest)
 					require.NotNil(t, coverage.Pending)
