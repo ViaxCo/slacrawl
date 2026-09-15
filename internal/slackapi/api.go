@@ -32,17 +32,18 @@ func defaultHTTPClient() *http.Client {
 }
 
 type Diagnostics struct {
-	BotConfigured     bool   `json:"bot_configured"`
-	AppConfigured     bool   `json:"app_configured"`
-	UserConfigured    bool   `json:"user_configured"`
-	ThreadCoverage    string `json:"thread_coverage"`
-	DMsIncluded       bool   `json:"dms_included"`
-	DMsMissingScope   string `json:"dms_missing_scope,omitempty"`
-	BotAuthTeamID     string `json:"bot_auth_team_id,omitempty"`
-	BotAuthTeam       string `json:"bot_auth_team,omitempty"`
-	UserAuthAvailable bool   `json:"user_auth_available"`
-	UserAuthError     string `json:"user_auth_error,omitempty"`
-	AppTailAvailable  bool   `json:"app_tail_available"`
+	BotConfigured        bool   `json:"bot_configured"`
+	AppConfigured        bool   `json:"app_configured"`
+	UserConfigured       bool   `json:"user_configured"`
+	ThreadCoverage       string `json:"thread_coverage"`
+	ThreadCoverageReason string `json:"thread_coverage_reason,omitempty"`
+	DMsIncluded          bool   `json:"dms_included"`
+	DMsMissingScope      string `json:"dms_missing_scope,omitempty"`
+	BotAuthTeamID        string `json:"bot_auth_team_id,omitempty"`
+	BotAuthTeam          string `json:"bot_auth_team,omitempty"`
+	UserAuthAvailable    bool   `json:"user_auth_available"`
+	UserAuthError        string `json:"user_auth_error,omitempty"`
+	AppTailAvailable     bool   `json:"app_tail_available"`
 }
 
 type SyncOptions struct {
@@ -235,8 +236,9 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	}
 
 	var (
-		users    []slack.User
-		userByID map[string]slack.User
+		users             []slack.User
+		userByID          map[string]slack.User
+		dmCatalogComplete bool
 	)
 	if c.dmPolicy.Enabled(c.tokens.User != "") && userRepliesAvailable && c.user != nil {
 		users, err = c.getUsers(ctx, source.historyClient)
@@ -248,9 +250,10 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 			userByID[user.ID] = user
 		}
 
-		dms, err := c.fetchDMs(ctx, workspaceID)
+		dms, err := c.fetchDMs(ctx, workspaceID, threadRepliesSkipped)
 		if err != nil {
 			if isMissingScopeError(err) {
+				threadRepliesSkipped.RecordOmission()
 				if setErr := st.SetSyncState(ctx, SourceUser, "dms", workspaceID, "missing_scope"); setErr != nil {
 					return setErr
 				}
@@ -258,6 +261,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 				return err
 			}
 		} else {
+			dmCatalogComplete = true
 			selectedDMs := make([]slack.Channel, 0, len(dms))
 			for _, channel := range dms {
 				if len(allow) > 0 {
@@ -298,8 +302,10 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	}
 
 	threadCoverage := "partial"
-	if userRepliesAvailable && !threadRepliesSkipped.Skipped() {
-		if opts.Full && len(opts.Channels) == 0 {
+	if userRepliesAvailable && !threadRepliesSkipped.Skipped() && !threadRepliesSkipped.Omitted() {
+		// Only an unrestricted scan of both catalogs can retire unknown legacy
+		// skips. Scoped runs still clear individual successfully completed threads.
+		if opts.Full && opts.Since == "" && len(opts.Channels) == 0 && len(excluded) == 0 && dmCatalogComplete {
 			if err := st.DeleteAPIThreadSkipsIfNoPending(ctx, workspaceID); err != nil {
 				return err
 			}

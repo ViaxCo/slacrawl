@@ -9,7 +9,7 @@ import (
 	"github.com/slack-go/slack"
 )
 
-func (c *Client) fetchDMs(ctx context.Context, workspaceID string) ([]slack.Channel, error) {
+func (c *Client) fetchDMs(ctx context.Context, workspaceID string, skips *threadSkipTracker) ([]slack.Channel, error) {
 	if c.user == nil {
 		return nil, nil
 	}
@@ -39,6 +39,7 @@ func (c *Client) fetchDMs(ctx context.Context, workspaceID string) ([]slack.Chan
 		}
 		for _, channel := range page.channels {
 			if dmChannelKind(channel) == "" {
+				skips.RecordOmission()
 				continue
 			}
 			out = append(out, channel)

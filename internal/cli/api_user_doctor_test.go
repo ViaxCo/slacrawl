@@ -20,17 +20,20 @@ import (
 // ignores the App endpoint seam. The baseline file contains only bot-free Doctor.
 func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 	for _, tc := range []struct {
-		name                               string
-		globalFull, namedPartial, noNamed  bool
-		missingDB, retainedSkip, otherSkip bool
-		wantGlobal, wantTop                string
+		name                                             string
+		globalFull, globalInvalid, namedPartial, noNamed bool
+		missingDB, retainedSkip, otherSkip               bool
+		wantGlobal, wantTop                              string
+		wantReason, wantText                             string
 	}{
-		{name: "global-partial/named-full/missing", missingDB: true, wantGlobal: "partial", wantTop: "full"},
-		{name: "global-full/named-partial/empty", globalFull: true, namedPartial: true, wantGlobal: "full", wantTop: "partial"},
-		{name: "global-partial/named-full/skipped", retainedSkip: true, wantGlobal: "partial", wantTop: "partial"},
-		{name: "global-full/named-partial/skipped", globalFull: true, namedPartial: true, retainedSkip: true, wantGlobal: "partial", wantTop: "partial"},
-		{name: "global-full/no-named/skipped", globalFull: true, noNamed: true, retainedSkip: true, wantGlobal: "partial", wantTop: "partial"},
-		{name: "global-full/named-full/unrelated-skips", globalFull: true, otherSkip: true, wantGlobal: "full", wantTop: "full"},
+		{name: "global-partial/named-full/missing", missingDB: true, wantGlobal: "partial", wantTop: "full", wantText: "partial without user auth"},
+		{name: "global-full/named-partial/empty", globalFull: true, namedPartial: true, wantGlobal: "full", wantTop: "partial", wantText: "full historical replies"},
+		{name: "global-partial/named-full/skipped", retainedSkip: true, wantGlobal: "partial", wantTop: "partial", wantText: "partial without user auth"},
+		{name: "global-full/named-partial/skipped", globalFull: true, namedPartial: true, retainedSkip: true, wantGlobal: "partial", wantTop: "partial", wantReason: "retained_api_thread_work", wantText: "partial: retained API thread skips or pending work"},
+		{name: "global-full/no-named/skipped", globalFull: true, noNamed: true, retainedSkip: true, wantGlobal: "partial", wantTop: "partial", wantReason: "retained_api_thread_work", wantText: "partial: retained API thread skips or pending work"},
+		{name: "global-full/named-full/unrelated-skips", globalFull: true, otherSkip: true, wantGlobal: "full", wantTop: "full", wantText: "full historical replies"},
+		{name: "global-invalid/named-full/missing", globalInvalid: true, missingDB: true, wantGlobal: "partial", wantTop: "full", wantText: "partial without user auth"},
+		{name: "global-invalid/named-full/skipped", globalInvalid: true, retainedSkip: true, wantGlobal: "partial", wantTop: "partial", wantText: "partial without user auth"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -39,9 +42,11 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 			t.Setenv(cfg.Slack.Bot.TokenEnv, "global-bot")
 			teamByRole := map[string]string{"global-bot": "TGLOBAL"}
 			wantRoles := []string{"global-bot"}
-			if tc.globalFull {
+			if tc.globalFull || tc.globalInvalid {
 				t.Setenv(cfg.Slack.User.TokenEnv, "global-user")
-				teamByRole["global-user"] = "TGLOBAL"
+				if tc.globalFull {
+					teamByRole["global-user"] = "TGLOBAL"
+				}
 				wantRoles = append(wantRoles, "global-user")
 			}
 			if !tc.noNamed {
@@ -106,19 +111,29 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 			require.NoError(t, json.Unmarshal(output.Bytes(), &report))
 			diag := report["slack_api"].(map[string]any)
 			require.Equal(t, tc.wantGlobal, diag["thread_coverage"])
+			if tc.wantReason == "" {
+				require.NotContains(t, diag, "thread_coverage_reason")
+			} else {
+				require.Equal(t, tc.wantReason, diag["thread_coverage_reason"])
+			}
 			require.Equal(t, tc.wantTop, report["thread_coverage"])
 			require.Equal(t, "TGLOBAL", diag["bot_auth_team_id"])
 			require.Equal(t, "Fixture TGLOBAL", diag["bot_auth_team"])
 			require.Equal(t, true, diag["bot_configured"])
-			require.Equal(t, tc.globalFull, diag["user_configured"])
+			require.Equal(t, tc.globalFull || tc.globalInvalid, diag["user_configured"])
 			require.Equal(t, tc.globalFull, diag["user_auth_available"])
-			require.Nil(t, diag["user_auth_error"])
+			if tc.globalInvalid {
+				require.Equal(t, "invalid_auth", diag["user_auth_error"])
+			} else {
+				require.Nil(t, diag["user_auth_error"])
+			}
 			require.Equal(t, false, diag["app_tail_available"])
 			if !tc.noNamed {
 				named := report["workspace_api"].([]any)
 				require.Len(t, named, 2)
 				for i, workspace := range named {
 					d := workspace.(map[string]any)["slack_api"].(map[string]any)
+					require.NotContains(t, d, "thread_coverage_reason")
 					full := i == 0 || !tc.namedPartial
 					require.Equal(t, []string{"T1", "T2"}[i], d["bot_auth_team_id"])
 					require.Equal(t, map[bool]string{true: "full", false: "partial"}[full], d["thread_coverage"])
@@ -134,19 +149,39 @@ func TestDoctorGlobalAndNamedCoverage(t *testing.T) {
 			if tc.retainedSkip || tc.otherSkip {
 				require.Equal(t, "retained-status", report["status"].(map[string]any)["thread_state"])
 			}
-			if tc.globalFull && tc.retainedSkip {
+			for _, format := range []string{"text", "log"} {
 				output.Reset()
-				require.NoError(t, app.Run(ctx, []string{"--config", configPath, "doctor"}))
-				require.NotContains(t, output.String(), "partial without user auth")
-				require.Contains(t, output.String(), "partial")
-			}
-			if tc.missingDB {
-				require.False(t, sharePathExists(t, cfg.DBPath))
-				output.Reset()
-				require.NoError(t, app.Run(ctx, []string{"--config", configPath, "doctor"}))
-				require.True(t, strings.Contains(output.String(), "partial without user auth"))
-				require.NotContains(t, output.String(), "full historical replies")
-				require.False(t, sharePathExists(t, cfg.DBPath))
+				roles, problems = nil, nil
+				require.NoError(t, app.Run(ctx, []string{"--config", configPath, "--format", format, "doctor"}))
+				if format == "text" {
+					require.Contains(t, output.String(), tc.wantText)
+					if tc.globalFull {
+						require.NotContains(t, output.String(), "partial without user auth")
+					} else {
+						require.NotContains(t, output.String(), "full historical replies")
+						require.NotContains(t, output.String(), "retained API thread skips or pending work")
+					}
+				} else {
+					var globalLine string
+					for _, line := range strings.Split(output.String(), "\n") {
+						if strings.HasPrefix(line, "doctor.slack_api ") {
+							require.Empty(t, globalLine)
+							globalLine = line
+						}
+					}
+					wantReason := tc.wantReason
+					if wantReason == "" {
+						wantReason = "-"
+					}
+					require.Contains(t, globalLine, `thread_coverage="`+tc.wantGlobal+`"`)
+					require.Contains(t, globalLine, `thread_coverage_reason="`+wantReason+`"`)
+				}
+				require.Equal(t, wantRoles, roles)
+				require.Empty(t, problems)
+				require.True(t, reflect.DeepEqual(before, shareArchiveSnapshot(t, cfg.DBPath)))
+				if tc.missingDB {
+					require.False(t, sharePathExists(t, cfg.DBPath))
+				}
 			}
 		})
 	}
