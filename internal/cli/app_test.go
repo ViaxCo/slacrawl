@@ -873,6 +873,9 @@ func TestCompletionBashOutput(t *testing.T) {
 
 	out := stdout.String()
 	require.Contains(t, out, "complete -F _slacrawl slacrawl")
+	require.Contains(t, out, "prepare build verify --help")
+	require.Contains(t, out, "--db --selection --out --format --json")
+	require.Contains(t, out, "--db --plan --dir --format --json")
 	require.Contains(t, out, "completion")
 	require.Contains(t, out, "report")
 	require.Contains(t, out, "version")
@@ -906,6 +909,9 @@ func TestCompletionZshOutput(t *testing.T) {
 
 	out := stdout.String()
 	require.Contains(t, out, "#compdef slacrawl")
+	require.Contains(t, out, "_values 'export subcommand' prepare build verify")
+	require.Contains(t, out, "--selection[private selection]:path:_files")
+	require.Contains(t, out, "--dir[artifact directory]:path:_files")
 	require.Contains(t, out, "_values 'shell' bash zsh")
 	require.Contains(t, out, "report")
 	require.Contains(t, out, `"version:version command"`)

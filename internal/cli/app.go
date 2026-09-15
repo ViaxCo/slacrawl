@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -17,11 +18,12 @@ type App struct {
 	Stdout io.Writer
 	Stderr io.Writer
 
-	configPath   string
-	outputFormat OutputFormat
-	now          func() time.Time
-	httpClient   *http.Client
-	apiURL       string
+	configPath    string
+	outputFormat  OutputFormat
+	now           func() time.Time
+	httpClient    *http.Client
+	apiURL        string
+	readBuildInfo func() (*debug.BuildInfo, bool)
 }
 
 type OutputFormat string
@@ -67,6 +69,17 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		a.setColorEnabled(FormatText, global.NoColor)
 		a.printHelp()
 		return nil
+	}
+
+	// Offline export must not resolve personal config or enter the notifier and
+	// automatic archive paths used by the other commands.
+	if rest[0] == "export" {
+		format, err := resolveOutputFormat(global.Format, global.JSON)
+		if err != nil {
+			return err
+		}
+		a.setColorEnabled(format, global.NoColor)
+		return normalizeCommandHelp(a.runExport(ctx, rest[1:], format))
 	}
 
 	configPath := global.Config
