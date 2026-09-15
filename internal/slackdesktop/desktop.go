@@ -41,6 +41,11 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 			formatDecodeFailures(extracted.IndexedDB.DecodeFailures),
 		)
 	}
+	if opts.ExcludeDrafts {
+		// Drafts also produce channel hints, summaries and legacy cleanup writes.
+		// Remove them before any derived state reaches the archive.
+		extracted.Drafts = nil
+	}
 	source.Summary = extracted.RootState.Summary
 	source.Local = localSummary(extracted)
 	source.IndexedDB = extracted.IndexedDB

@@ -68,6 +68,10 @@ Every source feeds the same SQLite archive and search index.
 
 Treat one config and database as one visibility boundary. Keep personal and company archives in separate configs, database paths, and share remotes. See [Configuration](docs/configuration.md) for tokens, multiple workspaces, MCP, external providers, media caching, and source precedence; see [Desktop mode](docs/desktop-mode.md) for local-cache coverage and limitations.
 
+Desktop recovery includes unsent drafts by default. Set
+`[slack.desktop].include_drafts = false` to exclude future draft ingestion;
+drafts already archived remain unchanged.
+
 ## Explore the archive
 
 Search uses SQLite FTS5 with a substring fallback. The same archive is available through the TUI, structured commands, and read-only SQL:

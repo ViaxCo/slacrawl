@@ -147,6 +147,7 @@ func syncDesktop(ctx context.Context, cfg config.Config, st *store.Store, opts O
 		WorkspaceID:     opts.WorkspaceID,
 		Channels:        opts.Channels,
 		ExcludeChannels: opts.ExcludeChannels,
+		ExcludeDrafts:   !cfg.Slack.Desktop.IncludeDraftsResolved(),
 	})
 	if err != nil {
 		return Summary{}, err

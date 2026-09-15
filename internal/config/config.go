@@ -66,8 +66,13 @@ type TokenConfig struct {
 }
 
 type DesktopConfig struct {
-	Enabled bool   `toml:"enabled"`
-	Path    string `toml:"path"`
+	Enabled       bool   `toml:"enabled"`
+	Path          string `toml:"path"`
+	IncludeDrafts *bool  `toml:"include_drafts"`
+}
+
+func (c DesktopConfig) IncludeDraftsResolved() bool {
+	return c.IncludeDrafts == nil || *c.IncludeDrafts
 }
 
 type MCPConfig struct {

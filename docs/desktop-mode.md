@@ -17,12 +17,20 @@ Today the desktop adapter can ingest:
 - cached user/member profiles
 - cached channel, DM, and MPIM message history recovered from IndexedDB redux persistence blobs
 - cached thread roots and cached thread replies recovered from IndexedDB redux persistence blobs when Slack Desktop has them
-- draft messages
+- draft messages, unless `[slack.desktop].include_drafts = false`
 - read markers from local persisted API calls
 - custom status metadata
 - object store inventory for IndexedDB drift tracking
 
 The desktop adapter intentionally does not use local desktop auth material for write actions.
+
+To recover sent messages without archiving unsent drafts, set
+`include_drafts = false` under `[slack.desktop]`. The setting applies to
+desktop/wiretap sync, `watch`, and the desktop phase of all/hybrid sync. It
+excludes draft-derived messages, channel hints, raw payloads, event history,
+search entries, and sync draft counts before persistence. Existing archived
+drafts remain unchanged. Desktop snapshots still read the cache; this setting
+does not remove DMs or make an existing archive safe to publish.
 
 ## What It Does Not Yet Cover
 

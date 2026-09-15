@@ -29,6 +29,7 @@ type IngestOptions struct {
 	WorkspaceID     string
 	Channels        []string
 	ExcludeChannels []string
+	ExcludeDrafts   bool
 }
 
 type ingestFilter struct {
