@@ -62,6 +62,7 @@ type channelPage struct {
 	Messages    []MessageRecord
 	NextCursor  string
 	coverage    messageCoverage
+	revoked     bool
 }
 
 type threadPage struct {
@@ -253,19 +254,23 @@ func (c *Client) users(ctx context.Context, tools toolset) ([]UserRecord, error)
 	})
 }
 
-func (c *Client) channelMessages(ctx context.Context, tools toolset, workspaceID, channelID, oldest string) (channelPage, error) {
+func (c *Client) channelMessages(ctx context.Context, tools toolset, workspaceID, channelID, oldest string, current func() (bool, error)) (channelPage, error) {
 	if tools.provider == providerReference {
-		return c.referenceChannelMessages(ctx, tools, workspaceID, channelID, oldest)
+		return c.referenceChannelMessages(ctx, tools, workspaceID, channelID, oldest, current)
 	}
 	var result channelPage
 	err := walkPages(c.maxPages, func(cursor string) (string, error) {
-		raw, err := c.mcp.CallToolText(ctx, tools.readChannel, map[string]any{
+		raw, revoked, err := c.callMessages(ctx, tools.readChannel, map[string]any{
 			"channel_id":      channelID,
 			"cursor":          cursor,
 			"oldest":          emptyToNil(oldest),
 			"limit":           c.pageSize,
 			"response_format": "detailed",
-		})
+		}, current)
+		if revoked {
+			result = channelPage{revoked: true}
+			return "", nil
+		}
 		if err != nil {
 			return "", err
 		}
@@ -302,7 +307,7 @@ func (c *Client) threadMessages(ctx context.Context, tools toolset, workspaceID,
 	}
 	var result threadPage
 	err := walkPages(c.maxPages, func(cursor string) (string, error) {
-		raw, revoked, err := c.callThread(ctx, tools.readThread, map[string]any{
+		raw, revoked, err := c.callMessages(ctx, tools.readThread, map[string]any{
 			"channel_id":      channelID,
 			"message_ts":      threadTS,
 			"cursor":          cursor,
@@ -333,9 +338,12 @@ func (c *Client) threadMessages(ctx context.Context, tools toolset, workspaceID,
 	return result, err
 }
 
-func (c *Client) callThread(ctx context.Context, tool string, args map[string]any, current func() (bool, error)) (string, bool, error) {
-	// A concurrent archive writer can cancel or renew work during any page.
-	// Check around the RPC so stale pages cannot continue or reach materialization.
+func (c *Client) callMessages(ctx context.Context, tool string, args map[string]any, current func() (bool, error)) (string, bool, error) {
+	// A concurrent archive writer can renew work during any page. Check around
+	// each tools/call before parsing or continuing pagination.
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
 	if current != nil {
 		ok, err := current()
 		if err != nil || !ok {
@@ -343,6 +351,9 @@ func (c *Client) callThread(ctx context.Context, tool string, args map[string]an
 		}
 	}
 	raw, err := c.mcp.CallToolText(ctx, tool, args)
+	if cancelErr := ctx.Err(); cancelErr != nil {
+		return "", false, cancelErr
+	}
 	if current != nil {
 		ok, checkErr := current()
 		if checkErr != nil || !ok {

@@ -17,6 +17,8 @@ import (
 
 const MCPHistoryEntityType = "history_work_v1"
 
+var ErrMCPHistorySuperseded = errors.New("MCP history attempt was superseded; retry sync to complete current history work")
+
 // Since is normalized by the MCP caller before it becomes part of the scope.
 // Adapter isolation prevents one connector's completed window from covering another.
 type MCPHistoryScope struct {
@@ -124,6 +126,46 @@ func (s *Store) BeginMCPHistory(ctx context.Context, scope MCPHistoryScope, opts
 	return MCPHistoryWork{MCPHistoryScope: scope, Revision: state.Revision, Oldest: oldest, EnforceRetention: enforce}, true, nil
 }
 
+// MCPHistoryCurrent also accepts this revision after completion: retained-root
+// discovery deliberately follows history completion, before independent replies.
+func (s *Store) MCPHistoryCurrent(ctx context.Context, work MCPHistoryWork) (bool, error) {
+	_, current, err := mcpHistoryCurrent(ctx, s.db, work)
+	return current, err
+}
+
+func mcpHistoryCurrent(ctx context.Context, dbtx storedb.DBTX, work MCPHistoryWork) (MCPHistoryState, bool, error) {
+	key, err := work.MCPHistoryScope.key()
+	if err != nil {
+		return MCPHistoryState{}, false, err
+	}
+	if work.Revision == "" {
+		return MCPHistoryState{}, false, errors.New("MCP history work requires an attempt revision")
+	}
+	queries := storedb.New(dbtx)
+	if err := rejectWorkspaceCollision(ctx, work.WorkspaceID, "channel", work.ChannelID, queries.GetChannelWorkspace); err != nil {
+		return MCPHistoryState{}, false, err
+	}
+	state, err := loadMCPHistory(ctx, queries, key)
+	if err != nil {
+		return MCPHistoryState{}, false, err
+	}
+	return state, state.Revision == work.Revision, nil
+}
+
+func checkMCPHistory(ctx context.Context, dbtx storedb.DBTX, work *MCPHistoryWork) error {
+	if work == nil {
+		return nil
+	}
+	_, current, err := mcpHistoryCurrent(ctx, dbtx, *work)
+	if err != nil {
+		return err
+	}
+	if !current {
+		return ErrMCPHistorySuperseded
+	}
+	return nil
+}
+
 // CompleteMCPHistory records only this revision's admitted history. Empty scans
 // still establish completion; neither replies nor higher-priority stored rows
 // can substitute for the latest timestamp actually returned by history.
@@ -145,16 +187,9 @@ func (s *Store) CompleteMCPHistory(ctx context.Context, work MCPHistoryWork, lat
 		return false, err
 	}
 	defer rollback()
-	queries := storedb.New(q)
-	if err := rejectWorkspaceCollision(ctx, work.WorkspaceID, "channel", work.ChannelID, queries.GetChannelWorkspace); err != nil {
+	state, current, err := mcpHistoryCurrent(ctx, q, work)
+	if err != nil || !current || state.Pending == nil {
 		return false, err
-	}
-	state, err := loadMCPHistory(ctx, queries, key)
-	if err != nil {
-		return false, err
-	}
-	if state.Revision != work.Revision || state.Pending == nil {
-		return false, nil
 	}
 	if latest != "" {
 		state.Latest, err = MaxMCPHistoryTS(state.Latest, latest)
@@ -163,7 +198,7 @@ func (s *Store) CompleteMCPHistory(ctx context.Context, work MCPHistoryWork, lat
 		}
 	}
 	state.Complete, state.Pending = true, nil
-	if err := saveMCPHistory(ctx, queries, key, state); err != nil {
+	if err := saveMCPHistory(ctx, storedb.New(q), key, state); err != nil {
 		return false, err
 	}
 	if err := commit(); err != nil {
