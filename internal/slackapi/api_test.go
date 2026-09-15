@@ -293,6 +293,11 @@ func TestSyncSkipsUnreadableThreadsAndContinues(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "partial", value)
 
+	const workQuery = "select * from sync_state where source_name='api-user' and entity_type in ('thread_pending_v1','thread_skip') order by entity_type,entity_id"
+	workBefore, err := st.QueryReadOnly(context.Background(), workQuery)
+	require.NoError(t, err)
+	require.Len(t, workBefore, 4)
+
 	server.Close()
 	readable := newReadableThreadSlackServer(t)
 	defer readable.Close()
@@ -306,15 +311,37 @@ func TestSyncSkipsUnreadableThreadsAndContinues(t *testing.T) {
 	value, err = st.GetSyncState(context.Background(), "doctor", "threads", "coverage")
 	require.NoError(t, err)
 	require.Equal(t, "partial", value)
+	require.Equal(t, 1, readable.calls("conversations.replies"))
+	require.Equal(t, 1, readable.calls("conversations.replies|C222|1710000004.000100"))
+	workAfter, err := st.QueryReadOnly(context.Background(), workQuery)
+	require.NoError(t, err)
+	require.Equal(t, workBefore, workAfter, "filtered sync must preserve C111's pending generations and skips")
 
 	require.NoError(t, client.Sync(context.Background(), st, SyncOptions{Full: true}))
 	value, err = st.GetSyncState(context.Background(), "doctor", "threads", "coverage")
 	require.NoError(t, err)
 	require.Equal(t, "full", value)
+	require.Equal(t, 4, readable.calls("conversations.replies"))
+	require.Equal(t, 1, readable.calls("conversations.replies|C111|1710000000.000100"))
+	require.Equal(t, 1, readable.calls("conversations.replies|C111|1710000002.000100"))
+	require.Equal(t, 2, readable.calls("conversations.replies|C222|1710000004.000100"))
 
 	skips, err = st.ListSyncState(context.Background(), SourceUser, "thread_skip", 10)
 	require.NoError(t, err)
 	require.Empty(t, skips)
+	workAfter, err = st.QueryReadOnly(context.Background(), workQuery)
+	require.NoError(t, err)
+	require.Empty(t, workAfter)
+	rows, err = st.Messages(context.Background(), "", "", "", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 6)
+	associations, err := st.QueryReadOnly(context.Background(), "select channel_id,ts,thread_ts from messages where thread_ts<>'' and thread_ts<>ts order by channel_id,ts")
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{
+		{"channel_id": "C111", "ts": "1710000001.000200", "thread_ts": "1710000000.000100"},
+		{"channel_id": "C111", "ts": "1710000003.000200", "thread_ts": "1710000002.000100"},
+		{"channel_id": "C222", "ts": "1710000005.000200", "thread_ts": "1710000004.000100"},
+	}, associations)
 }
 
 func TestDoctorWithInvalidUserTokenDoesNotReportFullCoverage(t *testing.T) {
@@ -1135,6 +1162,10 @@ func newReadableThreadSlackServer(t *testing.T) *mockSlackServer {
 	t.Helper()
 	mock := &mockSlackServer{counts: map[string]int{}, lastOld: map[string]string{}}
 	mock.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mock.mu.Lock()
+		mock.counts[r.URL.Path]++
+		mock.mu.Unlock()
+
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/auth.test":
@@ -1155,7 +1186,22 @@ func newReadableThreadSlackServer(t *testing.T) *mockSlackServer {
 				http.NotFound(w, r)
 			}
 		case "/conversations.replies":
-			_, _ = w.Write([]byte(`{"ok":true,"has_more":false,"messages":[{"type":"message","subtype":"message_replied","channel":"C111","user":"U234","text":"reply message","thread_ts":"1710000000.000100","ts":"1710000001.000200"}],"response_metadata":{"next_cursor":""}}`))
+			values := mustFormValues(r)
+			channel, ts := values.Get("channel"), values.Get("ts")
+			mock.mu.Lock()
+			mock.counts[r.URL.Path+"|"+channel+"|"+ts]++
+			mock.mu.Unlock()
+			switch [2]string{channel, ts} {
+			case [2]string{"C111", "1710000000.000100"}:
+				_, _ = w.Write([]byte(`{"ok":true,"has_more":false,"messages":[{"type":"message","subtype":"message_replied","channel":"C111","user":"U234","text":"reply message","thread_ts":"1710000000.000100","ts":"1710000001.000200"}],"response_metadata":{"next_cursor":""}}`))
+			case [2]string{"C111", "1710000002.000100"}:
+				_, _ = w.Write([]byte(`{"ok":true,"has_more":false,"messages":[{"type":"message","subtype":"message_replied","channel":"C111","user":"U234","text":"second reply","thread_ts":"1710000002.000100","ts":"1710000003.000200"}],"response_metadata":{"next_cursor":""}}`))
+			case [2]string{"C222", "1710000004.000100"}:
+				_, _ = w.Write([]byte(`{"ok":true,"has_more":false,"messages":[{"type":"message","subtype":"message_replied","channel":"C222","user":"U234","text":"public reply","thread_ts":"1710000004.000100","ts":"1710000005.000200"}],"response_metadata":{"next_cursor":""}}`))
+			default:
+				t.Errorf("unexpected thread request: channel=%q ts=%q", channel, ts)
+				http.Error(w, "unexpected thread request", http.StatusBadRequest)
+			}
 		case "/users.list":
 			_, _ = w.Write([]byte(`{"ok":true,"members":[],"response_metadata":{"next_cursor":""}}`))
 		default:
@@ -1930,7 +1976,7 @@ func TestSyncThreadRejectsRepeatedCursor(t *testing.T) {
 	defer cancel()
 	client := NewWithOptions(config.Tokens{Bot: "xoxb-test", User: "xoxp-test"}, server.URL+"/", server.Client())
 	client.sleep = func(context.Context, time.Duration) error { return nil }
-	err := client.syncThread(ctx, st, "T123", "C123", "1710000000.000100", false, now)
+	_, err := client.syncThread(ctx, st, "T123", "C123", "1710000000.000100", false, now, nil)
 	require.ErrorContains(t, err, `conversations.replies repeated cursor "stuck"`)
 	require.Equal(t, 2, calls)
 }

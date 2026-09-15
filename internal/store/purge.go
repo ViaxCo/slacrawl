@@ -438,6 +438,22 @@ func deletePurgeSelection(ctx context.Context, tx *sql.Tx) error {
 		label string
 		query string
 	}{
+		{"pending threads", `
+delete from sync_state
+where source_name in ('api-user', 'mcp') and entity_type = 'thread_pending_v1'
+  and exists (
+    select 1 from ` + purgeMessageKeysTable + ` p
+    where p.workspace_id = json_extract(sync_state.entity_id, '$[0]')
+      and p.channel_id = json_extract(sync_state.entity_id, '$[1]')
+      and p.ts = json_extract(sync_state.entity_id, '$[2]')
+  )`},
+		{"API thread skips", `
+delete from sync_state
+where source_name = 'api-user' and entity_type = 'thread_skip'
+  and exists (
+    select 1 from ` + purgeMessageKeysTable + ` p
+    where sync_state.entity_id = p.workspace_id || '|' || p.channel_id || '|' || p.ts
+  )`},
 		{"message events", `
 delete from message_events
 where exists (

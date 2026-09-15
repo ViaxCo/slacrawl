@@ -135,6 +135,30 @@ func (q *Queries) CountWorkspaces(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const deleteAPIThreadSkipsIfNoPending = `-- name: DeleteAPIThreadSkipsIfNoPending :exec
+delete from sync_state
+where sync_state.source_name = 'api-user'
+  and sync_state.entity_type = 'thread_skip'
+  and sync_state.entity_id like ?1
+  and not exists (
+    select 1
+    from sync_state as pending
+    where pending.source_name = 'api-user'
+      and pending.entity_type = 'thread_pending_v1'
+      and json_extract(pending.entity_id, '$[0]') = ?2
+  )
+`
+
+type DeleteAPIThreadSkipsIfNoPendingParams struct {
+	EntityIDLike string `json:"entity_id_like"`
+	WorkspaceID  string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteAPIThreadSkipsIfNoPending(ctx context.Context, arg DeleteAPIThreadSkipsIfNoPendingParams) error {
+	_, err := q.db.ExecContext(ctx, deleteAPIThreadSkipsIfNoPending, arg.EntityIDLike, arg.WorkspaceID)
+	return err
+}
+
 const deleteMessageFiles = `-- name: DeleteMessageFiles :exec
 delete from message_files where channel_id = ? and ts = ?
 `
@@ -177,24 +201,6 @@ type DeleteSyncStateByTypeParams struct {
 
 func (q *Queries) DeleteSyncStateByType(ctx context.Context, arg DeleteSyncStateByTypeParams) error {
 	_, err := q.db.ExecContext(ctx, deleteSyncStateByType, arg.SourceName, arg.EntityType)
-	return err
-}
-
-const deleteSyncStateByTypePrefix = `-- name: DeleteSyncStateByTypePrefix :exec
-delete from sync_state
-where source_name = ?1
-  and entity_type = ?2
-  and entity_id like ?3
-`
-
-type DeleteSyncStateByTypePrefixParams struct {
-	SourceName   string `json:"source_name"`
-	EntityType   string `json:"entity_type"`
-	EntityIDLike string `json:"entity_id_like"`
-}
-
-func (q *Queries) DeleteSyncStateByTypePrefix(ctx context.Context, arg DeleteSyncStateByTypePrefixParams) error {
-	_, err := q.db.ExecContext(ctx, deleteSyncStateByTypePrefix, arg.SourceName, arg.EntityType, arg.EntityIDLike)
 	return err
 }
 
@@ -424,6 +430,7 @@ const lastSyncAt = `-- name: LastSyncAt :one
 select cast(coalesce(max(updated_at), '') as text) as updated_at
 from sync_state
 where source_name not in ('doctor', 'retention')
+  and not (entity_type = 'thread_pending_v1' and source_name in ('api-user', 'mcp'))
 `
 
 func (q *Queries) LastSyncAt(ctx context.Context) (string, error) {

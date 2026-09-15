@@ -233,11 +233,18 @@ where source_name = ? and entity_type = ? and entity_id = ?;
 delete from sync_state
 where source_name = ? and entity_type = ?;
 
--- name: DeleteSyncStateByTypePrefix :exec
+-- name: DeleteAPIThreadSkipsIfNoPending :exec
 delete from sync_state
-where source_name = sqlc.arg(source_name)
-  and entity_type = sqlc.arg(entity_type)
-  and entity_id like sqlc.arg(entity_id_like);
+where sync_state.source_name = 'api-user'
+  and sync_state.entity_type = 'thread_skip'
+  and sync_state.entity_id like sqlc.arg(entity_id_like)
+  and not exists (
+    select 1
+    from sync_state as pending
+    where pending.source_name = 'api-user'
+      and pending.entity_type = 'thread_pending_v1'
+      and json_extract(pending.entity_id, '$[0]') = sqlc.arg(workspace_id)
+  );
 
 -- name: CountSyncStateByType :one
 select count(*)
@@ -259,7 +266,8 @@ select count(*) from messages;
 -- name: LastSyncAt :one
 select cast(coalesce(max(updated_at), '') as text) as updated_at
 from sync_state
-where source_name not in ('doctor', 'retention');
+where source_name not in ('doctor', 'retention')
+  and not (entity_type = 'thread_pending_v1' and source_name in ('api-user', 'mcp'));
 
 -- name: ThreadCoverageState :one
 select value from sync_state where source_name = 'doctor' and entity_type = 'threads' and entity_id = 'coverage';

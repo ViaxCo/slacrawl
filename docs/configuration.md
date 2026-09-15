@@ -596,10 +596,72 @@ unavailable capability rather than a successful user session.
 
 In JSON, `slack_api.thread_coverage` describes global credentials; top-level
 `thread_coverage` uses the named-workspace aggregate when present. An archived
-`api-user/thread_skip` downgrades either full result to partial in both fields.
+`api-user/thread_skip` or pending API thread work downgrades either full result
+to partial in both fields.
 Individual `workspace_api` diagnostics and stored `status.thread_state` remain
 unchanged. Recent channel skips combine `api-bot` and `api-user`, newest first
 with channel-ID tie ordering and one limit of 20.
+
+### Retained API threads
+
+Ordinary API sync and `--full` without `--since` revisit eligible roots already
+in the selected channels, even when fetched history no longer contains their
+reply hints. Roots need a positive reply count or a distinct archived child;
+an empty or self-referencing `thread_ts` is supported. Explicit `--since`,
+`--full --since`, Tail repair and excluded conversations leave this backlog
+untouched. Current-page thread processing keeps its existing scope.
+
+Replies work is saved locally before history can overwrite hints and in the
+same transaction as fetched messages that establish roots through reply counts
+or retained child relationships. Later history errors, incomplete responses and
+intentional scope skips keep that work pending for a later sync. When user replies
+are unavailable, bot history can still complete with partial thread coverage;
+the saved work remains. Switching from bot-primary to user-primary sync keeps
+that replies work without borrowing the bot's history checkpoint.
+
+Existing message reconciliation can revive a tombstone when an in-flight history
+page arrives later. If that page admits thread evidence after cancellation, its
+transaction queues fresh work while preserving every existing generation, including
+work another sync created after this sync prepared. Ordinary replies requests use
+only generations prepared or newly queued by this invocation; a competing sync
+keeps ownership of its response and skip state across those history commits.
+Roots successfully completed during this sync stay excluded. If a generation
+is rejected before any replies request or committed cached skip, a later page
+can admit and process fresh work. Revocation after a request still counts as an
+attempt and can leave newly queued work for the next sync.
+
+Starting a new ordinary preparation renews selected retained generations, even
+without replies capability, and can supersede an earlier replies worker. The
+replacement work remains pending with partial coverage. Capability-aware thread
+preparation and concurrent-sync fairness remain follow-up work.
+
+Successful replies retire only the generation that was processed. Retained
+requests and writes recheck that generation and the parent's live ownership;
+deletion or renewal during a request discards its stale response. Full cleanup
+keeps thread-skip records while API replies work in that workspace is still
+pending; another workspace's pending work does not block cleanup. Remaining
+retained work runs after complete history traversal and before the completed history
+horizon is saved. A replies failure can therefore stop later channel or media
+work while preserving committed messages and the pending history interval.
+
+When a retained root returns `thread_not_found`, its job remains pending with
+a root-specific skip and partial coverage. Healthy roots and later channels
+continue, and the next ordinary sync retries the unavailable root. The error
+does not establish deletion. Other reply failures retain their existing behavior.
+
+Committed parent tombstones, message removal through the store, and local purge
+cancel matching work and its API thread-skip record, even when the pending job
+is already absent. Ordinary preparation also reconciles skips backed by stored
+tombstones in the selected workspace and channel, including after a Git-share
+merge and without a remaining reply hint. Live or missing parents are not
+deletion evidence; malformed pending work still requires repair. History polling
+does not discover hidden deletion events; see Slack's
+[message contract](https://docs.slack.dev/reference/events/message/#hidden-subtypes).
+Missing reply metadata is not deletion. The local jobs are excluded from Git
+share export/import and freshness timestamps; archive source entry counts still
+include them. A full restore clears local work along with replaced archive rows.
+This API change does not add MCP backlog processing or certify complete Slack
+capture; MCP scope handling is a separate change.
 
 ### API history completeness
 
