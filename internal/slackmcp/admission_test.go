@@ -558,7 +558,19 @@ func TestMCPMessageAdmissionPrecedesAffectedWrites(t *testing.T) {
 			t.Run(fmt.Sprintf("policy=%v/%s", policy, mode), func(t *testing.T) {
 				native := !strings.HasPrefix(mode, "text-")
 				thread := strings.HasPrefix(mode, "thread-") || strings.HasPrefix(mode, "text-thread-")
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				repliesStarted := make(chan struct{})
+				releaseReplies := make(chan struct{})
+				var firstReplies atomic.Bool
 				server := admissionGateway(t, native, func(name string, args map[string]any) map[string]any {
+					if thread && (name == "slack_get_thread_replies" || name == "slack_read_thread") && firstReplies.CompareAndSwap(false, true) {
+						close(repliesStarted)
+						select {
+						case <-releaseReplies:
+						case <-ctx.Done():
+						}
+					}
 					result := map[string]any{"ok": true}
 					switch name {
 					case "slack_list_channels":
@@ -660,7 +672,48 @@ func TestMCPMessageAdmissionPrecedesAffectedWrites(t *testing.T) {
 				if mode == "history-old" || mode == "history-empty-ts" {
 					opts.Since = "100.000000"
 				}
-				_, err := Sync(context.Background(), st, opts)
+				var err error
+				var admitted map[string][]map[string]any
+				if thread {
+					finished := make(chan struct{})
+					var syncErr error
+					go func() {
+						_, syncErr = Sync(ctx, st, opts)
+						close(finished)
+					}()
+					defer func() { cancel(); <-finished }()
+					select {
+					case <-repliesStarted:
+					case <-finished:
+						t.Fatalf("sync returned before the replies request: %v", syncErr)
+					}
+					// Valid history owns durable work before replies admission; a
+					// rejected payload must preserve that entire committed snapshot.
+					admitted = admissionTableSnapshot(t, st)
+					require.Len(t, admitted["sync_state"], 1)
+					pending := admitted["sync_state"][0]
+					generation, ok := pending["value"].(string)
+					require.True(t, ok)
+					require.NotEmpty(t, generation)
+					updatedAt, ok := pending["updated_at"].(string)
+					require.True(t, ok)
+					_, timeErr := time.Parse(time.RFC3339Nano, updatedAt)
+					require.NoError(t, timeErr)
+					require.Equal(t, map[string]any{
+						"source_name": SourceName, "entity_type": store.ThreadPendingEntityType,
+						"entity_id": `["TLOCAL","CONE","1710000000.000001"]`, "value": generation, "updated_at": updatedAt,
+					}, pending)
+					current, currentErr := st.ThreadWorkCurrent(ctx, store.ThreadWork{
+						SourceName: SourceName, WorkspaceID: "TLOCAL", ChannelID: "CONE", TS: "1710000000.000001", Generation: generation,
+					})
+					require.NoError(t, currentErr)
+					require.True(t, current)
+					close(releaseReplies)
+					<-finished
+					err = syncErr
+				} else {
+					_, err = Sync(ctx, st, opts)
+				}
 				require.Error(t, err)
 				if strings.Contains(mode, "empty-ts") || strings.Contains(mode, "blank-ts") {
 					require.ErrorContains(t, err, "message timestamp is empty")
@@ -670,15 +723,19 @@ func TestMCPMessageAdmissionPrecedesAffectedWrites(t *testing.T) {
 				require.NotContains(t, err.Error(), admissionCanary)
 				require.NotContains(t, err.Error(), "CFOREIGN")
 				require.NotContains(t, err.Error(), "TFOREIGN")
+				after := admissionTableSnapshot(t, st)
 				for _, table := range []string{"messages", "message_files", "message_mentions", "message_fts", "message_events", "message_event_heads", "embedding_jobs", "sync_state"} {
-					rows, err := st.QueryReadOnly(context.Background(), "select * from "+table)
-					require.NoError(t, err)
+					rows := after[table]
 					require.NotContains(t, fmt.Sprint(rows), admissionCanary, table)
-					if !thread || table == "sync_state" {
+					if !thread {
 						require.Empty(t, rows, table)
 					}
 				}
+				status, err := st.Status(ctx)
+				require.NoError(t, err)
+				require.True(t, status.LastSyncAt.IsZero())
 				if thread {
+					require.Equal(t, admitted, after, "rejected replies must not change admitted state")
 					rows, err := st.QueryReadOnly(context.Background(), "select text,reply_count from messages")
 					require.NoError(t, err)
 					require.Equal(t, []map[string]any{{"text": "history root", "reply_count": int64(1)}}, rows)
