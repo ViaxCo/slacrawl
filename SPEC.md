@@ -390,6 +390,8 @@ Share config:
 11. backfill thread replies only when a user token is configured and successfully authenticates to the bot's workspace
 12. validate every message channel ID in the complete history/replies page, including nested message, previous-message, and root fields, before normalizing or writing that page; earlier pages remain resumable on failure
    - missing message channel IDs inherit the requested conversation
+   - after identity validation, require a nonblank top-level timestamp under every policy, including periodic repair; preserve accepted timestamp bytes
+   - nested metadata and catalog latest-message timestamps remain optional; native replies may echo the requested parent timestamp
    - repair malformed UTF-8 before indexing
    - normalize indexed text with NFKC
    - strip zero-width and non-printable control noise

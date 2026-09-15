@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject API history/replies pages with missing or blank top-level message timestamps before page writes or thread work, including periodic repair. Keep earlier pages and the pending retry interval; valid native parent echoes remain supported.
+
 - Report incomplete native MCP history/replies before advancing successful workspace sync state when Slack returns more-page or history/message-limit signals. Keep valid fetched writes and concrete errors; require explicit successful native responses under every DM policy without changing text adapters or tool arguments.
 
 - Reject legacy Git share imports when `sync.include_dms = false`, before acquisition or snapshot/media writes. Subscribe rejects before saving its importing configuration; automatic paths check archive staleness first. Set `share.auto_update = false` to continue local/API work. Existing rows and unfiltered publishing remain unchanged.
