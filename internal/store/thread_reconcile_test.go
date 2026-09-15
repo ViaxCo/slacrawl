@@ -58,7 +58,7 @@ func TestReturnedThreadRootsUseFinalScopedEvidence(t *testing.T) {
 			require.NoError(t, st.SetSyncState(ctx, "mcp", ThreadPendingEntityType, threadWorkKey(ThreadWork{WorkspaceID: "T1", ChannelID: "C1", TS: root.TS}), "untouched-generation"))
 			before, err := st.QueryReadOnly(ctx, "select * from sync_state")
 			require.NoError(t, err)
-			roots, err := st.ReturnedThreadRoots(ctx, "T1", "C1", returned, hints)
+			roots, err := returnedThreadRoots(ctx, st.db, "T1", "C1", returned, hints)
 			require.NoError(t, err)
 			want := mode == "root-child" || mode == "child-root" || mode == "retained-child" || mode == "positive-duplicate"
 			if want {
@@ -69,7 +69,7 @@ func TestReturnedThreadRootsUseFinalScopedEvidence(t *testing.T) {
 			after, err := st.QueryReadOnly(ctx, "select * from sync_state")
 			require.NoError(t, err)
 			require.Equal(t, before, after, "scoped root selection must never readjust ordinary work")
-			other, err := st.ReturnedThreadRoots(ctx, "T2", "C1", returned, hints)
+			other, err := returnedThreadRoots(ctx, st.db, "T2", "C1", returned, hints)
 			require.NoError(t, err)
 			require.Empty(t, other, "channel ownership also bounds retained message ownership")
 		})

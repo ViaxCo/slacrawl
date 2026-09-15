@@ -666,8 +666,24 @@ history batches commit, `CompleteMCPHistory` may update only the current pending
 revision. It preserves the previous latest on empty or older responses and runs
 before thread traversal. Incomplete history retains its logical pending interval;
 ordinary retries apply current retention even after Full. Since precedes Full and
-has an isolated checkpoint. Superseded completion is an explicit non-success;
-it does not cancel in-flight requests or undo earlier committed message writes.
+has an isolated checkpoint. Superseded history is an explicit non-success.
+
+Check cancellation and the history revision before and after each native or text
+history tools/call, before parsing or continuing text pagination. Recheck after
+materialization. Channel metadata, thread preparation, history batches (including
+empty outcomes), tombstone retirement and later history-derived discovery check
+that revision inside their write transaction. A newer pending or completed
+revision rejects these writes and discards uncommitted materialization. The
+matching completed revision remains current for discovery after history
+completion, preserving the order before replies and their later failures.
+
+This does not cancel an already dispatched call, add transport retries or undo
+earlier committed batches. Workspace/user catalogs precede this per-channel
+owner. Replies retain their independent thread-generation guard after selected
+work is acquired. No-tool reconciliation independently validates current live
+work and stored tombstones.
+Whole-Sync workspace publication after completed history is not fenced by this
+history-write revision.
 
 Exclude only this exact source/type from freshness and shared progress. Merge
 preserves receiver-local records; Restore clears them and cannot import foreign
@@ -714,6 +730,11 @@ cost; it does not change defaults, retention authority or native window limits.
    Insert-only channel metadata preserves every existing row, including older
    lossy MCP records; routine sync does not repair their missing native evidence
 7. require explicit `ok=true` on native history/replies under every DM policy;
+   after existing decode/error/OK checks, require present arrays for native
+   catalog `channels`, users `members`, and history/replies `messages` before
+   projection, pagination or completion. Missing/null collections leave the page
+   uncertified; explicit `[]` remains valid, including empty replies. Preserve
+   the existing default-catalog/users OK policy and text adapter contract;
    retain response `has_more`/nonblank next-cursor and `is_limited` facts before
    local filtering, accumulating them across later successes and empty results
 8. process valid bounded writes, but return a fixed incomplete-coverage error
@@ -731,11 +752,17 @@ cost; it does not change defaults, retention authority or native window limits.
 10. with explicit Since, including Full with Since, restrict roots to identities
     themselves returned in history, using final stored ownership and reply/child
     evidence plus positive page hints; do not follow a returned child to an
-    unreturned parent or read/change ordinary pending work
-11. check generation and live ownership before and after every native or text
-    thread request, before each parent/reply transaction and at completion;
+    unreturned parent. Under the current pending or completed history revision,
+    select and renew only those roots in one write transaction. Their shared MCP
+    generations fence older ordinary or scoped replies across Since and adapters;
+    unselected backlog and API jobs/skips stay untouched. Acquire all selected
+    roots before replies, so a later unvisited root remains pending after failure
+11. for every reply traversal, check generation and live ownership before and
+    after each native or text request, each parent/reply transaction and completion;
     revoked work discards uncommitted materialization and stops pagination,
-    preserving earlier commits and any newer job
+    preserving earlier commits and any newer job. Complete and empty-complete
+    replies retire only the current job; errors and incomplete replies retain it.
+    Since bounds root selection, not the selected thread's reply timestamps
 12. during ordinary sync without a thread tool, validate selected pending work
     and reconcile authoritative stored tombstones in one transaction after valid
     history writes; do not create or renew jobs; surviving work fails actionably

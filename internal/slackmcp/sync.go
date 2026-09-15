@@ -106,7 +106,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 	summary.Users = userCount
 	var coverage messageCoverage
 	for _, channel := range channels {
-		work, selected, err := st.BeginMCPHistory(ctx, store.MCPHistoryScope{
+		history, selected, err := st.BeginMCPHistory(ctx, store.MCPHistoryScope{
 			WorkspaceID: workspaceID, ChannelID: channel.ID, Adapter: string(tools.provider), Since: normalizeTimestamp(opts.Since),
 		}, store.MCPHistoryOptions{Full: opts.Full, LatestOnly: opts.LatestOnly})
 		if err != nil {
@@ -115,8 +115,19 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		if !selected {
 			continue
 		}
-		enforceRetention := work.EnforceRetention
-		channelResult, err := client.channelMessages(ctx, tools, workspaceID, channel.ID, work.Oldest)
+		enforceRetention := history.EnforceRetention
+		current := func() (bool, error) { return st.MCPHistoryCurrent(ctx, history) }
+		channelResult, err := client.channelMessages(ctx, tools, workspaceID, channel.ID, history.Oldest, current)
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return summary, cancelErr
+		}
+		owned, checkErr := current()
+		if checkErr != nil {
+			return summary, persistenceError(checkErr)
+		}
+		if !owned || channelResult.revoked {
+			return summary, store.ErrMCPHistorySuperseded
+		}
 		if err != nil {
 			var limit *pageLimitError
 			if errors.As(err, &limit) {
@@ -133,7 +144,10 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		if channel.Kind == "" {
 			channel.Kind = "mcp_channel"
 		}
-		if err := st.EnsureChannel(ctx, toStoreChannel(workspaceID, channel, now)); err != nil {
+		if _, err := st.ApplyWriteBatch(ctx, store.WriteBatch{
+			MCPHistoryGuard: &history,
+			Channels:        []store.Channel{toStoreChannel(workspaceID, channel, now)},
+		}); err != nil {
 			return summary, persistenceError(err)
 		}
 		summary.Channels++
@@ -141,7 +155,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		ordinaryThreads := opts.Since == "" && tools.readThread != ""
 		pendingThreads := map[string]store.ThreadWork{}
 		if ordinaryThreads {
-			work, err := st.PrepareThreadWork(ctx, SourceName, workspaceID, channel.ID, nil)
+			work, err := st.PrepareMCPThreadWork(ctx, history)
 			if err != nil {
 				return summary, persistenceError(err)
 			}
@@ -151,7 +165,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		}
 		threadRoots := map[string]struct{}{}
 		var returnedTS []string
-		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, min(len(channelResult.Messages), maxMessageBatchSize))}
+		batch := store.WriteBatch{MCPHistoryGuard: &history, Messages: make([]store.MessageWrite, 0, min(len(channelResult.Messages), maxMessageBatchSize))}
 		if ordinaryThreads {
 			// Keep admitted child evidence with its history batch even if a later
 			// batch fails before retained-root discovery can run.
@@ -187,7 +201,7 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 				}
 			}
 		}
-		if len(batch.Messages) > 0 {
+		if len(batch.Messages) > 0 || len(channelResult.Messages) == 0 {
 			if err := writeHistoryBatch(); err != nil {
 				return summary, err
 			}
@@ -195,12 +209,12 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		// History owns its checkpoint independently of reply completion. A later
 		// reply/channel failure must not erase an already committed history scan.
 		if !channelResult.coverage.more && !channelResult.coverage.limited {
-			completed, err := st.CompleteMCPHistory(ctx, work, channelResult.LatestTS)
+			completed, err := st.CompleteMCPHistory(ctx, history, channelResult.LatestTS)
 			if err != nil {
 				return summary, persistenceError(err)
 			}
 			if !completed {
-				return summary, errors.New("MCP history attempt was superseded; retry sync to complete current history work")
+				return summary, store.ErrMCPHistorySuperseded
 			}
 		}
 		if tools.readThread == "" {
@@ -230,35 +244,27 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 					return summary, err
 				}
 			}
-			threadRoots = make(map[string]struct{}, len(pendingThreads))
-			for ts := range pendingThreads {
-				threadRoots[ts] = struct{}{}
-			}
 		} else {
 			hints := make([]string, 0, len(threadRoots))
 			for ts := range threadRoots {
 				hints = append(hints, ts)
 			}
-			roots, err := st.ReturnedThreadRoots(ctx, workspaceID, channel.ID, returnedTS, hints)
+			work, err := st.PrepareMCPReturnedThreadWork(ctx, history, returnedTS, hints)
 			if err != nil {
 				return summary, persistenceError(err)
 			}
-			threadRoots = make(map[string]struct{}, len(roots))
-			for _, root := range roots {
-				threadRoots[root.TS] = struct{}{}
+			for _, item := range work {
+				pendingThreads[item.TS] = item
 			}
 		}
-		orderedRoots := make([]string, 0, len(threadRoots))
-		for threadTS := range threadRoots {
+		orderedRoots := make([]string, 0, len(pendingThreads))
+		for threadTS := range pendingThreads {
 			orderedRoots = append(orderedRoots, threadTS)
 		}
 		sort.Strings(orderedRoots)
 		for _, threadTS := range orderedRoots {
-			var work *store.ThreadWork
-			if pending, ok := pendingThreads[threadTS]; ok {
-				work = &pending
-			}
-			result, err := syncThread(ctx, st, client, tools, workspaceID, channel.ID, threadTS, enforceRetention, now, work)
+			work := pendingThreads[threadTS]
+			result, err := syncThread(ctx, st, client, tools, work, enforceRetention, now)
 			if err != nil {
 				return summary, err
 			}
@@ -267,8 +273,8 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 			}
 			summary.Replies += result.replies
 			coverage.include(result.coverage)
-			if work != nil && !result.coverage.more && !result.coverage.limited {
-				if _, err := st.CompleteThreadWork(ctx, *work, "", nil); err != nil {
+			if !result.coverage.more && !result.coverage.limited {
+				if _, err := st.CompleteThreadWork(ctx, work, "", nil); err != nil {
 					return summary, err
 				}
 			}
@@ -303,20 +309,16 @@ type threadSyncResult struct {
 	revoked  bool
 }
 
-func syncThread(ctx context.Context, st *store.Store, client *Client, tools toolset, workspaceID, channelID, threadTS string, enforceRetention bool, now time.Time, work *store.ThreadWork) (threadSyncResult, error) {
-	var current func() (bool, error)
-	if work != nil {
-		current = func() (bool, error) { return st.ThreadWorkCurrent(ctx, *work) }
-	}
+func syncThread(ctx context.Context, st *store.Store, client *Client, tools toolset, work store.ThreadWork, enforceRetention bool, now time.Time) (threadSyncResult, error) {
+	workspaceID, channelID, threadTS := work.WorkspaceID, work.ChannelID, work.TS
+	current := func() (bool, error) { return st.ThreadWorkCurrent(ctx, work) }
 	thread, err := client.threadMessages(ctx, tools, workspaceID, channelID, threadTS, current)
-	if current != nil {
-		ok, checkErr := current()
-		if checkErr != nil {
-			return threadSyncResult{}, checkErr
-		}
-		if !ok {
-			return threadSyncResult{revoked: true}, nil
-		}
+	ok, checkErr := current()
+	if checkErr != nil {
+		return threadSyncResult{}, checkErr
+	}
+	if !ok {
+		return threadSyncResult{revoked: true}, nil
 	}
 	if thread.revoked {
 		return threadSyncResult{revoked: true}, nil
@@ -328,7 +330,7 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 	if thread.Parent != nil && (len(thread.Replies) > 0 || thread.Parent.ReplyCount > 0 || strings.TrimSpace(thread.Parent.LatestReply) != "") {
 		thread.Parent.ReplyCount = max(thread.Parent.ReplyCount, len(thread.Replies))
 		thread.Parent.LatestReply = latestReplyTS(thread.Parent.LatestReply, thread.Replies)
-		written, err := st.ApplyWriteBatch(ctx, store.WriteBatch{ThreadGuard: work, Messages: []store.MessageWrite{
+		written, err := st.ApplyWriteBatch(ctx, store.WriteBatch{ThreadGuard: &work, Messages: []store.MessageWrite{
 			toMessageWrite(workspaceID, *thread.Parent, enforceRetention, now),
 		}})
 		if err != nil {
@@ -338,12 +340,9 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 			return threadSyncResult{revoked: true}, nil
 		}
 	}
-	batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(thread.Replies)), ThreadGuard: work}
+	batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(thread.Replies)), ThreadGuard: &work}
 	for _, reply := range thread.Replies {
 		batch.Messages = append(batch.Messages, toMessageWrite(workspaceID, reply, enforceRetention, now))
-	}
-	if len(batch.Messages) == 0 && work == nil {
-		return result, nil
 	}
 	written, err := st.ApplyWriteBatch(ctx, batch)
 	if err != nil {

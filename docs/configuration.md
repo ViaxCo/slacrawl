@@ -267,7 +267,7 @@ ID is not sent to custom origins; configure a dedicated `account_id_env` when
 the custom server needs one. Explicit custom-server tokens and stdio remain
 supported.
 
-`max_pages` bounds the text connector's users, channels, channel-history, and thread pagination loops and the native reference adapter's users/channels loops; hitting the bound returns an error instead of silently accepting an incomplete page set. Native history/replies tools do not accept pagination arguments. The Codex HTTP connector accepts at most 20 channel or user search results per request. With `include_dms` omitted/true, explicit channel IDs avoid global channel and user enumeration. Normal MCP sync overlaps the latest completed channel-history timestamp by one hour and rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply; `--full` removes the local history bound, while `--latest-only` skips channels with no local history. MCP is an explicit source and is not included in `--source all`.
+`max_pages` bounds the text connector's users, channels, channel-history, and thread pagination loops and the native reference adapter's users/channels loops; hitting the bound returns an error instead of silently accepting an incomplete page set. Native history/replies tools do not accept pagination arguments. The Codex HTTP connector accepts at most 20 channel or user search results per request. With `include_dms` omitted/true, explicit channel IDs avoid global channel and user enumeration. Normal MCP sync retries the pending checkpoint interval or overlaps the completed history-response watermark by one hour, applying current retention; stored message maxima do not establish coverage. It also rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply. `--full` removes incremental bounds, while `--latest-only` uses retained non-draft history or retention-seed eligibility. MCP is an explicit source and is not included in `--source all`.
 
 The text connector's channel search response may omit privacy metadata. With `include_dms` omitted/true, those channels remain locally searchable with kind `mcp_channel`, recording unknown classification. Legacy `publish` still includes these archive rows; that kind is not an export privacy filter.
 
@@ -294,6 +294,16 @@ Tool discovery selects either the Codex Slack connector contract or the referenc
 Under every DM policy, native history and replies require `ok=true` before
 processing that response. A missing or false value stops the sync; earlier
 committed batches remain. The text connector's response contract is unchanged.
+
+Native channel catalogs require a `channels` array, user catalogs a `members`
+array, and history/replies a `messages` array after the existing decode, error
+and success checks. Missing or null collections leave that page uncertified;
+they cannot complete empty history or retire a thread job. Explicit `[]` remains
+valid, including empty replies. This archive-certification requirement does not
+claim that Slack defines every omitted/null collection as invalid. The existing
+strict-catalog success check and default-catalog/users OK policies stay unchanged.
+Rejected pages preserve earlier commits and retry work; corrected responses can
+complete a later retry.
 
 Native `has_more=true` or a nonblank `response_metadata.next_cursor` reports
 additional pages. The reference tools cannot request those pages. Slacrawl
@@ -366,15 +376,24 @@ watermark. Later ordinary scans overlap that watermark by one hour. Failed or
 incomplete history keeps its original pending interval for retry. Each ordinary
 retry reapplies the current purge floor; a prior `--full` does not grant later
 retries permission to restore purged messages. Explicit `--since` takes precedence
-over `--full` and leaves the ordinary checkpoint and thread backlog untouched.
+over `--full` and leaves the ordinary history checkpoint and unselected thread
+backlog untouched.
 
 History completion is committed after history writes and before replies. A later
 reply or channel failure therefore preserves completed history while keeping
-workspace freshness unchanged. A newer attempt can supersede an older revision;
-the older invocation then reports a retryable failure instead of recording
-successful completion. This does not cancel an in-flight request or undo messages
-already committed by the older response. History progress itself does not advance
-status freshness.
+workspace freshness unchanged. A newer attempt supersedes the older history
+revision. Checks around each history tools/call discard revoked responses before
+parsing or further text pagination. Metadata, thread preparation, message batches
+and later history-derived discovery also check ownership in their write
+transaction, including empty history outcomes. The older invocation reports a
+retryable failure instead of admitting those stale writes.
+
+The matching completed revision still permits discovery after history completion.
+Previously committed batches remain; an in-flight call is not canceled and no new
+transport retry is added. Workspace/user catalogs, independent queued replies,
+no-tool tombstone reconciliation and whole-Sync workspace publication after
+completed history are outside this history-write guard. History progress itself
+does not advance status freshness.
 
 These local checkpoints are excluded from Git share exports and imports. Merge
 preserves the receiver's existing checkpoints; whole-snapshot restore clears them.
@@ -398,27 +417,35 @@ history window.
 Explicit `--since`, including `--full --since`, fetches threads only for roots
 themselves returned in history. A returned root can qualify through an archived
 child even when its reply count is absent. A returned child alone does not add
-an older, unreturned parent. This leaves the ordinary queue and unreturned
-retained roots untouched. Channel selection and DM admission still determine
-which conversations can be read.
+an older, unreturned parent. After history writes, one transaction checks the
+current history revision and acquires only eligible returned roots, using final
+stored evidence and positive page hints. It renews selected existing MCP jobs;
+unselected backlog and API jobs/skips remain untouched. The shared generation
+fences older ordinary or scoped replies, including another Since or adapter.
+Channel selection and DM admission still determine which conversations can be read.
+Since selects roots; their reply requests have no date bound.
 
 During ordinary sync, a connector without a thread tool reconciles selected
 stored tombstones after valid history writes, including tombstones merged from
 a share. This cleanup neither creates nor renews jobs. If live work remains,
 sync returns an actionable error, preserves the old successful workspace record
 and requires a connector with thread support before retrying. With no pending
-work, the existing behavior remains. Explicit Since does not inspect or clean
-the ordinary queue.
+work, the existing behavior remains. Explicit Since without a thread tool does
+not acquire replies work or inspect/clean the ordinary queue.
 
-Each thread request and write checks the queued generation and live parent.
-Deletion or renewal stops stale pagination and discards the response after the
-in-flight request returns; it does not immediately cancel that request or undo
-earlier committed history or parent writes. Another writer's renewed work can
-remain pending even when the current sync records successful freshness.
+Every reply traversal checks its acquired generation and live parent around
+requests and in parent/reply writes, including empty responses. Deletion or
+renewal stops stale pagination and discards the response after the in-flight
+request returns; it does not immediately cancel that request or undo earlier
+committed history or parent writes. A newer history revision alone does not
+revoke independently acquired replies. Another writer's renewed work can remain
+pending even when the current sync records successful freshness.
 
 Complete replies retire their matching job even if the enclosing history is
 incomplete. History coverage still prevents successful workspace freshness;
-incomplete replies keep their job. Local tombstone, purge and share lifecycle
+incomplete replies keep their job. Scoped sync acquires all selected roots before
+requesting replies, so an earlier failure leaves even unvisited selected jobs for
+a later ordinary retry. Local tombstone, purge and share lifecycle
 rules are shared with [retained API work](#retained-api-threads). Neither queue
 certifies complete Slack capture or export safety.
 

@@ -19,6 +19,8 @@
 
 - Preserve unvisited API thread-skip diagnostics during restricted or incomplete Full syncs, and explain retained thread work in Doctor's partial-coverage output. Require unrestricted traversal before bulk cleanup, retain generation guards, and keep observed omissions visible despite later success. Thanks @vincentkoc! (#229, #230)
 
+- Fence MCP history and scoped reply writes against superseded work, and require native response arrays before accepting pages. Preserve newer content, earlier committed pages and durable retry work without consuming unselected backlog. Thanks @vincentkoc! (#242, #243, #244)
+
 - Fence API history and reply writes to the current scan, retain collision intervals for retry, and publish coverage atomically with pending-work checks. Preserve newer writes and checkpoints when requests overlap, and keep Status and Doctor truthful while work remains. Thanks @vincentkoc! (#239, #240, #241)
 
 - Keep native API payloads, arbitrary error strings, and pagination cursors out of diagnostics while preserving typed causes and known machine errors. Report failed DM capability probes and caller cancellation truthfully in Doctor. Thanks @vincentkoc! (#236, #237, #238)

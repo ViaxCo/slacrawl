@@ -160,7 +160,10 @@ func TestMCPNativeCatalogAdmission(t *testing.T) {
 					if name == "slack_get_channel_history" {
 						historyIDs <- args["channel_id"].(string)
 					}
-					return map[string]any{"ok": true}
+					if name == "slack_get_users" {
+						return map[string]any{"ok": true, "members": []any{}}
+					}
+					return map[string]any{"ok": true, "messages": []any{}}
 				})
 				defer server.Close()
 				t.Setenv("TEST_MCP_TOKEN", "synthetic-token")
@@ -280,7 +283,10 @@ func TestMCPSelectionKeepsDuplicateEvidence(t *testing.T) {
 								historyCalls.Add(1)
 								require.Equal(t, "CONE", args["channel_id"])
 							}
-							return map[string]any{"ok": true}
+							if name == "slack_get_users" {
+								return map[string]any{"ok": true, "members": []any{}}
+							}
+							return map[string]any{"ok": true, "messages": []any{}}
 						})
 						defer server.Close()
 						t.Setenv("TEST_MCP_TOKEN", "synthetic-token")
@@ -349,7 +355,7 @@ func TestMCPNamedSelectionKeepsEarlierEvidence(t *testing.T) {
 							if name == "slack_get_channel_history" {
 								historyIDs <- args["channel_id"].(string)
 							}
-							return map[string]any{"ok": true}
+							return map[string]any{"ok": true, "messages": []any{}}
 						}
 						catalog := []map[string]any{{"id": "CFIRST", "name": "first", "is_channel": true}, {"id": "CSECOND", "name": "second", "is_channel": true, "context_team_id": "TLOCAL"}}
 						if catalogCalls.Add(1) == 1 {
@@ -441,8 +447,9 @@ func TestMCPStrictNativeCatalogRequiresSuccess(t *testing.T) {
 				for _, empty := range []bool{false, true} {
 					t.Run(fmt.Sprintf("policy=%v/ok=%v/later=%v/empty=%v", policy, okValue, later, empty), func(t *testing.T) {
 						server := admissionGateway(t, true, func(name string, args map[string]any) map[string]any {
-							result := map[string]any{"ok": true}
+							result := map[string]any{"ok": true, "members": []any{}}
 							if name == "slack_list_channels" {
+								result["channels"] = []any{}
 								if !empty {
 									result["channels"] = []map[string]any{{"id": "CONE", "is_channel": true}}
 								}
@@ -483,6 +490,11 @@ func TestMCPNoEligibleOwnerFact(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			server := admissionGateway(t, true, func(name string, args map[string]any) map[string]any {
 				result := map[string]any{"ok": true}
+				if name == "slack_list_channels" {
+					result["channels"] = []any{}
+				} else if name == "slack_get_users" {
+					result["members"] = []any{}
+				}
 				if name == "slack_list_channels" && mode != "empty" {
 					result["channels"] = []map[string]any{{"id": "CONE", "is_channel": true}}
 				}
@@ -517,6 +529,8 @@ func TestMCPNativeDefaultPayloadsAndReplay(t *testing.T) {
 			server := admissionGateway(t, true, func(name string, args map[string]any) map[string]any {
 				result := map[string]any{"ok": true}
 				switch name {
+				case "slack_get_users":
+					result["members"] = []any{}
 				case "slack_list_channels":
 					result["channels"] = []map[string]any{{"id": "CONE", "name": "one", "is_im": true, "context_team_id": "TLOCAL"}}
 				case "slack_get_channel_history":
@@ -573,6 +587,8 @@ func TestMCPMessageAdmissionPrecedesAffectedWrites(t *testing.T) {
 					}
 					result := map[string]any{"ok": true}
 					switch name {
+					case "slack_get_users":
+						result["members"] = []any{}
 					case "slack_list_channels":
 						result["channels"] = []map[string]any{{"id": "CONE", "is_channel": true}}
 					case "slack_search_channels":

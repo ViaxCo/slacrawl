@@ -89,7 +89,7 @@ func TestMCPSlicedReturnedRootEvidenceFromCLI(t *testing.T) {
 				st, err = store.OpenReadOnly(cfg.DBPath)
 				require.NoError(t, err)
 				defer func() { require.NoError(t, st.Close()) }()
-				require.Equal(t, beforePending, mcpWorkPending(t, st), "Since and FullSince leave every ordinary queue field unchanged")
+				require.Equal(t, beforePending, mcpWorkPending(t, st), "Since and FullSince leave every unselected queue field unchanged")
 				require.Equal(t, beforeRoot, apiKeyRows(t, st, "select * from messages where ts='"+mcpWorkRoot+"'"))
 				replies := apiKeyRows(t, st, "select coalesce(thread_ts,'') as thread_ts,source_name,source_rank from messages where ts='1710001003.000000'")
 				if len(want) == 3 {
@@ -102,6 +102,145 @@ func TestMCPSlicedReturnedRootEvidenceFromCLI(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, beforeConfig, afterConfig)
 			})
+		}
+	}
+}
+
+func TestMCPSlicedRepliesOwnSelectedJobsFromCLI(t *testing.T) {
+	for _, source := range []string{"mcp", "connector"} {
+		for _, full := range []bool{false, true} {
+			for _, mode := range []string{"complete", "empty", "more", "limited", "error"} {
+				t.Run(fmt.Sprintf("%s/full=%t/%s", source, full, mode), func(t *testing.T) {
+					ctx := context.Background()
+					const laterRoot = "1710002001.000000"
+					fixture := &mcpReconcileFixture{messages: []map[string]any{
+						mcpWorkMessage(mcpWorkNewRoot, "", true), mcpWorkMessage(laterRoot, "", true),
+					}}
+					cfg, path := mcpReconcileConfig(t, fixture)
+					st, err := store.Open(cfg.DBPath)
+					require.NoError(t, err)
+					defer func() { require.NoError(t, st.Close()) }()
+					now := time.Unix(1700000000, 0).UTC()
+					mcpReconcileCatalog(t, st, now)
+					for _, ts := range []string{mcpWorkRoot, mcpWorkNewRoot} {
+						require.NoError(t, st.UpsertMessage(ctx, store.Message{WorkspaceID: "TLOCAL", ChannelID: "C123", TS: ts, Text: "retained", NormalizedText: "retained", ReplyCount: 1, SourceName: "mcp", SourceRank: 4, RawJSON: "{}", UpdatedAt: now}, nil))
+					}
+					_, err = st.ApplyWriteBatch(ctx, store.WriteBatch{PendingThreads: []store.ThreadWork{
+						{SourceName: "mcp", WorkspaceID: "TLOCAL", ChannelID: "C123", TS: mcpWorkRoot},
+						{SourceName: "mcp", WorkspaceID: "TLOCAL", ChannelID: "C123", TS: mcpWorkNewRoot},
+						{SourceName: "api-user", WorkspaceID: "TLOCAL", ChannelID: "C123", TS: mcpWorkNewRoot},
+					}})
+					require.NoError(t, err)
+					require.NoError(t, st.SetSyncState(ctx, "api-user", "thread_skip", "TLOCAL|C123|"+mcpWorkNewRoot, "unrelated API work"))
+					require.NoError(t, st.SetSyncState(ctx, "mcp", "workspace", "TLOCAL", "prior-success"))
+					beforePending := mcpWorkPending(t, st)
+					beforeAPI := apiKeyRows(t, st, "select * from sync_state where source_name='api-user' order by entity_type,entity_id")
+					beforeWorkspace := mcpWorkWorkspace(t, st)
+					beforeRoot := apiKeyRows(t, st, "select * from messages where ts='"+mcpWorkRoot+"'")
+					beforeConfig, err := os.ReadFile(path)
+					require.NoError(t, err)
+					observed := make(chan []map[string]any, 1)
+					fixture.mu.Lock()
+					fixture.reply = func(root string) map[string]any {
+						if root != mcpWorkNewRoot && root != laterRoot {
+							t.Errorf("unexpected selected root %q", root)
+							return map[string]any{"ok": false, "error": "unexpected_root"}
+						}
+						if root == mcpWorkNewRoot {
+							select {
+							case observed <- mcpWorkPending(t, st):
+							default:
+								t.Error("selected root was requested more than once")
+							}
+						}
+						messages := []map[string]any{}
+						if mode != "empty" {
+							child := "1710001003.000000"
+							if root == laterRoot {
+								child = "1710002002.000000"
+							}
+							messages = []map[string]any{mcpWorkMessage(root, "", false), mcpWorkMessage(child, root, false)}
+						}
+						payload := map[string]any{"ok": true, "messages": messages}
+						if root == mcpWorkNewRoot {
+							switch mode {
+							case "more":
+								payload["has_more"] = true
+							case "limited":
+								payload["is_limited"] = true
+							case "error":
+								payload["ok"], payload["error"] = false, "synthetic_scoped_failure"
+								payload["messages"] = []map[string]any{{"ts": "1710001003.000000", "text": "SCOPED_REJECTED_CANARY"}}
+							}
+						}
+						return payload
+					}
+					fixture.mu.Unlock()
+					args := []string{"--config", path, "--json", "sync", "--source", source, "--workspace", "TLOCAL", "--channels", "C123", "--with-media=false", "--since", mcpWorkSince}
+					if full {
+						args = append(args, "--full")
+					}
+					var stdout, stderr bytes.Buffer
+					runErr := (&App{Stdout: &stdout, Stderr: &stderr}).Run(ctx, args)
+					if mode == "complete" || mode == "empty" {
+						require.NoError(t, runErr)
+						require.NotEmpty(t, stdout.String())
+						require.NotEqual(t, beforeWorkspace, mcpWorkWorkspace(t, st))
+					} else {
+						require.Error(t, runErr)
+						require.Empty(t, stdout.String())
+						require.Equal(t, beforeWorkspace, mcpWorkWorkspace(t, st))
+						if mode == "more" {
+							require.EqualError(t, runErr, mcpWorkMoreError)
+						} else if mode == "limited" {
+							require.EqualError(t, runErr, mcpWorkLimitedError)
+						} else {
+							require.ErrorContains(t, runErr, "read MCP thread")
+						}
+					}
+					require.Len(t, observed, 1, "acquisition finishes for both selected roots before the first reply request")
+					acquired := <-observed
+					require.Len(t, acquired, 3)
+					byKey := map[string]map[string]any{}
+					for _, row := range acquired {
+						byKey[row["entity_id"].(string)] = row
+					}
+					oldKey := retainedCLIKey("TLOCAL", "C123", mcpWorkRoot)
+					firstKey := retainedCLIKey("TLOCAL", "C123", mcpWorkNewRoot)
+					laterKey := retainedCLIKey("TLOCAL", "C123", laterRoot)
+					require.Equal(t, beforePending[0], byKey[oldKey])
+					require.NotEqual(t, beforePending[1]["value"], byKey[firstKey]["value"], "Since deliberately renews selected existing work")
+					require.NotNil(t, byKey[laterKey])
+					expected := []map[string]any{byKey[oldKey]}
+					if mode == "more" || mode == "limited" || mode == "error" {
+						expected = append(expected, byKey[firstKey])
+					}
+					if mode == "error" {
+						expected = append(expected, byKey[laterKey])
+					}
+					require.Equal(t, expected, mcpWorkPending(t, st), "errors retain even selected roots not reached; complete/empty replies retire their exact jobs")
+					require.Equal(t, beforeAPI, apiKeyRows(t, st, "select * from sync_state where source_name='api-user' order by entity_type,entity_id"))
+					require.Equal(t, beforeRoot, apiKeyRows(t, st, "select * from messages where ts='"+mcpWorkRoot+"'"))
+					calls, serverErrors := fixture.observed()
+					require.Empty(t, serverErrors)
+					want := []mcpCoverageCall{
+						{"slack_list_channels", map[string]any{"limit": float64(20)}},
+						{"slack_get_channel_history", map[string]any{"channel_id": "C123", "limit": float64(501)}},
+						{"slack_get_thread_replies", map[string]any{"channel_id": "C123", "thread_ts": mcpWorkNewRoot}},
+					}
+					if mode != "error" {
+						want = append(want, mcpCoverageCall{"slack_get_thread_replies", map[string]any{"channel_id": "C123", "thread_ts": laterRoot}})
+					}
+					require.Equal(t, want, calls, "replies contain no Since/oldest argument and unselected backlog is not fetched")
+					require.Equal(t, apiKeyRows(t, st, "select channel_id || '|' || ts as message_key from messages order by message_key"), apiKeyRows(t, st, "select message_key from message_fts order by message_key"))
+					for _, table := range []string{"messages", "message_events", "message_event_heads", "message_mentions", "message_fts"} {
+						require.NotContains(t, fmt.Sprint(apiKeyRows(t, st, "select * from "+table)), "SCOPED_REJECTED_CANARY")
+					}
+					afterConfig, err := os.ReadFile(path)
+					require.NoError(t, err)
+					require.Equal(t, beforeConfig, afterConfig)
+				})
+			}
 		}
 	}
 }
@@ -226,6 +365,7 @@ type mcpReconcileFixture struct {
 	mu                   sync.Mutex
 	messages             []map[string]any
 	noTool, historyError bool
+	reply                func(string) map[string]any
 	calls                []mcpCoverageCall
 	errors               []string
 }
@@ -307,6 +447,13 @@ func (f *mcpReconcileFixture) serveHTTP(w http.ResponseWriter, r *http.Request) 
 			}
 		case "slack_get_thread_replies":
 			root, _ := req.Params.Arguments["thread_ts"].(string)
+			f.mu.Lock()
+			reply := f.reply
+			f.mu.Unlock()
+			if reply != nil {
+				payload = reply(root)
+				break
+			}
 			if root != mcpWorkRoot && root != mcpWorkNewRoot {
 				fail("unexpected thread")
 				return
