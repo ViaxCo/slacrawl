@@ -52,6 +52,23 @@ type ProjectionReceipt struct {
 	Rows           int
 }
 
+// CapturedProjection retains the exact verified artifact bytes without keeping
+// artifact paths or expected inputs. Its zero value has no verified content.
+type CapturedProjection struct {
+	manifest string
+	messages string
+	receipt  ProjectionReceipt
+}
+
+// Contents returns immutable manifest.json and messages.jsonl contents and a
+// value copy of their receipt. The receipt is not permission to publish them.
+func (p CapturedProjection) Contents() (manifest, messages string, receipt ProjectionReceipt, err error) {
+	if p.manifest == "" {
+		return "", "", ProjectionReceipt{}, errors.New("projection has not been captured")
+	}
+	return p.manifest, p.messages, p.receipt, nil
+}
+
 // WriteProjection claims a fresh directory and retains incomplete output on any
 // error. It makes no atomic visibility or crash-durability guarantee.
 func WriteProjection(ctx context.Context, dir string, expected ExportProjection, producerRevision string) (ProjectionReceipt, error) {
@@ -173,6 +190,20 @@ type projectionRecord struct {
 }
 
 func VerifyProjection(ctx context.Context, dir string, expected ExportProjection, expectedRevision string) (ProjectionReceipt, error) {
+	return verifyProjection(ctx, dir, expected, expectedRevision, nil)
+}
+
+// CaptureProjection retains the bytes accepted by the same independent reader
+// as VerifyProjection. Memory grows with the explicitly expected artifact size.
+func CaptureProjection(ctx context.Context, dir string, expected ExportProjection, expectedRevision string) (CapturedProjection, error) {
+	var captured CapturedProjection
+	if _, err := verifyProjection(ctx, dir, expected, expectedRevision, &captured); err != nil {
+		return CapturedProjection{}, err
+	}
+	return captured, nil
+}
+
+func verifyProjection(ctx context.Context, dir string, expected ExportProjection, expectedRevision string, capture *CapturedProjection) (ProjectionReceipt, error) {
 	if dir == "" {
 		return ProjectionReceipt{}, errors.New("projection destination is required")
 	}
@@ -244,6 +275,7 @@ func VerifyProjection(ctx context.Context, dir string, expected ExportProjection
 	actualAuthors := map[string]bool{}
 	var messageBytes int64
 	var previous selectionMessageKey
+	var content strings.Builder
 	for i, wanted := range expected.Messages {
 		if err := ctx.Err(); err != nil {
 			return ProjectionReceipt{}, err
@@ -280,6 +312,9 @@ func VerifyProjection(ctx context.Context, dir string, expected ExportProjection
 			actualAuthors[*record.UserID] = true
 		}
 		messageBytes += int64(len(line))
+		if capture != nil {
+			_, _ = content.Write(line)
+		}
 	}
 	if _, err := reader.ReadByte(); err != io.EOF {
 		return ProjectionReceipt{}, errors.New("projection messages contain trailing content or a read failure")
@@ -329,7 +364,13 @@ func VerifyProjection(ctx context.Context, dir string, expected ExportProjection
 	if err := ctx.Err(); err != nil {
 		return ProjectionReceipt{}, err
 	}
-	return ProjectionReceipt{ManifestSHA256: selectionRawSHA256(string(body)), MessagesSHA256: messageSHA, ManifestBytes: int64(len(body)), MessagesBytes: messageBytes, Rows: len(rows)}, nil
+	receipt := ProjectionReceipt{ManifestSHA256: selectionRawSHA256(string(body)), MessagesSHA256: messageSHA, ManifestBytes: int64(len(body)), MessagesBytes: messageBytes, Rows: len(rows)}
+	if capture != nil {
+		// Publish content only after every reader, identity, close and context
+		// check succeeds; a later consumer never needs to reopen these paths.
+		*capture = CapturedProjection{manifest: string(body), messages: content.String(), receipt: receipt}
+	}
+	return receipt, nil
 }
 
 func validateProjectionExpected(expected ExportProjection, revision string) ([]string, error) {
