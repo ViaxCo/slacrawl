@@ -341,7 +341,7 @@ func walkPages(maxPages int, fetch func(string) (string, error)) error {
 			return nil
 		}
 		if _, ok := seen[next]; ok {
-			return fmt.Errorf("MCP pagination repeated cursor %q", next)
+			return errors.New("MCP pagination repeated cursor")
 		}
 		seen[next] = struct{}{}
 		cursor = next

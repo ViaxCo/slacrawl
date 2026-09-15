@@ -16,6 +16,28 @@ import (
 
 const DefaultProtocolVersion = "2025-03-26"
 
+var errCredentialOrigin = errors.New("MCP redirect would leave the credential origin")
+
+// Transport errors can contain response-controlled URLs or text. Preserve
+// errors.Is checks without exposing those causes through rendering or Unwrap.
+type diagnosticError struct {
+	message string
+	cause   error
+}
+
+func (e *diagnosticError) Error() string        { return e.message }
+func (e *diagnosticError) Is(target error) bool { return errors.Is(e.cause, target) }
+
+func ioDiagnostic(message string, cause error) error {
+	for _, reason := range []error{context.Canceled, context.DeadlineExceeded, errCredentialOrigin} {
+		if errors.Is(cause, reason) {
+			message += ": " + reason.Error()
+			break
+		}
+	}
+	return &diagnosticError{message: message, cause: cause}
+}
+
 type ToolMeta struct {
 	ConnectorID   string `json:"connector_id"`
 	ConnectorName string `json:"connector_name"`
@@ -65,9 +87,7 @@ type rpcEnvelope struct {
 }
 
 type rpcError struct {
-	Code    int64           `json:"code"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data"`
+	Code int64 `json:"code"`
 }
 
 type toolsPage struct {
@@ -109,7 +129,7 @@ func New(opts Options) (*Client, error) {
 		previous := client.CheckRedirect
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			if req.URL.User != nil || !sameHTTPSOrigin(origin, req.URL) {
-				return errors.New("MCP redirect would leave the credential origin")
+				return errCredentialOrigin
 			}
 			if previous != nil {
 				if err := previous(req, via); err != nil {
@@ -120,7 +140,7 @@ func New(opts Options) (*Client, error) {
 			}
 			// Caller policy may rewrite the request before it is sent.
 			if req.URL.User != nil || !sameHTTPSOrigin(origin, req.URL) {
-				return errors.New("MCP redirect would leave the credential origin")
+				return errCredentialOrigin
 			}
 			return nil
 		}
@@ -187,11 +207,11 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 		"params":  params,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("encode MCP %s request: invalid parameters", method)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return fmt.Errorf("create MCP %s request: invalid endpoint", method)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -203,34 +223,31 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("call MCP endpoint: %w", err)
+		return ioDiagnostic(fmt.Sprintf("MCP %s request failed", method), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("read MCP response: %w", err)
+		return ioDiagnostic(fmt.Sprintf("read MCP %s HTTP %d response failed", method, resp.StatusCode), err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("MCP endpoint returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return fmt.Errorf("MCP %s returned HTTP %d", method, resp.StatusCode)
 	}
 	var envelope rpcEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return fmt.Errorf("decode MCP JSON-RPC response: %w", err)
+		return fmt.Errorf("decode MCP %s JSON-RPC response: invalid response", method)
 	}
 	if envelope.Error != nil {
-		if len(envelope.Error.Data) > 0 {
-			return fmt.Errorf("MCP JSON-RPC error %d: %s (%s)", envelope.Error.Code, envelope.Error.Message, envelope.Error.Data)
-		}
-		return fmt.Errorf("MCP JSON-RPC error %d: %s", envelope.Error.Code, envelope.Error.Message)
+		return fmt.Errorf("MCP %s JSON-RPC error %d", method, envelope.Error.Code)
 	}
 	if envelope.Result == nil {
-		return errors.New("MCP response missing result")
+		return fmt.Errorf("MCP %s response missing result", method)
 	}
 	if out == nil {
 		return nil
 	}
 	if err := json.Unmarshal(*envelope.Result, out); err != nil {
-		return fmt.Errorf("decode MCP %s result: %w", method, err)
+		return fmt.Errorf("decode MCP %s result: invalid response", method)
 	}
 	return nil
 }
@@ -242,11 +259,11 @@ func (c *Client) notify(ctx context.Context, method string, params any) error {
 		"params":  params,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("encode MCP %s request: invalid parameters", method)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return fmt.Errorf("create MCP %s request: invalid endpoint", method)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -258,15 +275,15 @@ func (c *Client) notify(ctx context.Context, method string, params any) error {
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("notify MCP endpoint: %w", err)
+		return ioDiagnostic(fmt.Sprintf("MCP %s request failed", method), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(resp.Body)
+	_, err = io.Copy(io.Discard, resp.Body)
 	if err != nil {
-		return fmt.Errorf("read MCP notification response: %w", err)
+		return ioDiagnostic(fmt.Sprintf("read MCP %s HTTP %d response failed", method, resp.StatusCode), err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("MCP notification returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return fmt.Errorf("MCP %s returned HTTP %d", method, resp.StatusCode)
 	}
 	return nil
 }

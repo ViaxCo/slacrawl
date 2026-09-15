@@ -2,7 +2,7 @@ package mcpclient
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 )
 
@@ -26,7 +26,7 @@ func listTools(ctx context.Context, call rpcCall) ([]Tool, error) {
 			return tools, nil
 		}
 		if seen[page.NextCursor] {
-			return nil, fmt.Errorf("MCP tools/list repeated cursor %q", page.NextCursor)
+			return nil, errors.New("MCP tools/list repeated cursor")
 		}
 		seen[page.NextCursor] = true
 		cursor = page.NextCursor
@@ -41,6 +41,9 @@ func callToolText(ctx context.Context, call rpcCall, name string, arguments map[
 	}, &result); err != nil {
 		return "", err
 	}
+	if result.IsError {
+		return "", errors.New("MCP tools/call reported an error")
+	}
 	parts := make([]string, 0, len(result.Content))
 	for _, item := range result.Content {
 		if item.Type != "" && item.Type != "text" {
@@ -51,14 +54,8 @@ func callToolText(ctx context.Context, call rpcCall, name string, arguments map[
 		}
 	}
 	text := strings.Join(parts, "\n")
-	if result.IsError {
-		if text == "" {
-			return "", fmt.Errorf("MCP tool %q reported an error", name)
-		}
-		return "", fmt.Errorf("MCP tool %q reported an error: %s", name, text)
-	}
 	if strings.TrimSpace(text) == "" {
-		return "", fmt.Errorf("MCP tool %q returned no text content", name)
+		return "", errors.New("MCP tools/call returned no text content")
 	}
 	return text, nil
 }

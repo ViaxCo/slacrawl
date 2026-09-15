@@ -207,16 +207,16 @@ func (c *StdioClient) call(ctx context.Context, method string, params any, out a
 			return result.err
 		}
 		if result.response.Error != nil {
-			return fmt.Errorf("MCP JSON-RPC error %d: %s", result.response.Error.Code, result.response.Error.Message)
+			return fmt.Errorf("MCP %s JSON-RPC error %d", method, result.response.Error.Code)
 		}
 		if result.response.Result == nil {
-			return errors.New("MCP response missing result")
+			return fmt.Errorf("MCP %s response missing result", method)
 		}
 		if out == nil {
 			return nil
 		}
 		if err := json.Unmarshal(*result.response.Result, out); err != nil {
-			return fmt.Errorf("decode MCP %s result: %w", method, err)
+			return fmt.Errorf("decode MCP %s result: invalid response", method)
 		}
 		return nil
 	}
@@ -232,7 +232,7 @@ func (c *StdioClient) write(ctx context.Context, value any) error {
 	}
 	raw, err := json.Marshal(value)
 	if err != nil {
-		return err
+		return errors.New("encode MCP stdio request: invalid parameters")
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -257,7 +257,7 @@ func (c *StdioClient) write(ctx context.Context, value any) error {
 		return ctx.Err()
 	case err := <-errCh:
 		if err != nil {
-			return fmt.Errorf("write MCP stdio request: %w", err)
+			return ioDiagnostic("write MCP stdio request failed", err)
 		}
 		return nil
 	}
@@ -268,7 +268,7 @@ func (c *StdioClient) readLoop(stdout io.Reader) {
 	for {
 		var response stdioResponse
 		if err := decoder.Decode(&response); err != nil {
-			c.failPending(fmt.Errorf("decode MCP stdio JSON-RPC response: %w", err))
+			c.failPending(errors.New("decode MCP stdio JSON-RPC response: invalid or closed response stream"))
 			return
 		}
 		var id int64

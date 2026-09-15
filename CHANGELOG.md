@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep MCP server response bodies, error text, parser snippets, returned identifiers, and opaque cursors out of ordinary failure diagnostics. Preserve operation/status details, cancellation detection, credential-origin restrictions, and successful intake.
+
 - Honor explicit `sync.include_dms = false` before desktop/wiretap, watch, and all/hybrid desktop writes. Omit unclassified or conflicting cache records and multi-destination drafts with any excluded destination; report omissions and reject retained container identity conflicts before writes. Existing archived rows and omitted/true defaults remain unchanged.
 
 - Honor explicit `sync.include_dms = false` in Socket Mode tailing before message, deletion, or channel metadata writes. Untyped events require conversation read access; lookup failures stop tailing without acknowledging the event. Keep omitted/true DM defaults and restrict channel metadata updates to their owning workspace.
