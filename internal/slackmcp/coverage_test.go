@@ -89,6 +89,14 @@ func TestMCPNativeCoverageSignalsAndEarlyReturns(t *testing.T) {
 			for table, rows := range admissionTableSnapshot(t, st) {
 				require.NotContains(t, fmt.Sprint(rows), coverageCursorCanary, table)
 			}
+			pending, err := st.PendingThreadWork(context.Background(), SourceName, "TLOCAL", "CFIRST")
+			require.NoError(t, err)
+			if tc.thread {
+				require.Len(t, pending, 1)
+				require.Equal(t, "1710000000.000001", pending[0].TS)
+			} else {
+				require.Empty(t, pending, "complete replies retire their work even while history remains incomplete")
+			}
 		})
 	}
 }

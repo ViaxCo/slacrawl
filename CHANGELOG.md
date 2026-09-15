@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve unfinished MCP reply work across history-hint loss, failed batches, and restarts; guard ordinary replies by generation and reconcile committed tombstones. Keep explicit `--since` and `--full --since` restricted to returned roots without consuming older backlog. Thanks @vincentkoc! (#217, #220)
+
 - Persist retained API thread work across lost reply hints, failures, restarts, and token changes; isolate unavailable roots so healthy threads and later channels continue. Keep pending work generation-guarded, local to the archive, excluded from freshness, and removed atomically by deletion or purge. Thanks @vincentkoc! (#217, #219)
 
 - Support user-only API sync across discovery, profiles, history and source-specific completion state; preserve configured-bot precedence, user-token replies and bot/app Tail requirements. Doctor now authenticates user-only credentials, keeps global coverage separate from named-workspace aggregation, and reports one ordered list of bot/user channel skips without changing stored status. Thanks @vincentkoc! (#215, #218)

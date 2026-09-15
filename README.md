@@ -84,6 +84,13 @@ External provider v1 sync rejects `[sync].include_dms = false` before reading it
 checkpoint or launching the adapter. Use API sync or a supported Slack workspace
 JSON export when excluding DMs. Omitted/true retain provider intake behavior.
 
+Ordinary MCP sync also preserves unfinished replies across history overwrites
+and restarts. Explicit `--since`, including `--full --since`, reads only threads
+whose roots are returned in history, including roots identified by archived
+children, and leaves older pending work alone. See
+[Retained MCP threads](docs/configuration.md#retained-mcp-threads) for missing
+thread tools, cancellation and partial-coverage behavior.
+
 Native MCP history/replies responses that report more pages or Slack history/message limits
 retain valid fetched writes but stop with an error before advancing successful
 sync state. See [native response coverage](docs/configuration.md#native-response-coverage).

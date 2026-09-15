@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -163,10 +164,11 @@ func (s *Store) ChannelThreadRoots(ctx context.Context, workspaceID, channelID s
 	return channelThreadRoots(ctx, s.db, workspaceID, channelID)
 }
 
-const threadRootPredicate = `coalesce(m.thread_ts, '') in ('', m.ts)
+const threadRootLivePredicate = `coalesce(m.thread_ts, '') in ('', m.ts)
   and trim(coalesce(m.deleted_ts, '')) = ''
-  and coalesce(m.subtype, '') <> 'message_deleted'
-  and (
+  and coalesce(m.subtype, '') <> 'message_deleted'`
+
+const threadRootEvidencePredicate = `(
     m.reply_count > 0
     or exists (
       select 1 from messages r
@@ -176,6 +178,8 @@ const threadRootPredicate = `coalesce(m.thread_ts, '') in ('', m.ts)
         and r.ts <> m.ts
     )
   )`
+
+const threadRootPredicate = threadRootLivePredicate + " and " + threadRootEvidencePredicate
 
 func channelThreadRoots(ctx context.Context, q storedb.DBTX, workspaceID, channelID string) ([]ThreadRoot, error) {
 	rows, err := q.QueryContext(ctx, `
@@ -197,6 +201,48 @@ order by m.ts
 		roots = append(roots, root)
 	}
 	return roots, rows.Err()
+}
+
+// ReturnedThreadRoots restricts sliced-sync discovery to identities actually
+// returned by history. Final stored ownership/evidence excludes rejected child
+// links; explicit hints still survive a later duplicate that omits the count.
+func (s *Store) ReturnedThreadRoots(ctx context.Context, workspaceID, channelID string, returnedTS, hintedTS []string) ([]ThreadRoot, error) {
+	if len(returnedTS) == 0 {
+		return nil, nil
+	}
+	keys, err := json.Marshal(returnedTS)
+	if err != nil {
+		return nil, err
+	}
+	hints, err := json.Marshal(hintedTS)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `select distinct m.channel_id, m.ts
+from json_each(?) k join messages m on m.ts = k.value
+join channels c on c.id = m.channel_id and c.workspace_id = m.workspace_id
+where m.workspace_id = ? and m.channel_id = ? and `+threadRootLivePredicate+`
+  and (m.ts in (select value from json_each(?)) or `+threadRootEvidencePredicate+`)
+order by m.ts`, string(keys), workspaceID, channelID, string(hints))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var roots []ThreadRoot
+	for rows.Next() {
+		var root ThreadRoot
+		if err := rows.Scan(&root.ChannelID, &root.TS); err != nil {
+			return nil, err
+		}
+		roots = append(roots, root)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return roots, nil
 }
 
 func (s *Store) RenameChannel(ctx context.Context, workspaceID, channelID, name string) error {

@@ -182,11 +182,14 @@ func (c *Client) referenceChannelMessages(ctx context.Context, tools toolset, wo
 	return channelPage{ChannelID: channelID, Messages: messages, coverage: coverage}, nil
 }
 
-func (c *Client) referenceThreadMessages(ctx context.Context, tools toolset, workspaceID, channelID, threadTS string) (threadPage, error) {
-	raw, err := c.mcp.CallToolText(ctx, tools.readThread, map[string]any{
+func (c *Client) referenceThreadMessages(ctx context.Context, tools toolset, workspaceID, channelID, threadTS string, current func() (bool, error)) (threadPage, error) {
+	raw, revoked, err := c.callThread(ctx, tools.readThread, map[string]any{
 		"channel_id": channelID,
 		"thread_ts":  threadTS,
-	})
+	}, current)
+	if revoked {
+		return threadPage{revoked: true}, nil
+	}
 	if err != nil {
 		return threadPage{}, err
 	}

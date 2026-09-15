@@ -67,6 +67,7 @@ type threadPage struct {
 	Replies    []MessageRecord
 	NextCursor string
 	coverage   messageCoverage
+	revoked    bool
 }
 
 // Coverage is response evidence, not persisted message data or a reusable cursor.
@@ -289,22 +290,26 @@ func (c *Client) channelMessages(ctx context.Context, tools toolset, workspaceID
 	return result, err
 }
 
-func (c *Client) threadMessages(ctx context.Context, tools toolset, workspaceID, channelID, threadTS string) (threadPage, error) {
+func (c *Client) threadMessages(ctx context.Context, tools toolset, workspaceID, channelID, threadTS string, current func() (bool, error)) (threadPage, error) {
 	if tools.readThread == "" {
 		return threadPage{}, errors.New("Slack MCP connector does not provide a read-thread tool")
 	}
 	if tools.provider == providerReference {
-		return c.referenceThreadMessages(ctx, tools, workspaceID, channelID, threadTS)
+		return c.referenceThreadMessages(ctx, tools, workspaceID, channelID, threadTS, current)
 	}
 	var result threadPage
 	err := walkPages(c.maxPages, func(cursor string) (string, error) {
-		raw, err := c.mcp.CallToolText(ctx, tools.readThread, map[string]any{
+		raw, revoked, err := c.callThread(ctx, tools.readThread, map[string]any{
 			"channel_id":      channelID,
 			"message_ts":      threadTS,
 			"cursor":          cursor,
 			"limit":           c.pageSize,
 			"response_format": "detailed",
-		})
+		}, current)
+		if revoked {
+			result = threadPage{revoked: true}
+			return "", nil
+		}
 		if err != nil {
 			return "", err
 		}
@@ -323,6 +328,25 @@ func (c *Client) threadMessages(ctx context.Context, tools toolset, workspaceID,
 		return next.NextCursor, nil
 	})
 	return result, err
+}
+
+func (c *Client) callThread(ctx context.Context, tool string, args map[string]any, current func() (bool, error)) (string, bool, error) {
+	// A concurrent archive writer can cancel or renew work during any page.
+	// Check around the RPC so stale pages cannot continue or reach materialization.
+	if current != nil {
+		ok, err := current()
+		if err != nil || !ok {
+			return "", !ok && err == nil, err
+		}
+	}
+	raw, err := c.mcp.CallToolText(ctx, tool, args)
+	if current != nil {
+		ok, checkErr := current()
+		if checkErr != nil || !ok {
+			return "", !ok && checkErr == nil, checkErr
+		}
+	}
+	return raw, false, err
 }
 
 func collectPages[T any](maxPages int, fetch func(string) (page[T], error)) ([]T, error) {
