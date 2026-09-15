@@ -31,6 +31,13 @@ func (s *Store) QueryReadOnly(ctx context.Context, query string) ([]map[string]a
 	if err != nil {
 		return nil, err
 	}
+	seenColumns := make(map[string]bool, len(cols))
+	for _, column := range cols {
+		if seenColumns[column] {
+			return nil, errors.New("SQL result contains duplicate column names; use unique AS aliases")
+		}
+		seenColumns[column] = true
+	}
 	var results []map[string]any
 	for rows.Next() {
 		values := make([]any, len(cols))
@@ -51,7 +58,7 @@ func (s *Store) QueryReadOnly(ctx context.Context, query string) ([]map[string]a
 }
 
 func validateReadOnlyQuery(query string) error {
-	trimmed := strings.TrimSpace(query)
+	trimmed := stripSQLLeadingComments(query)
 	if !startsWithSQLKeyword(trimmed, "select") && !startsWithSQLKeyword(trimmed, "with") {
 		return errors.New("only read-only select statements are allowed")
 	}
@@ -74,10 +81,16 @@ func startsWithSQLKeyword(query, keyword string) bool {
 func hasAdditionalSQLStatement(query string) bool {
 	for i := 0; i < len(query); i++ {
 		switch query[i] {
-		case '\'':
-			i = scanSQLQuoted(query, i, '\'')
-		case '"':
-			i = scanSQLQuoted(query, i, '"')
+		case '\'', '"', '`':
+			i = scanSQLQuoted(query, i, query[i])
+		case '[':
+			end := strings.IndexByte(query[i+1:], ']')
+			if end < 0 {
+				return false // SQLite will reject the unterminated identifier.
+			}
+			i += end + 1
+		case '$', ':', '@':
+			i = scanSQLParameter(query, i)
 		case '-':
 			if i+1 < len(query) && query[i+1] == '-' {
 				i = scanSQLLineComment(query, i+2)
@@ -88,9 +101,40 @@ func hasAdditionalSQLStatement(query string) bool {
 			}
 		case ';':
 			return strings.TrimSpace(stripSQLLeadingComments(query[i+1:])) != ""
+		default:
+			if isSQLIdentChar(query[i]) {
+				for i+1 < len(query) && isSQLIdentChar(query[i+1]) {
+					i++
+				}
+			}
 		}
 	}
 	return false
+}
+
+// SQLite's named parameters can include :: and an opaque parenthesized suffix.
+// Quotes, comment markers and semicolons within that suffix are not SQL tokens.
+func scanSQLParameter(query string, start int) int {
+	seenName := false
+	for i := start + 1; i < len(query); {
+		switch {
+		case isSQLIdentChar(query[i]):
+			seenName = true
+			i++
+		case query[i] == ':' && i+1 < len(query) && query[i+1] == ':':
+			i += 2
+		case query[i] == '(' && seenName:
+			for i++; i < len(query) && query[i] != ')' && query[i] != 0 && !isSQLSpace(query[i]); i++ {
+			}
+			if i < len(query) && query[i] == ')' {
+				i++
+			}
+			return i - 1
+		default:
+			return i - 1
+		}
+	}
+	return len(query) - 1
 }
 
 func scanSQLQuoted(query string, start int, quote byte) int {
@@ -109,7 +153,8 @@ func scanSQLQuoted(query string, start int, quote byte) int {
 
 func scanSQLLineComment(query string, start int) int {
 	for i := start; i < len(query); i++ {
-		if query[i] == '\n' || query[i] == '\r' {
+		// SQLite line comments end at LF; CR remains inside the comment.
+		if query[i] == '\n' {
 			return i
 		}
 	}
@@ -130,7 +175,7 @@ func stripSQLLeadingComments(query string) string {
 		query = strings.TrimSpace(query)
 		switch {
 		case strings.HasPrefix(query, "--"):
-			end := strings.IndexAny(query, "\r\n")
+			end := strings.IndexByte(query, '\n')
 			if end < 0 {
 				return ""
 			}
@@ -148,7 +193,11 @@ func stripSQLLeadingComments(query string) string {
 }
 
 func isSQLIdentChar(c byte) bool {
-	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+	return c == '_' || c == '$' || c >= 0x80 || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+func isSQLSpace(c byte) bool {
+	return c == ' ' || c >= '\t' && c <= '\r'
 }
 
 func stringifyDBValue(value any) any {

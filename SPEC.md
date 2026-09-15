@@ -267,6 +267,12 @@ Purpose:
 - list synced channels, optionally filtered by workspace, channel kind, and a positional text query
 - return up to 100 rows by default, with `--limit <n>` accepting positive overrides
 
+### `sql`
+
+- Accept one read-only `SELECT` or `WITH ... SELECT`, including leading comments.
+- Match SQLite token boundaries for strings, quoted identifiers, named-parameter suffixes, and comments; only LF ends a line comment. Reject additional statements before execution while retaining SQLite `query_only` enforcement.
+- Return rows keyed by their exact column names. Reject duplicate names, including for empty results, rather than overwrite a value; callers can supply unique `AS` aliases. Case-distinct names remain distinct keys.
+
 ### `report`
 
 Purpose:

@@ -221,6 +221,11 @@ slacrawl users --limit 200
 slacrawl sql 'select channel_id, count(*) as messages from messages group by channel_id order by messages desc limit 10;'
 ```
 
+`sql` accepts one read-only `SELECT` query, including `WITH` queries, leading
+comments, and SQLite quoted identifiers. Additional statements are rejected.
+Give every result column a unique name with `AS` when needed; duplicate names
+return an error because output rows use column names as keys.
+
 ## Reports and analytics
 
 | Command | Purpose |
