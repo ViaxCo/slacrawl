@@ -14,13 +14,13 @@ import (
 	"github.com/slack-go/slack"
 )
 
-func (c *Client) getConversations(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
+func (c *Client) getConversations(ctx context.Context, client *slack.Client, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 	type result struct {
 		channels   []slack.Channel
 		nextCursor string
 	}
 	res, err := retry(ctx, c.sleep, 3, func() (result, error) {
-		channels, nextCursor, err := c.bot.GetConversationsContext(ctx, params)
+		channels, nextCursor, err := client.GetConversationsContext(ctx, params)
 		return result{channels: channels, nextCursor: nextCursor}, err
 	})
 	return res.channels, res.nextCursor, err

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support user-only API sync across discovery, profiles, history and source-specific completion state; preserve configured-bot precedence, user-token replies and bot/app Tail requirements. Doctor now authenticates user-only credentials, keeps global coverage separate from named-workspace aggregation, and reports one ordered list of bot/user channel skips without changing stored status. Thanks @vincentkoc! (#215, #218)
+
 - Reject external provider v1 sync when `sync.include_dms = false`, before checkpoint access or adapter launch. Use API sync or a supported Slack workspace JSON export for DM exclusion. Omitted/true retain provider requests and scoped cursors; existing archive rows and CLI initialization remain unchanged.
 
 - Keep API history intervals pending when a terminal history/replies page reports more results without a continuation cursor, or any accessible history page reports a history/message limit. Preserve valid writes and previous successful coverage, follow available cursors, and retry the same pending interval after correction. Periodic repair shares these checks; capability probes remain usable.
