@@ -500,6 +500,15 @@ coverage. First intake without a checkpoint establishes coverage from history,
 subject to retention. Native request arguments and bounded-window limitations stay
 unchanged. API history continues to own its separate requested horizon.
 
+Text history still uses the configured per-loop page cap and buffers the selected
+channel interval before writes. A capped scan keeps that checkpoint pending and
+reports the supported recovery: temporarily raise the existing positive page
+budget, retry the same channel and scope, then restore the limit after completion.
+Ordinary bootstrap must not use Since, which owns a separate checkpoint. Repeated
+capped scans do not accumulate pagination progress, and no opaque cursor persists
+across invocations. This operator-managed recovery can increase memory and request
+cost; it does not change defaults, retention authority or native window limits.
+
 ### MCP sync
 
 1. discover the configured MCP adapter; explicit `include_dms = false` rejects

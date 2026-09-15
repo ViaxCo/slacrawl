@@ -118,6 +118,12 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		enforceRetention := work.EnforceRetention
 		channelResult, err := client.channelMessages(ctx, tools, workspaceID, channel.ID, work.Oldest)
 		if err != nil {
+			var limit *pageLimitError
+			if errors.As(err, &limit) {
+				// Retrying the same bounded prefix cannot establish history coverage;
+				// never substitute stored rows or an isolated Since checkpoint for it.
+				err = fmt.Errorf("%w; history checkpoint remains pending; increase slack.mcp.max_pages temporarily, rerun the same sync, then restore the limit after completion", err)
+			}
 			return summary, fmt.Errorf("read MCP channel: %w", err)
 		}
 		coverage.include(channelResult.coverage)

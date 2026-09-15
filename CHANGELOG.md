@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Track MCP channel-history completion separately from stored messages and replies. Keep failed or incomplete intervals pending, preserve completed empty scans, and retry with current retention bounds. Prevent newer replies or API/Desktop rows from skipping unread history; reject non-finite history timestamps before filtering. Keep checkpoints local to the archive and out of freshness timestamps. First intake after upgrade, fresh import or whole-snapshot restore establishes its own history checkpoint; native server window limits remain unchanged.
+- Explain recovery when text MCP history exceeds the page limit: use a temporary larger positive budget for the same channel and scope, then restore the normal limit after completion. Large first scans require this operator-managed bootstrap; repeated capped attempts do not resume across invocations.
 
 - Preserve unvisited API thread-skip diagnostics during restricted or incomplete Full syncs, and explain retained thread work in Doctor's partial-coverage output. Require unrestricted traversal before bulk cleanup, retain generation guards, and keep observed omissions visible despite later success. Thanks @vincentkoc! (#229, #230)
 

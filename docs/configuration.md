@@ -225,7 +225,7 @@ ID is not sent to custom origins; configure a dedicated `account_id_env` when
 the custom server needs one. Explicit custom-server tokens and stdio remain
 supported.
 
-`max_pages` bounds the text connector's users, channels, channel-history, and thread pagination loops and the native reference adapter's users/channels loops; hitting the bound returns an error instead of silently accepting an incomplete page set. Native history/replies tools do not accept pagination arguments. The Codex HTTP connector accepts at most 20 channel or user search results per request. With `include_dms` omitted/true, explicit channel IDs avoid global channel and user enumeration. Normal MCP sync overlaps the latest stored message timestamp per channel by one hour and rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply; `--full` removes the local channel cursor, while `--latest-only` skips channels with no local history. MCP is an explicit source and is not included in `--source all`.
+`max_pages` bounds the text connector's users, channels, channel-history, and thread pagination loops and the native reference adapter's users/channels loops; hitting the bound returns an error instead of silently accepting an incomplete page set. Native history/replies tools do not accept pagination arguments. The Codex HTTP connector accepts at most 20 channel or user search results per request. With `include_dms` omitted/true, explicit channel IDs avoid global channel and user enumeration. Normal MCP sync overlaps the latest completed channel-history timestamp by one hour and rechecks persisted thread roots because Slack does not move an old root into channel history when it receives a new reply; `--full` removes the local history bound, while `--latest-only` skips channels with no local history. MCP is an explicit source and is not included in `--source all`.
 
 The text connector's channel search response may omit privacy metadata. With `include_dms` omitted/true, those channels remain locally searchable with kind `mcp_channel`, recording unknown classification. Legacy `publish` still includes these archive rows; that kind is not an export privacy filter.
 
@@ -291,6 +291,33 @@ whole-snapshot restore has no local MCP history checkpoint. It starts without an
 incremental bound, subject to the current purge floor. This may read more history
 than earlier versions. `--latest-only` still selects channels with a non-draft
 stored message or a retention seed; a checkpoint alone does not select a channel.
+
+If this first text-connector scan needs more than `slack.mcp.max_pages`, repeating
+the same command with the same limit reads the same prefix and fails again.
+Slacrawl keeps the checkpoint pending and does not write that channel's buffered
+history. It does not save an opaque cursor between invocations. Bootstrap one
+channel with a temporary, larger **positive** page budget:
+
+1. Record the current `max_pages` in the config used by this sync. Increase it
+   under the existing `[slack.mcp]` section, for example from `250` to `500`.
+   The larger value must cover the selected history interval; `500` is an
+   example, not a guaranteed channel size. It also raises the other MCP page
+   limits and can increase memory use, requests and run time.
+2. Run `slacrawl sync --source mcp --workspace T01234567 --channels C01234567`
+   with that same config. Keep the existing DM policy and retention settings.
+   Do not add `--since`: it creates a separate checkpoint and cannot initialize
+   the ordinary one. `--full` is not needed and would bypass the purge floor.
+3. If the chosen budget is still insufficient, choose a larger budget before
+   retrying. After a successful sync, restore the original `max_pages`. Ordinary
+   sync then starts from the completed MCP history watermark, subject to overlap
+   and retention. A later interval can still exceed that limit and need the same
+   recovery.
+
+This is an operator-managed backfill, not automatic continuation across restarts.
+An interrupted scan keeps its pending interval; a retry starts that interval
+again. API/Desktop rows, API backfill and `--latest-only` eligibility cannot
+certify the MCP checkpoint. This procedure does not extend the native reference
+server's fixed history window or allow text intake with `include_dms = false`.
 
 A completed empty scan is recorded explicitly and preserves any earlier history
 watermark. Later ordinary scans overlap that watermark by one hour. Failed or

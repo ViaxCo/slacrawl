@@ -370,7 +370,7 @@ func walkPages(maxPages int, fetch func(string) (string, error)) error {
 	seen := map[string]struct{}{}
 	for pages := 0; ; pages++ {
 		if maxPages > 0 && pages >= maxPages {
-			return fmt.Errorf("MCP pagination exceeded max_pages=%d", maxPages)
+			return &pageLimitError{maxPages: maxPages}
 		}
 		next, err := fetch(cursor)
 		if err != nil {
@@ -386,6 +386,14 @@ func walkPages(maxPages int, fetch func(string) (string, error)) error {
 		seen[next] = struct{}{}
 		cursor = next
 	}
+}
+
+type pageLimitError struct {
+	maxPages int
+}
+
+func (e *pageLimitError) Error() string {
+	return fmt.Sprintf("MCP pagination exceeded max_pages=%d", e.maxPages)
 }
 
 type authInfo struct {
