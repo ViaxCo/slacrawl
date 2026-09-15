@@ -59,7 +59,7 @@ func TestHistoryCoverageRetriesIncompleteInterval(t *testing.T) {
 			_, plan, err := client.channelSyncPlan(ctx, st, "T123", channels, SyncOptions{})
 			require.NoError(t, err)
 			require.Empty(t, plan["C123"])
-			source := channelSyncSource{historyClient: client.bot, token: "test", sourceName: SourceBot, sourceRank: 2}
+			source := channelSyncSource{token: "test", sourceName: SourceBot, sourceRank: 2}
 			err = client.syncChannelMessagesWithSource(ctx, st, "T123", channels[0], plan["C123"], false, now, threadFailure, source)
 			require.ErrorContains(t, err, "synthetic_failure")
 			state, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
@@ -103,7 +103,7 @@ func TestHistoryCoverageAdvancesEmptyAndSparseScans(t *testing.T) {
 			}))
 			defer server.Close()
 			client := NewWithOptions(config.Tokens{Bot: "test"}, server.URL+"/", server.Client())
-			source := channelSyncSource{historyClient: client.bot, token: "test", sourceName: SourceBot, sourceRank: 2}
+			source := channelSyncSource{token: "test", sourceName: SourceBot, sourceRank: 2}
 			require.NoError(t, client.syncChannelMessagesWithSource(ctx, st, "T123", channel, "", false, now, false, source))
 			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
@@ -259,11 +259,7 @@ func TestHistoryMigrationAndRestoreRequireLocalCoverage(t *testing.T) {
 					_, plan, err := client.channelSyncPlan(ctx, st, "T123", []slack.Channel{channel}, SyncOptions{}, sourceName)
 					require.NoError(t, err)
 					require.Equal(t, floor, plan["C123"], "newest saved message is not coverage")
-					historyClient := client.bot
-					if sourceName == SourceUser {
-						historyClient = client.user
-					}
-					source := channelSyncSource{historyClient: historyClient, token: "fixture", sourceName: sourceName, sourceRank: 2}
+					source := channelSyncSource{token: "fixture", sourceName: sourceName, sourceRank: 2}
 					err = client.syncChannelMessagesWithSource(ctx, st, "T123", channel, plan["C123"], false, now, false, source)
 					require.ErrorContains(t, err, "synthetic_failure")
 					require.NoError(t, st.Close())

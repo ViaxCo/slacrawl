@@ -2,6 +2,7 @@ package slackapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -353,6 +354,77 @@ func TestFullThreadSkipCleanupAfterJoin(t *testing.T) {
 			coverage, err := st.GetSyncState(ctx, "doctor", "threads", "coverage")
 			require.NoError(t, err)
 			require.Equal(t, map[bool]string{true: "full", false: "partial"}[joins], coverage)
+		})
+	}
+}
+
+func TestNativeJoinSuccessControlsHistoryRetry(t *testing.T) {
+	for _, joins := range []bool{false, true} {
+		t.Run(fmt.Sprintf("join-succeeds=%t", joins), func(t *testing.T) {
+			ctx := context.Background()
+			st := mustStore(t)
+			defer func() { require.NoError(t, st.Close()) }()
+			require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|legacy", "unknown origin"))
+			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1709900000.000000"}))
+			beforeSkip := repairKeyRows(t, st, "select * from sync_state where entity_type='thread_skip'")
+			now := time.Unix(1710000100, 0).UTC()
+			histories, joinCalls := 0, 0
+			client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
+				switch r.URL.Path {
+				case "/conversations.list":
+					if form.Get("types") == "im,mpim" {
+						return json.RawMessage(`{"ok":true,"channels":[]}`), nil
+					}
+				case "/conversations.history":
+					histories++
+					require.Equal(t, "fixture-bot", form.Get("token"))
+					require.Equal(t, "C123", form.Get("channel"))
+					require.Empty(t, form.Get("oldest"), "Full remains unbounded")
+					if histories == 1 {
+						return json.RawMessage(`{"ok":false,"error":"not_in_channel"}`), nil
+					}
+				case "/conversations.join":
+					joinCalls++
+					require.Equal(t, url.Values{"token": {"fixture-bot"}, "channel": {"C123"}}, form)
+					if !joins {
+						return json.RawMessage(`{"ok":false,"channel":{"id":"C123","is_channel":true,"name":"join-content-canary"}}`), nil
+					}
+					return json.RawMessage(`{"ok":true}`), nil
+				}
+				return primaryOwnerResponse(r.URL.Path), nil
+			}).WithDMPolicy(admission.Include)
+			client.now = func() time.Time { return now }
+			require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123", Full: true}), "join failure preserves the nonfatal history skip policy")
+			require.Equal(t, 1, joinCalls)
+			require.Equal(t, map[bool]int{true: 2, false: 1}[joins], histories)
+			joinState, err := st.GetSyncState(ctx, SourceBot, "channel_join", "C123")
+			require.NoError(t, err)
+			require.Equal(t, map[bool]string{true: "joined", false: "failed:conversations.join response did not report success"}[joins], joinState)
+			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			require.NoError(t, err)
+			require.True(t, coverage.Complete)
+			skips := repairKeyRows(t, st, "select * from sync_state where entity_type='thread_skip'")
+			channelSkips := repairKeyRows(t, st, "select value from sync_state where entity_type='channel_skip'")
+			if joins {
+				require.Empty(t, skips)
+				require.Empty(t, channelSkips)
+				require.Nil(t, coverage.Pending)
+				require.Equal(t, "1710000100.000000", coverage.Latest)
+			} else {
+				require.Equal(t, beforeSkip, skips)
+				require.Equal(t, []map[string]any{{"value": "not_in_channel"}}, channelSkips)
+				require.NotNil(t, coverage.Pending)
+				require.Equal(t, "", *coverage.Pending)
+				require.Equal(t, "1709900000.000000", coverage.Latest)
+			}
+			state, err := st.GetSyncState(ctx, "doctor", "threads", "coverage")
+			require.NoError(t, err)
+			require.Equal(t, map[bool]string{true: "full", false: "partial"}[joins], state)
+			completed, err := st.GetSyncState(ctx, SourceBot, "workspace", "T123")
+			require.NoError(t, err)
+			require.Equal(t, now.Format(time.RFC3339), completed, "a nonfatal join skip still finishes the sync with partial coverage")
+			require.Empty(t, repairKeyRows(t, st, "select * from messages"))
+			assertAdmissionCanariesAbsent(t, st, "", "join-content-canary")
 		})
 	}
 }

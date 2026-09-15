@@ -80,9 +80,7 @@ func (c *Client) admitTailConversation(ctx context.Context, workspaceID, channel
 	}
 	// Edits/deletions can omit channel_type. Resolve each untyped event afresh;
 	// a stored kind or an earlier event is not proof of its current type.
-	channel, err := retry(ctx, c.sleep, 3, func() (*slack.Channel, error) {
-		return c.bot.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID})
-	})
+	channel, err := c.getConversationInfo(ctx, channelID)
 	if err != nil {
 		return false, fmt.Errorf("classify tail channel %s: %w", channelID, err)
 	}
