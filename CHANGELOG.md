@@ -19,6 +19,8 @@
 
 - Preserve unvisited API thread-skip diagnostics during restricted or incomplete Full syncs, and explain retained thread work in Doctor's partial-coverage output. Require unrestricted traversal before bulk cleanup, retain generation guards, and keep observed omissions visible despite later success. Thanks @vincentkoc! (#229, #230)
 
+- Respect purge retention floors when replaying sent Desktop cache messages, including replies to expired roots and caches prepared before purge. Preserve existing-row enrichment and source priority. Store read markers by workspace and channel without guessing ownership for legacy markers. Thanks @vincentkoc! (#245, #246)
+
 - Fence MCP history and scoped reply writes against superseded work, and require native response arrays before accepting pages. Preserve newer content, earlier committed pages and durable retry work without consuming unselected backlog. Thanks @vincentkoc! (#242, #243, #244)
 
 - Fence API history and reply writes to the current scan, retain collision intervals for retry, and publish coverage atomically with pending-work checks. Preserve newer writes and checkpoints when requests overlap, and keep Status and Doctor truthful while work remains. Thanks @vincentkoc! (#239, #240, #241)

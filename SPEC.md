@@ -949,6 +949,26 @@ observations, not content approval or publication authority.
    - custom-status state
    - IndexedDB object store inventory for drift detection
 
+Sent Redux message writes enforce the strongest current global, workspace, or
+channel retention floor inside each batch transaction, including the final
+partial batch. A reply uses its parent timestamp; a message at the cutoff is
+eligible. An exact existing row below the floor remains eligible for updates
+under source-priority rules. Preparing cache data before a purge does not freeze
+the retention decision. This shared write path covers desktop/wiretap, watch,
+and all/hybrid desktop ingestion. Metadata, inventory and checkpoints may
+refresh even when sent messages are omitted; admission counts describe prepared
+input, not inserted rows. Draft retention remains a separate boundary.
+
+Desktop read markers use source `desktop`, entity type `read_marker_v1`,
+compact JSON `[resolved_workspace_id,channel_id]` keys and unchanged scalar
+timestamp values. The writer uses the owner retained by admission, not the
+persisted call's workspace. Users/calls within a tuple keep their existing
+overwrite order; unsorted calls have no prescribed winner or maximum-timestamp
+rule. Legacy channel-only `read_marker` rows are never read, migrated or
+dual-written by intake. Generic snapshot export/merge/Restore and message-purge
+behavior remain unchanged, as do marker counts and freshness accounting.
+Channel-hint projection and per-user read-state semantics are separate.
+
 ## Go Package Layout
 
 ```text

@@ -345,6 +345,8 @@ func TestDesktopAdmissionDraftsHintsAndExistingRows(t *testing.T) {
 			legacy := store.Message{WorkspaceID: "T1", ChannelID: legacyChannel, TS: "draft:171:T1:draft", Text: "retained <@UOLD>", NormalizedText: "retained", SourceName: draftSourceName, SourceRank: 3, RawJSON: `{"retained":true}`, UpdatedAt: time.Now().UTC(), Files: []store.MessageFile{{FileID: "FRETAINED", Name: "retained.txt", RawJSON: `{}`}}}
 			require.NoError(t, st.UpsertMessage(ctx, legacy, reduxMentions(legacy.Text)))
 			require.NoError(t, st.SetSyncState(ctx, sourceName, "read_marker", "CDM", "old"))
+			legacyMarkers, err := st.QueryReadOnly(ctx, "select * from sync_state where source_name='desktop' and entity_type='read_marker'")
+			require.NoError(t, err)
 			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "CDM", WorkspaceID: "T1", Name: "retained DM", Kind: "im", RawJSON: `{"retained":true}`, UpdatedAt: legacy.UpdatedAt}))
 			oldChannels, err := st.QueryReadOnly(ctx, "select * from channels where id = 'CDM'")
 			require.NoError(t, err)
@@ -375,6 +377,12 @@ func TestDesktopAdmissionDraftsHintsAndExistingRows(t *testing.T) {
 				marker, err := st.GetSyncState(ctx, sourceName, "read_marker", "CDM")
 				require.NoError(t, err)
 				require.Equal(t, "old", marker)
+				retainedMarkers, err := st.QueryReadOnly(ctx, "select * from sync_state where source_name='desktop' and entity_type='read_marker'")
+				require.NoError(t, err)
+				require.Equal(t, legacyMarkers, retainedMarkers)
+				qualified, err := st.QueryReadOnly(ctx, "select entity_id,value from sync_state where source_name='desktop' and entity_type='read_marker_v1'")
+				require.NoError(t, err)
+				require.Equal(t, []map[string]any{{"entity_id": `["T1","CPUB"]`, "value": "1"}}, qualified)
 				channels, err := st.QueryReadOnly(ctx, "select * from channels where id = 'CDM'")
 				require.NoError(t, err)
 				require.Equal(t, oldChannels, channels)
@@ -461,9 +469,16 @@ func TestDesktopAdmissionPreservesResolvedWorkspace(t *testing.T) {
 				owner, err := st.ChannelWorkspaceID(context.Background(), "CPUB")
 				require.NoError(t, err)
 				require.Equal(t, workspace, owner)
-				marker, err := st.GetSyncState(context.Background(), sourceName, "read_marker", "CPUB")
+				key := `["T1","CPUB"]`
+				if workspace == "T2" {
+					key = `["T2","CPUB"]`
+				}
+				marker, err := st.GetSyncState(context.Background(), sourceName, "read_marker_v1", key)
 				require.NoError(t, err)
 				require.Equal(t, "123", marker)
+				markerRows, err := st.QueryReadOnly(context.Background(), "select entity_type,entity_id,value from sync_state where source_name='desktop' and entity_type in ('read_marker','read_marker_v1')")
+				require.NoError(t, err)
+				require.Equal(t, []map[string]any{{"entity_type": "read_marker_v1", "entity_id": key, "value": "123"}}, markerRows)
 				users, err := st.Users(context.Background(), "", "external", 10)
 				require.NoError(t, err)
 				require.Len(t, users, 1)
