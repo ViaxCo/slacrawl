@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reject successfully authenticated user tokens from another workspace before API sync or tail repair writes; report the mismatch in doctor while preserving bot-only coverage for missing or invalid user tokens.
 - Allow desktop/wiretap sync, watch, and all/hybrid sync to exclude unsent drafts with `[slack.desktop].include_drafts = false`; preserve the default and leave already archived drafts unchanged.
 - Confine directory-export imports to the selected root so symlinks cannot import unrelated files. Compatibility: links outside the root now fail; contained links and a linked export root remain supported.
 - Keep digest, quiet-channel and weekly-trend reports within their timestamp windows, and count thread roots independently across channels, including roots identified only by reply metadata.

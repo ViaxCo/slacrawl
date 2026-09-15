@@ -448,6 +448,12 @@ token_env = "SLACK_APP_TOKEN"
 
 The user token is optional, but it upgrades historical thread coverage for public and private channels.
 
+The bot and user tokens must authenticate to the same workspace. API sync and
+periodic tail repair reject a valid user token from another workspace before
+fetching data or updating the archive. Doctor reports that mismatch as
+unavailable user auth with partial thread coverage. Missing or invalid user
+tokens retain bot-only coverage.
+
 ```toml
 [slack.user]
 enabled = true

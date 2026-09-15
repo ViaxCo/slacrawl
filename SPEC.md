@@ -179,7 +179,7 @@ Must check:
 - FTS presence
 - desktop-local source availability
 - whether thread coverage can be full or only partial
-- if a configured user token actually auths successfully
+- if a configured user token authenticates successfully to the bot's workspace
 - recent API channel skips and tail connection/repair state when present
 - configured git-share repo plus last import / stale state when share mode is enabled
 
@@ -360,7 +360,7 @@ Share config:
 
 1. load config
 2. resolve tokens
-3. auth test
+3. authenticate the bot and optional user token; reject a successful workspace mismatch before archive writes
 4. fetch workspace metadata
 5. fetch channels
 6. derive per-channel sync window:
@@ -375,7 +375,7 @@ Share config:
 8. fetch users
 9. backfill message history
 10. when `auto_join` is enabled, attempt public-channel join and retry once on `not_in_channel`
-11. backfill thread replies only when a user token is configured and successfully auths
+11. backfill thread replies only when a user token is configured and successfully authenticates to the bot's workspace
 12. normalize messages
    - repair malformed UTF-8 before indexing
    - normalize indexed text with NFKC
