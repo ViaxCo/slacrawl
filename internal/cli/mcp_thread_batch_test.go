@@ -96,12 +96,53 @@ func TestMCPHistoryBatchKeepsChildWorkFromCLI(t *testing.T) {
 				require.NotEmpty(t, first.Pending[0]["value"])
 				require.Equal(t, mcpWorkToolError, retry.Error)
 				require.Equal(t, first.Pending, retry.Pending, "a missing tool cannot renew or retire queued work")
-				require.Equal(t, snapshots[0], snapshots[1], "the empty-history retry preserves all archive rows and derived state")
+				for table, before := range snapshots[0] {
+					if table != "sync_state" {
+						require.Equal(t, before, snapshots[1][table], table)
+					}
+				}
+				revisions := []string{}
+				for attempt, snapshot := range snapshots {
+					var other []map[string]any
+					historyCount := 0
+					for _, row := range snapshot["sync_state"] {
+						if row["entity_type"] != store.MCPHistoryEntityType {
+							other = append(other, row)
+							continue
+						}
+						historyCount++
+						provider := "reference"
+						if text {
+							provider = "codex"
+						}
+						key, err := json.Marshal([]string{"TLOCAL", "C123", provider, ""})
+						require.NoError(t, err)
+						value, ok := row["value"].(string)
+						require.True(t, ok)
+						var state store.MCPHistoryState
+						require.NoError(t, json.Unmarshal([]byte(value), &state))
+						require.NotEmpty(t, state.Revision)
+						revisions = append(revisions, state.Revision)
+						expected := store.MCPHistoryState{Complete: attempt == 1, Revision: state.Revision}
+						if attempt == 0 {
+							expected.Pending = new("")
+						}
+						require.Equal(t, expected, state)
+						updated, ok := row["updated_at"].(string)
+						require.True(t, ok)
+						_, err = time.Parse(time.RFC3339Nano, updated)
+						require.NoError(t, err)
+						require.Equal(t, map[string]any{"source_name": "mcp", "entity_type": store.MCPHistoryEntityType, "entity_id": string(key), "value": value, "updated_at": updated}, row)
+					}
+					require.Equal(t, 1, historyCount)
+					require.ElementsMatch(t, append(append([]map[string]any{}, first.Pending...), workspaceBefore...), other)
+				}
+				require.NotEqual(t, revisions[0], revisions[1])
 				wantRows := 500
 				if text {
 					wantRows++
 				}
-				for attempt, observed := range observations {
+				for _, observed := range observations {
 					require.Empty(t, observed.ServerErrors)
 					require.False(t, observed.Completion)
 					require.Equal(t, workspaceBefore, observed.Workspace)
@@ -112,11 +153,7 @@ func TestMCPHistoryBatchKeepsChildWorkFromCLI(t *testing.T) {
 					}
 					wantCalls := []mcpCoverageCall{{"slack_list_channels", map[string]any{"limit": float64(20)}}, {"slack_get_channel_history", map[string]any{"channel_id": "C123", "limit": float64(501)}}}
 					if text {
-						oldest := "1709996402.000000"
-						if attempt == 1 {
-							oldest = "1709996901.000000"
-						}
-						wantCalls = []mcpCoverageCall{{"slack_read_channel", map[string]any{"channel_id": "C123", "oldest": oldest, "limit": float64(501), "response_format": "detailed"}}}
+						wantCalls = []mcpCoverageCall{{"slack_read_channel", map[string]any{"channel_id": "C123", "limit": float64(501), "response_format": "detailed"}}}
 					}
 					require.Equal(t, wantCalls, observed.Calls)
 					for _, row := range observed.Rows {

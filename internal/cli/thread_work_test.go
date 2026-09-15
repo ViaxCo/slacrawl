@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -102,6 +103,87 @@ func TestPendingThreadDoctorAndFreshness(t *testing.T) {
 				require.Equal(t, wantCount, source.SyncEntries)
 			}
 			require.True(t, found)
+		})
+	}
+}
+
+func TestMCPHistoryDoctorAndFreshness(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, kind, profile string
+		complete, success           bool
+	}{
+		{"pending-only", "mcp", store.MCPHistoryEntityType, "mcp", false, false},
+		{"complete-only", "mcp", store.MCPHistoryEntityType, "mcp", true, false},
+		{"pending-with-success", "mcp", store.MCPHistoryEntityType, "mcp", false, true},
+		{"complete-with-success", "mcp", store.MCPHistoryEntityType, "mcp", true, true},
+		{"other-source", "api-user", store.MCPHistoryEntityType, "bot", false, false},
+		{"other-type", "mcp", "history_coverage_v1", "mcp", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			cfg, path := userPrimaryConfig(t)
+			cfg.Sync.IncludeDMs = new(false)
+			t.Setenv(cfg.Slack.Bot.TokenEnv, "fixture-bot")
+			t.Setenv(cfg.Slack.User.TokenEnv, "fixture-user")
+			require.NoError(t, cfg.Save(path))
+			st, err := store.Open(cfg.DBPath)
+			require.NoError(t, err)
+			if tc.source == "mcp" && tc.kind == store.MCPHistoryEntityType {
+				work, selected, err := st.BeginMCPHistory(ctx, store.MCPHistoryScope{WorkspaceID: "T1", ChannelID: "C1", Adapter: "reference"}, store.MCPHistoryOptions{})
+				require.NoError(t, err)
+				require.True(t, selected)
+				if tc.complete {
+					done, err := st.CompleteMCPHistory(ctx, work, "1710000000.000000")
+					require.NoError(t, err)
+					require.True(t, done)
+				}
+			} else {
+				_, err = st.DB().ExecContext(ctx, "insert into sync_state values (?,?, 'opaque', 'preserved', '2099-01-01T00:00:00Z')", tc.source, tc.kind)
+				require.NoError(t, err)
+			}
+			if tc.success {
+				_, err = st.DB().ExecContext(ctx, "insert into sync_state values ('mcp','workspace','T1','old','2000-01-01T00:00:00Z')")
+				require.NoError(t, err)
+			}
+			require.NoError(t, st.Close())
+			before := shareArchiveSnapshot(t, cfg.DBPath)
+			var output bytes.Buffer
+			app := &App{Stdout: &output, Stderr: &output, apiURL: "https://history-doctor.invalid/", httpClient: &http.Client{Transport: cliRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				require.Equal(t, "/auth.test", r.URL.Path)
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewBufferString(`{"ok":true,"team_id":"T1","team":"Fixture"}`)), Request: r}, nil
+			})}}
+			require.NoError(t, app.Run(ctx, []string{"--config", path, "--json", "doctor"}))
+			var report map[string]any
+			require.NoError(t, json.Unmarshal(output.Bytes(), &report))
+			require.Equal(t, "full", report["thread_coverage"])
+			require.Equal(t, before, shareArchiveSnapshot(t, cfg.DBPath))
+			st, err = store.OpenReadOnly(cfg.DBPath)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, st.Close()) }()
+			profile, err := app.buildArchiveProfile(ctx, cfg, st)
+			require.NoError(t, err)
+			status, err := st.Status(ctx)
+			require.NoError(t, err)
+			wantTime, wantCount := "", int64(1)
+			if tc.success {
+				wantTime, wantCount = "2000-01-01T00:00:00Z", 2
+			} else if tc.source != "mcp" || tc.kind != store.MCPHistoryEntityType {
+				wantTime = "2099-01-01T00:00:00Z"
+			}
+			found := false
+			for _, source := range profile.Sources {
+				if source.Name == tc.profile {
+					found = true
+					require.Equal(t, wantTime, source.LastSeenAt)
+					require.Equal(t, wantCount, source.SyncEntries)
+				}
+			}
+			require.True(t, found)
+			if wantTime == "" {
+				require.True(t, status.LastSyncAt.IsZero())
+			} else {
+				require.Equal(t, wantTime, status.LastSyncAt.UTC().Format(time.RFC3339))
+			}
 		})
 	}
 }

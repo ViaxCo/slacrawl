@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"net/http"
 	"regexp"
 	"sort"
@@ -104,20 +103,27 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		userCount = len(users)
 	}
 
-	oldestByChannel, selected, err := syncPlan(ctx, st, workspaceID, channels, opts)
-	if err != nil {
-		return Summary{}, err
-	}
-	restoreRequested := opts.Since != "" || opts.Full
 	summary.Users = userCount
 	var coverage messageCoverage
-	for _, channel := range selected {
-		enforceRetention, err := syncEnforcesRetention(ctx, st, workspaceID, channel.ID, oldestByChannel[channel.ID], restoreRequested)
+	for _, channel := range channels {
+		work, selected, err := st.BeginMCPHistory(ctx, store.MCPHistoryScope{
+			WorkspaceID: workspaceID, ChannelID: channel.ID, Adapter: string(tools.provider), Since: normalizeTimestamp(opts.Since),
+		}, store.MCPHistoryOptions{Full: opts.Full, LatestOnly: opts.LatestOnly})
 		if err != nil {
-			return summary, err
+			return summary, persistenceError(err)
 		}
-		channelResult, err := client.channelMessages(ctx, tools, workspaceID, channel.ID, oldestByChannel[channel.ID])
+		if !selected {
+			continue
+		}
+		enforceRetention := work.EnforceRetention
+		channelResult, err := client.channelMessages(ctx, tools, workspaceID, channel.ID, work.Oldest)
 		if err != nil {
+			var limit *pageLimitError
+			if errors.As(err, &limit) {
+				// Retrying the same bounded prefix cannot establish history coverage;
+				// never substitute stored rows or an isolated Since checkpoint for it.
+				err = fmt.Errorf("%w; history checkpoint remains pending; increase slack.mcp.max_pages temporarily, rerun the same sync, then restore the limit after completion", err)
+			}
 			return summary, fmt.Errorf("read MCP channel: %w", err)
 		}
 		coverage.include(channelResult.coverage)
@@ -184,6 +190,17 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		if len(batch.Messages) > 0 {
 			if err := writeHistoryBatch(); err != nil {
 				return summary, err
+			}
+		}
+		// History owns its checkpoint independently of reply completion. A later
+		// reply/channel failure must not erase an already committed history scan.
+		if !channelResult.coverage.more && !channelResult.coverage.limited {
+			completed, err := st.CompleteMCPHistory(ctx, work, channelResult.LatestTS)
+			if err != nil {
+				return summary, persistenceError(err)
+			}
+			if !completed {
+				return summary, errors.New("MCP history attempt was superseded; retry sync to complete current history work")
 			}
 		}
 		if tools.readThread == "" {
@@ -280,20 +297,6 @@ func persistenceError(err error) error {
 	return err
 }
 
-func syncEnforcesRetention(ctx context.Context, st *store.Store, workspaceID, channelID, oldest string, restoreRequested bool) (bool, error) {
-	if !restoreRequested {
-		return true, nil
-	}
-	if oldest == "" {
-		return false, nil
-	}
-	floor, err := st.ChannelRetentionFloor(ctx, workspaceID, channelID)
-	if err != nil {
-		return false, err
-	}
-	return store.ShouldEnforceRetention(oldest, floor, true), nil
-}
-
 type threadSyncResult struct {
 	replies  int
 	coverage messageCoverage
@@ -351,53 +354,6 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 	}
 	result.replies = written.MessagesWritten
 	return result, nil
-}
-
-func syncPlan(ctx context.Context, st *store.Store, workspaceID string, channels []ChannelRecord, opts Options) (map[string]string, []ChannelRecord, error) {
-	oldest := make(map[string]string, len(channels))
-	if opts.Since != "" {
-		since := normalizeTimestamp(opts.Since)
-		for _, channel := range channels {
-			oldest[channel.ID] = since
-		}
-		return oldest, channels, nil
-	}
-	if opts.Full {
-		return oldest, channels, nil
-	}
-	cursors, err := st.ChannelSyncCursors(ctx, workspaceID)
-	if err != nil {
-		return nil, nil, err
-	}
-	latest := make(map[string]store.ChannelSyncCursor, len(cursors))
-	for _, cursor := range cursors {
-		latest[cursor.ID] = cursor
-	}
-	selected := make([]ChannelRecord, 0, len(channels))
-	for _, channel := range channels {
-		cursor, ok := latest[channel.ID]
-		if !ok {
-			floor, err := st.ChannelRetentionFloor(ctx, workspaceID, channel.ID)
-			if err != nil {
-				return nil, nil, err
-			}
-			seeded, err := st.ChannelRetentionSeeded(ctx, workspaceID, channel.ID)
-			if err != nil {
-				return nil, nil, err
-			}
-			cursor = store.ChannelSyncCursor{ID: channel.ID, RetentionFloor: floor, RetentionSeeded: seeded}
-		}
-		if opts.LatestOnly && cursor.LatestTS == "" && !cursor.RetentionSeeded {
-			continue
-		}
-		selected = append(selected, channel)
-		channelOldest := cursor.ApplyRetentionFloor(overlapTimestamp(cursor.LatestTS, time.Hour))
-		if channelOldest != "" && channelOldest == cursor.RetentionFloor {
-			channelOldest = previousMicrosecondTimestamp(channelOldest)
-		}
-		oldest[channel.ID] = channelOldest
-	}
-	return oldest, selected, nil
 }
 
 func toStoreChannel(workspaceID string, channel ChannelRecord, now time.Time) store.Channel {
@@ -498,42 +454,4 @@ func normalizeTimestamp(value string) string {
 		return fmt.Sprintf("%d.%06d", parsed.Unix(), parsed.Nanosecond()/1000)
 	}
 	return value
-}
-
-func previousMicrosecondTimestamp(value string) string {
-	parts := strings.SplitN(strings.TrimSpace(value), ".", 2)
-	seconds, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		return value
-	}
-	fraction := ""
-	if len(parts) == 2 {
-		fraction = parts[1]
-	}
-	if len(fraction) > 6 {
-		fraction = fraction[:6]
-	}
-	fraction += strings.Repeat("0", 6-len(fraction))
-	microseconds, err := strconv.ParseInt(fraction, 10, 64)
-	if err != nil {
-		return value
-	}
-	if microseconds == 0 {
-		seconds--
-		microseconds = 999999
-	} else {
-		microseconds--
-	}
-	return fmt.Sprintf("%d.%06d", seconds, microseconds)
-}
-
-func overlapTimestamp(value string, overlap time.Duration) string {
-	if value == "" {
-		return ""
-	}
-	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil {
-		return value
-	}
-	return strconv.FormatFloat(math.Max(parsed-overlap.Seconds(), 0), 'f', 6, 64)
 }

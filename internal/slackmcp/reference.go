@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/openclaw/slacrawl/internal/admission"
+	"github.com/openclaw/slacrawl/internal/store"
 )
 
 type referenceResponse struct {
@@ -173,13 +174,18 @@ func (c *Client) referenceChannelMessages(ctx context.Context, tools toolset, wo
 	}
 	coverage := response.coverage()
 	messages := make([]MessageRecord, 0, len(response.Messages))
+	latest := ""
 	for _, message := range response.Messages {
+		latest, err = store.MaxMCPHistoryTS(latest, message.TS)
+		if err != nil {
+			return channelPage{}, err
+		}
 		if !timestampAtLeast(message.TS, oldest) {
 			continue
 		}
 		messages = append(messages, referenceMessageRecord(channelID, message))
 	}
-	return channelPage{ChannelID: channelID, Messages: messages, coverage: coverage}, nil
+	return channelPage{ChannelID: channelID, Messages: messages, LatestTS: latest, coverage: coverage}, nil
 }
 
 func (c *Client) referenceThreadMessages(ctx context.Context, tools toolset, workspaceID, channelID, threadTS string, current func() (bool, error)) (threadPage, error) {

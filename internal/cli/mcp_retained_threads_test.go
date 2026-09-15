@@ -260,8 +260,11 @@ func mcpWorkReplyCalls(calls []mcpCoverageCall) []mcpCoverageCall {
 
 func mcpWorkExpectedCalls(mode string, text bool, attempt int) []mcpCoverageCall {
 	if text {
-		oldest := "1709996401.000000"
-		calls := []mcpCoverageCall{{"slack_read_channel", map[string]any{"channel_id": "C123", "oldest": oldest, "limit": float64(100), "response_format": "detailed"}}, {"slack_read_thread", map[string]any{"channel_id": "C123", "message_ts": mcpWorkRoot, "limit": float64(100), "response_format": "detailed"}}}
+		history := map[string]any{"channel_id": "C123", "limit": float64(100), "response_format": "detailed"}
+		if attempt > 0 {
+			history["oldest"] = "1709996401.000000"
+		}
+		calls := []mcpCoverageCall{{"slack_read_channel", history}, {"slack_read_thread", map[string]any{"channel_id": "C123", "message_ts": mcpWorkRoot, "limit": float64(100), "response_format": "detailed"}}}
 		if mode == "text-restart" && attempt == 0 {
 			calls = append(calls, mcpCoverageCall{"slack_read_thread", map[string]any{"channel_id": "C123", "message_ts": mcpWorkRoot, "cursor": "thread-next", "limit": float64(100), "response_format": "detailed"}})
 		}

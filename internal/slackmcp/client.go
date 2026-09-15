@@ -13,6 +13,7 @@ import (
 
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/mcpclient"
+	"github.com/openclaw/slacrawl/internal/store"
 )
 
 type Client struct {
@@ -55,6 +56,7 @@ type page[T any] struct {
 }
 
 type channelPage struct {
+	LatestTS    string
 	ChannelID   string
 	ChannelName string
 	Messages    []MessageRecord
@@ -275,8 +277,9 @@ func (c *Client) channelMessages(ctx context.Context, tools toolset, workspaceID
 			return "", errors.New("MCP channel response does not match requested conversation")
 		}
 		for _, message := range next.Messages {
-			if strings.TrimSpace(message.TS) == "" {
-				return "", errors.New("MCP message timestamp is empty")
+			result.LatestTS, err = store.MaxMCPHistoryTS(result.LatestTS, message.TS)
+			if err != nil {
+				return "", err
 			}
 		}
 		if result.ChannelID == "" {
@@ -367,7 +370,7 @@ func walkPages(maxPages int, fetch func(string) (string, error)) error {
 	seen := map[string]struct{}{}
 	for pages := 0; ; pages++ {
 		if maxPages > 0 && pages >= maxPages {
-			return fmt.Errorf("MCP pagination exceeded max_pages=%d", maxPages)
+			return &pageLimitError{maxPages: maxPages}
 		}
 		next, err := fetch(cursor)
 		if err != nil {
@@ -383,6 +386,14 @@ func walkPages(maxPages int, fetch func(string) (string, error)) error {
 		seen[next] = struct{}{}
 		cursor = next
 	}
+}
+
+type pageLimitError struct {
+	maxPages int
+}
+
+func (e *pageLimitError) Error() string {
+	return fmt.Sprintf("MCP pagination exceeded max_pages=%d", e.maxPages)
 }
 
 type authInfo struct {
