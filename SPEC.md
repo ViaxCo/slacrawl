@@ -196,6 +196,23 @@ missing user authentication. An already-partial global auth diagnosis keeps its
 original meaning; valid user auth without a recognized reason renders neutral
 `partial`. JSON omits an unset reason; log output includes it as `"-"`.
 
+Doctor reports DM access-sampling failures separately from missing scopes. Optional
+`dm_probe_error` is `catalog_failed` when DM enumeration fails for a reason other
+than `missing_scope`, or `history_failed` for a non-scope sampled history failure.
+History sampling continues with the other available IM/MPIM kind; later success
+does not erase a failure. Missing scopes remain sorted and independent. The new
+field contains no raw provider errors, cursors, conversation IDs or URLs. JSON
+omits an unset field; log output includes `dm_probe_error="-"`.
+
+Probe failures do not change user authentication, DM inclusion or thread-coverage
+fields. Human output names failures for global and named workspaces and offers a
+Doctor retry. Full thread capability reads `user auth available for replies`;
+DM inclusion reads `enabled for user token; history coverage not verified`.
+Empty catalogs and unsampled kinds do not establish history access or archive
+completeness. Caller cancellation/deadline stops Doctor, remaining requests and
+CLI output; a request error resembling cancellation with a live caller remains
+an optional-auth failure or bounded probe failure.
+
 ### `purge`
 
 Purpose:
@@ -454,7 +471,7 @@ Catalogs share the history/replies whole-body reader: trailing JSON and a read
 error after a valid object are rejected. Non-200 responses use the SDK's typed
 status error; only rate limits with Retry-After use the existing bounded retry
 policy. Typed catalog decoding still precedes success validation; this does not
-certify complete payload shape or expose suppressed Doctor probe errors.
+certify complete payload shape.
 
 After native success, page admission requires a present array: `messages` for
 history/replies, `channels` for conversation catalogs, and `members` for user
@@ -468,9 +485,9 @@ Earlier valid history/replies writes and pending work survive collection failure
 catalog failures discard that catalog operation's collected pages. Corrected
 retries use the existing pending interval or restart the catalog. One-message
 capability probes also require arrays, without certifying scan completion.
-Doctor still suppresses non-scope probe failures. Authentication, info and join
-responses do not use this page-collection gate. The SDK's existing `ok: true`
-error short-circuit is unchanged.
+Doctor reports non-scope probe failures through its bounded access-sampling
+field. Authentication, info and join responses do not use this page-collection
+gate. The SDK's existing `ok: true` error short-circuit is unchanged.
 
 Authentication, conversation-info lookups and join attempts use the same native
 response owner. Each must report `ok: true` before its decoded result can be used;
@@ -503,6 +520,30 @@ Use workspace-scoped bot or user tokens. A valid workspace ID can accompany an
 enterprise ID, but the enterprise ID alone does not identify a workspace. This
 does not add organization-token resolution or a configured-workspace fallback;
 the existing `users.list` request still leaves `team_id` empty.
+
+Native request construction/execution, Retry-After parsing, HTTP status, body-read
+and envelope-decode failures render only the trusted method, fixed failure phase
+and optional numeric HTTP status. History/replies message-decode failures use the
+same diagnostic wrapper. SDK decode errors can contain response payloads, so their
+text is never appended to ordinary diagnostics, progress logs or failed-join state.
+Underlying causes remain inspectable through `errors.Is`/`errors.As` and unwrapping;
+the error objects themselves are not redacted. Body closure, retries, admission,
+optional-auth fallback and pending-work ownership remain unchanged.
+
+For decoded unsuccessful responses, render a native error code only when it
+exactly equals `missing_scope`, `not_in_channel`, `channel_not_found`,
+`invalid_auth`, `not_authed`, `account_inactive`, `token_expired`,
+`token_revoked`, `is_archived` or `thread_not_found`. Other codes render
+`slack <method> API response failed`; whitespace, case changes and added text do
+not qualify. Explicit `ok: true` retains the SDK's error-field bypass. Channel
+skip/retry decisions inspect the original code through exact machine comparisons.
+Repeated channel, DM, user, history and replies cursors report only the method
+and repeated-cursor condition, never the cursor value.
+
+Underlying native codes, details and metadata remain inspectable in error causes.
+This does not redact error objects, identities, progress names, successful response
+metadata, successful archive data or previously stored diagnostics. This is not
+a global diagnostic privacy guarantee.
 
 ### Slack export import
 

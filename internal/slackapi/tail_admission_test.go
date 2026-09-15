@@ -386,45 +386,56 @@ func tailMessageFixture(kind, subtype string) map[string]any {
 }
 
 func TestTailLookupRequiresNativeSuccessBeforeAdmission(t *testing.T) {
-	for _, metadata := range []bool{false, true} {
-		t.Run(fmt.Sprintf("metadata=%t", metadata), func(t *testing.T) {
-			server := admissionServer(t, nil, func(w http.ResponseWriter, r *http.Request) bool {
-				require.Equal(t, "/conversations.info", r.URL.Path)
-				require.Equal(t, "C123", r.Form.Get("channel"))
-				writeAdmissionJSON(t, w, map[string]any{"ok": nil, "channel": map[string]any{
-					"id": "C123", "context_team_id": "T123", "is_channel": true,
-					"name": "lookup-name-canary", "latest": admissionMessage("lookup-content-canary", "DOTHER", "1700000000.000000"),
-				}})
-				return true
+	for _, decodeFailure := range []bool{false, true} {
+		for _, metadata := range []bool{false, true} {
+			t.Run(fmt.Sprintf("metadata=%t/decode=%t", metadata, decodeFailure), func(t *testing.T) {
+				server := admissionServer(t, nil, func(w http.ResponseWriter, r *http.Request) bool {
+					require.Equal(t, "/conversations.info", r.URL.Path)
+					require.Equal(t, "C123", r.Form.Get("channel"))
+					payload := map[string]any{"ok": nil, "channel": map[string]any{
+						"id": "C123", "context_team_id": "T123", "is_channel": true,
+						"name": "lookup-name-canary", "latest": admissionMessage("lookup-content-canary", "DOTHER", "1700000000.000000"),
+					}}
+					if decodeFailure {
+						payload["ok"] = true
+						payload["errors"] = []any{map[string]any{"private": "lookup-content-canary"}}
+					}
+					writeAdmissionJSON(t, w, payload)
+					return true
+				})
+				defer server.Close()
+				var logs bytes.Buffer
+				client := NewWithOptions(config.Tokens{Bot: "fixture"}, server.URL()+"/", server.Client()).WithDMPolicy(admission.Exclude).WithLogger(testProgressLogger(&logs))
+				st := mustStore(t)
+				defer func() { require.NoError(t, st.Close()) }()
+				ctx := context.Background()
+				require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Kind: "public_channel", Name: "retained", RawJSON: `{"retained":true}`, UpdatedAt: time.Unix(1710000000, 0)}))
+				before := map[string][]map[string]any{}
+				for _, table := range admissionTables {
+					var err error
+					before[table], err = st.QueryReadOnly(ctx, "select * from "+table)
+					require.NoError(t, err)
+				}
+				inner := tailMessageFixture("", "message_changed")
+				if metadata {
+					inner = map[string]any{"type": "channel_rename", "channel": map[string]any{"id": "C123", "name": "metadata-content-canary"}}
+				}
+				socket := &fakeSocketMode{}
+				err := handleTailFixture(t, client, st, socket, "T123", inner)
+				if decodeFailure {
+					require.EqualError(t, err, "classify tail channel C123: slack conversations.info response decode failed")
+				} else {
+					require.EqualError(t, err, "classify tail channel C123: conversations.info response did not report success")
+				}
+				require.Zero(t, socket.acks)
+				require.Equal(t, 1, server.calls("conversations.info"))
+				for _, table := range admissionTables {
+					after, err := st.QueryReadOnly(ctx, "select * from "+table)
+					require.NoError(t, err)
+					require.Equal(t, before[table], after, table)
+				}
+				assertAdmissionCanariesAbsent(t, st, logs.String()+err.Error(), "tail-content-canary", "metadata-content-canary", "lookup-name-canary", "lookup-content-canary", "DOTHER")
 			})
-			defer server.Close()
-			var logs bytes.Buffer
-			client := NewWithOptions(config.Tokens{Bot: "fixture"}, server.URL()+"/", server.Client()).WithDMPolicy(admission.Exclude).WithLogger(testProgressLogger(&logs))
-			st := mustStore(t)
-			defer func() { require.NoError(t, st.Close()) }()
-			ctx := context.Background()
-			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Kind: "public_channel", Name: "retained", RawJSON: `{"retained":true}`, UpdatedAt: time.Unix(1710000000, 0)}))
-			before := map[string][]map[string]any{}
-			for _, table := range admissionTables {
-				var err error
-				before[table], err = st.QueryReadOnly(ctx, "select * from "+table)
-				require.NoError(t, err)
-			}
-			inner := tailMessageFixture("", "message_changed")
-			if metadata {
-				inner = map[string]any{"type": "channel_rename", "channel": map[string]any{"id": "C123", "name": "metadata-content-canary"}}
-			}
-			socket := &fakeSocketMode{}
-			err := handleTailFixture(t, client, st, socket, "T123", inner)
-			require.EqualError(t, err, "classify tail channel C123: conversations.info response did not report success")
-			require.Zero(t, socket.acks)
-			require.Equal(t, 1, server.calls("conversations.info"))
-			for _, table := range admissionTables {
-				after, err := st.QueryReadOnly(ctx, "select * from "+table)
-				require.NoError(t, err)
-				require.Equal(t, before[table], after, table)
-			}
-			assertAdmissionCanariesAbsent(t, st, logs.String()+err.Error(), "tail-content-canary", "metadata-content-canary", "lookup-name-canary", "lookup-content-canary", "DOTHER")
-		})
+		}
 	}
 }

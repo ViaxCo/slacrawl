@@ -31,22 +31,24 @@ func renderDoctorBlock(w *strings.Builder, value any) bool {
 		coverageDetail := "partial"
 		switch {
 		case coverage == "full":
-			coverageDetail = "full historical replies"
+			coverageDetail = "user auth available for replies"
 		case slackAPI["thread_coverage_reason"] == "retained_api_thread_work":
 			coverageDetail = "partial: retained API thread skips or pending work"
 		case !truthy(slackAPI["user_auth_available"]):
 			coverageDetail = "partial without user auth"
 		}
 		writeCheck(w, "thread coverage", coverage == "full", coverageDetail)
-		if truthy(slackAPI["dms_included"]) {
-			missing := shortValue(slackAPI["dms_missing_scope"])
-			if missing == "" {
-				writeCheck(w, "dms and mpims", true, "user token covers DMs and MPIMs")
-			} else {
-				writeCheck(w, "dms and mpims", false, "missing scope: "+missing)
+		renderDoctorDMAccess(w, "dms and mpims", slackAPI)
+	}
+	if workspaces, ok := report["workspace_api"].([]any); ok {
+		for _, value := range workspaces {
+			workspace, ok := value.(map[string]any)
+			if !ok {
+				continue
 			}
-		} else {
-			writeCheck(w, "dms and mpims", false, "disabled (set sync.include_dms with a user token)")
+			if diag, ok := workspace["slack_api"].(map[string]any); ok {
+				renderDoctorDMAccess(w, "DM access ("+shortValue(workspace["workspace_id"])+")", diag)
+			}
 		}
 	}
 	if desktop, ok := report["desktop_source"].(map[string]any); ok {
@@ -114,6 +116,30 @@ func renderDoctorBlock(w *strings.Builder, value any) bool {
 	}
 
 	return true
+}
+
+func renderDoctorDMAccess(w *strings.Builder, label string, diag map[string]any) {
+	if !truthy(diag["dms_included"]) {
+		writeCheck(w, label, false, "disabled (set sync.include_dms with a user token)")
+		return
+	}
+	// Empty scopes normalize to "-" for display; test the underlying value first.
+	missing, _ := diag["dms_missing_scope"].(string)
+	details := []string{}
+	if missing != "" {
+		details = append(details, "missing scope: "+missing)
+	}
+	switch diag["dm_probe_error"] {
+	case "catalog_failed":
+		details = append(details, "DM catalog check failed; retry doctor to check access")
+	case "history_failed":
+		details = append(details, "DM history check failed; retry doctor to check access")
+	}
+	if len(details) == 0 {
+		writeCheck(w, label, true, "enabled for user token; history coverage not verified")
+	} else {
+		writeCheck(w, label, false, strings.Join(details, "; "))
+	}
 }
 
 func renderStatusBlock(w *strings.Builder, value any) bool {

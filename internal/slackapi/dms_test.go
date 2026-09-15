@@ -77,11 +77,13 @@ func TestFetchDMsHandlesPagination(t *testing.T) {
 
 func TestFetchDMsRejectsRepeatedCursor(t *testing.T) {
 	var calls int
+	var cursors []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/conversations.list", r.URL.Path)
 		calls++
+		cursors = append(cursors, mustDMFormValues(r).Get("cursor"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"channels":[{"id":"D1","is_im":true,"user":"U1"}],"response_metadata":{"next_cursor":"stuck"}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"channels":[{"id":"D1","is_im":true,"user":"U1"}],"response_metadata":{"next_cursor":"cursor-private-canary"}}`))
 	}))
 	defer server.Close()
 
@@ -90,9 +92,11 @@ func TestFetchDMsRejectsRepeatedCursor(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := client.fetchDMs(ctx, "T123", nil)
-	require.ErrorContains(t, err, `conversations.list repeated cursor "stuck"`)
+	dms, err := client.fetchDMs(ctx, "T123", nil)
+	require.Nil(t, dms)
+	require.EqualError(t, err, "conversations.list repeated cursor")
 	require.Equal(t, 2, calls)
+	require.Equal(t, []string{"", "cursor-private-canary"}, cursors)
 }
 
 func TestFetchDMsRetriesOnRateLimit(t *testing.T) {

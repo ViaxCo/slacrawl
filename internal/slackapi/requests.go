@@ -171,7 +171,7 @@ func (c *Client) getConversationHistory(ctx context.Context, token string, param
 		}
 		messages, err := rawConversationMessages(resp.Messages)
 		if err != nil {
-			return nil, err
+			return nil, &nativeDiagnosticError{method: "conversations.history", phase: "message decode", cause: err}
 		}
 		return &conversationHistoryPage{
 			Messages:   messages,
@@ -194,7 +194,7 @@ func (c *Client) getConversationReplies(ctx context.Context, params *slack.GetCo
 		}
 		messages, err := rawConversationMessages(resp.Messages)
 		if err != nil {
-			return nil, err
+			return nil, &nativeDiagnosticError{method: "conversations.replies", phase: "message decode", cause: err}
 		}
 		return &conversationRepliesPage{
 			Messages:   messages,
@@ -218,7 +218,7 @@ func nativePageSuccess(method string, response slack.SlackResponse, collectionPr
 
 func nativeResponseSuccess(method string, response slack.SlackResponse) error {
 	if err := response.Err(); err != nil {
-		return err
+		return &nativeDiagnosticError{method: method, phase: "API response", safeCode: safeNativeErrorCode(response.Error), cause: err}
 	}
 	// Slack's Err permits blank-error responses from non-JSON methods. Native
 	// API responses must affirm success before callers can use their payloads.
@@ -228,35 +228,66 @@ func nativeResponseSuccess(method string, response slack.SlackResponse) error {
 	return nil
 }
 
+func safeNativeErrorCode(code string) string {
+	switch code {
+	case "missing_scope", "not_in_channel", "channel_not_found", "invalid_auth", "not_authed",
+		"account_inactive", "token_expired", "token_revoked", "is_archived", "thread_not_found":
+		return code
+	}
+	return ""
+}
+
+// Causes can contain private response text or URLs. Render only exact selected
+// codes or caller-owned labels; explicit cause inspection exposes the original.
+type nativeDiagnosticError struct {
+	method   string
+	phase    string
+	status   int
+	cause    error
+	safeCode string
+}
+
+func (e *nativeDiagnosticError) Error() string {
+	if e.safeCode != "" {
+		return e.safeCode
+	}
+	if e.status != 0 {
+		return fmt.Sprintf("slack %s %s failed (HTTP %d)", e.method, e.phase, e.status)
+	}
+	return fmt.Sprintf("slack %s %s failed", e.method, e.phase)
+}
+
+func (e *nativeDiagnosticError) Unwrap() error { return e.cause }
+
 func (c *Client) postSlackForm(ctx context.Context, token string, method string, values url.Values, target any) (http.Header, error) {
 	values.Set("token", token)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL+method, strings.NewReader(values.Encode()))
 	if err != nil {
-		return nil, err
+		return nil, &nativeDiagnosticError{method: method, phase: "request construction", cause: err}
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &nativeDiagnosticError{method: method, phase: "request execution", cause: err}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusTooManyRequests && resp.Header.Get("Retry-After") != "" {
 		seconds, err := strconv.ParseInt(resp.Header.Get("Retry-After"), 10, 64)
 		if err != nil {
-			return nil, err
+			return nil, &nativeDiagnosticError{method: method, phase: "rate-limit header", cause: err}
 		}
 		return nil, &slack.RateLimitedError{RetryAfter: time.Duration(seconds) * time.Second}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, slack.StatusCodeError{Code: resp.StatusCode, Status: resp.Status}
+		return nil, &nativeDiagnosticError{method: method, phase: "HTTP status", status: resp.StatusCode, cause: slack.StatusCodeError{Code: resp.StatusCode, Status: resp.Status}}
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, &nativeDiagnosticError{method: method, phase: "response body", cause: err}
 	}
 	if err := json.Unmarshal(body, target); err != nil {
-		return nil, fmt.Errorf("slack %s response: %w", method, err)
+		return nil, &nativeDiagnosticError{method: method, phase: "response decode", cause: err}
 	}
 	return resp.Header, nil
 }
@@ -378,7 +409,7 @@ func (c *Client) getUsers(ctx context.Context, token string) ([]slack.User, erro
 			return users, nil
 		}
 		if seen[page.nextCursor] {
-			return nil, fmt.Errorf("users.list repeated cursor %q", page.nextCursor)
+			return nil, errors.New("users.list repeated cursor")
 		}
 		seen[page.nextCursor] = true
 		cursor = page.nextCursor

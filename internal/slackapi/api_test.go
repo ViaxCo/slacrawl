@@ -1908,11 +1908,13 @@ func TestNewUsesDefaultHTTPClient(t *testing.T) {
 
 func TestFetchChannelsRejectsRepeatedCursor(t *testing.T) {
 	var calls int
+	var cursors []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/conversations.list", r.URL.Path)
 		calls++
+		cursors = append(cursors, mustFormValues(r).Get("cursor"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"channels":[{"id":"C123","name":"general","is_channel":true}],"response_metadata":{"next_cursor":"stuck"}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"channels":[{"id":"C123","name":"general","is_channel":true}],"response_metadata":{"next_cursor":"cursor-private-canary"}}`))
 	}))
 	defer server.Close()
 
@@ -1921,18 +1923,22 @@ func TestFetchChannelsRejectsRepeatedCursor(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := client.fetchChannels(ctx, "T123")
-	require.ErrorContains(t, err, `conversations.list repeated cursor "stuck"`)
+	channels, err := client.fetchChannels(ctx, "T123")
+	require.Nil(t, channels)
+	require.EqualError(t, err, "conversations.list repeated cursor")
 	require.Equal(t, 2, calls)
+	require.Equal(t, []string{"", "cursor-private-canary"}, cursors)
 }
 
 func TestSyncChannelHistoryRejectsRepeatedCursor(t *testing.T) {
 	var calls int
+	var cursors []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/conversations.history", r.URL.Path)
 		calls++
+		cursors = append(cursors, mustFormValues(r).Get("cursor"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"messages":[{"type":"message","user":"U123","text":"hi","ts":"1710000000.000100"}],"response_metadata":{"next_cursor":"stuck"}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"messages":[{"type":"message","user":"U123","text":"hi","ts":"1710000000.000100"}],"response_metadata":{"next_cursor":"cursor-private-canary"}}`))
 	}))
 	defer server.Close()
 
@@ -1958,17 +1964,22 @@ func TestSyncChannelHistoryRejectsRepeatedCursor(t *testing.T) {
 		false,
 		channelSyncSource{token: "xoxb-test", sourceName: SourceBot, sourceRank: 2},
 	)
-	require.ErrorContains(t, err, `conversations.history repeated cursor "stuck"`)
+	require.EqualError(t, err, "conversations.history repeated cursor")
 	require.Equal(t, 2, calls)
+	require.Equal(t, []string{"", "cursor-private-canary"}, cursors)
+	require.Len(t, repairKeyRows(t, st, "select * from messages"), 1, "valid pages remain stored")
+	assertAdmissionCanariesAbsent(t, st, err.Error(), "cursor-private-canary")
 }
 
 func TestSyncThreadRejectsRepeatedCursor(t *testing.T) {
 	var calls int
+	var cursors []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/conversations.replies", r.URL.Path)
 		calls++
+		cursors = append(cursors, mustFormValues(r).Get("cursor"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"has_more":true,"messages":[{"type":"message","user":"U123","text":"reply","ts":"1710000001.000200","thread_ts":"1710000000.000100"}],"response_metadata":{"next_cursor":"stuck"}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"has_more":true,"messages":[{"type":"message","user":"U123","text":"reply","ts":"1710000001.000200","thread_ts":"1710000000.000100"}],"response_metadata":{"next_cursor":"cursor-private-canary"}}`))
 	}))
 	defer server.Close()
 
@@ -1984,17 +1995,22 @@ func TestSyncThreadRejectsRepeatedCursor(t *testing.T) {
 	client := NewWithOptions(config.Tokens{Bot: "xoxb-test", User: "xoxp-test"}, server.URL+"/", server.Client())
 	client.sleep = func(context.Context, time.Duration) error { return nil }
 	_, err := client.syncThread(ctx, st, "T123", "C123", "1710000000.000100", false, now, nil, nil)
-	require.ErrorContains(t, err, `conversations.replies repeated cursor "stuck"`)
+	require.EqualError(t, err, "conversations.replies repeated cursor")
 	require.Equal(t, 2, calls)
+	require.Equal(t, []string{"", "cursor-private-canary"}, cursors)
+	require.Len(t, repairKeyRows(t, st, "select * from messages"), 1, "valid pages remain stored")
+	assertAdmissionCanariesAbsent(t, st, err.Error(), "cursor-private-canary")
 }
 
 func TestGetUsersRejectsRepeatedCursor(t *testing.T) {
 	var calls int
+	var cursors []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/users.list", r.URL.Path)
 		calls++
+		cursors = append(cursors, mustFormValues(r).Get("cursor"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"members":[{"id":"U123","name":"alice"}],"response_metadata":{"next_cursor":"stuck"}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"members":[{"id":"U123","name":"alice"}],"response_metadata":{"next_cursor":"cursor-private-canary"}}`))
 	}))
 	defer server.Close()
 
@@ -2003,9 +2019,11 @@ func TestGetUsersRejectsRepeatedCursor(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := client.getUsers(ctx, client.tokens.Bot)
-	require.ErrorContains(t, err, `users.list repeated cursor "stuck"`)
+	users, err := client.getUsers(ctx, client.tokens.Bot)
+	require.Nil(t, users)
+	require.EqualError(t, err, "users.list repeated cursor")
 	require.Equal(t, 2, calls)
+	require.Equal(t, []string{"", "cursor-private-canary"}, cursors)
 	t.Logf("getUsers stuck next_cursor: %v", err)
 }
 
@@ -2056,7 +2074,7 @@ func TestGetUsersRejectsCursorCycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	users, err := client.getUsers(ctx, client.tokens.Bot)
-	require.ErrorContains(t, err, `users.list repeated cursor "page-a"`)
+	require.EqualError(t, err, "users.list repeated cursor")
 	require.Nil(t, users)
 	require.Equal(t, []string{"", "page-a", "page-b"}, cursors)
 }

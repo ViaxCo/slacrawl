@@ -33,7 +33,7 @@ func TestDoctorCoverageReasonFallback(t *testing.T) {
 	}{
 		{"absent-reason", "partial", "", "partial"},
 		{"unknown-reason", "partial", "unknown-reason-canary", "partial"},
-		{"full-with-stale-reason", "full", "retained_api_thread_work", "full historical replies"},
+		{"full-with-stale-reason", "full", "retained_api_thread_work", "user auth available for replies"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			diag := map[string]any{"thread_coverage": tc.coverage, "user_auth_available": true}
