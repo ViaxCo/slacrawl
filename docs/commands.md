@@ -41,6 +41,15 @@ Override the config with the global `--config <path>` flag. Database, cache, and
 
 `sync` is incremental by default. `--full` deliberately removes the local history cursor; `--latest-only` skips channels that do not already have local history.
 
+`sync --source api` and its `bot` alias use the configured bot, otherwise the
+user token, as primary. An invalid bot never triggers user fallback. User-only
+sync can read permitted channels without joining them; Tail and periodic Tail
+repair still require the bot, with an app token for Socket Mode.
+
+Doctor reports global and named-workspace thread capabilities separately and
+combines recent bot/user API channel skips. It does not rewrite stored sync
+status. See [Doctor coverage ownership](configuration.md#doctor-coverage-ownership).
+
 `sync --since` accepts a finite Slack timestamp or RFC3339 time. Invalid numeric
 values such as `NaN` and infinity fail before opening the archive.
 

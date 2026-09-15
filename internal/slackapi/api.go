@@ -132,29 +132,27 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 		UserConfigured: c.tokens.User != "",
 		ThreadCoverage: "partial",
 	}
-	if c.bot == nil {
-		return diag, nil
+	if c.bot != nil {
+		resp, err := c.authTest(ctx, c.bot)
+		if err != nil {
+			return diag, err
+		}
+		diag.BotAuthTeamID = resp.TeamID
+		diag.BotAuthTeam = resp.Team
+		diag.AppTailAvailable = c.tokens.App != ""
 	}
-
-	resp, err := c.authTest(ctx, c.bot)
-	if err != nil {
-		return diag, err
-	}
-	diag.BotAuthTeamID = resp.TeamID
-	diag.BotAuthTeam = resp.Team
-	diag.AppTailAvailable = c.tokens.App != ""
 
 	if c.user != nil {
 		userAuth, err := c.authTest(ctx, c.user)
 		if err == nil {
-			_, err = authenticatedWorkspaceID(userAuth, resp.TeamID)
+			_, err = authenticatedWorkspaceID(userAuth, diag.BotAuthTeamID)
 		}
 		if err == nil {
 			diag.UserAuthAvailable = true
 			diag.ThreadCoverage = "full"
 			if c.dmPolicy.Enabled(c.tokens.User != "") {
 				diag.DMsIncluded = true
-				diag.DMsMissingScope = c.dmMissingScope(ctx, resp.TeamID)
+				diag.DMsMissingScope = c.dmMissingScope(ctx, userAuth.TeamID)
 			}
 		} else {
 			diag.UserAuthError = authErrorReason(err)
@@ -164,11 +162,21 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 }
 
 func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) error {
-	if c.bot == nil {
-		return errors.New("SLACK_BOT_TOKEN is required for api sync")
+	// Selection is invocation-local: Tail and its repair path still own the bot.
+	source := channelSyncSource{
+		historyClient: c.bot, token: c.tokens.Bot, sourceName: SourceBot,
+		sourceRank: 2, allowJoin: syncAutoJoin(opts),
+	}
+	if source.historyClient == nil {
+		source = channelSyncSource{
+			historyClient: c.user, token: c.tokens.User, sourceName: SourceUser, sourceRank: 1,
+		}
+	}
+	if source.historyClient == nil {
+		return errors.New("SLACK_BOT_TOKEN or SLACK_USER_TOKEN is required for api sync")
 	}
 
-	auth, err := c.authTest(ctx, c.bot)
+	auth, err := c.authTest(ctx, source.historyClient)
 	if err != nil {
 		return err
 	}
@@ -176,9 +184,12 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	if err != nil {
 		return err
 	}
-	userRepliesAvailable, err := c.userAuthAvailable(ctx, workspaceID)
-	if err != nil {
-		return err
+	userRepliesAvailable := source.sourceName == SourceUser
+	if !userRepliesAvailable {
+		userRepliesAvailable, err = c.userAuthAvailable(ctx, workspaceID)
+		if err != nil {
+			return err
+		}
 	}
 
 	now := c.now()
@@ -192,8 +203,9 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		return err
 	}
 	threadRepliesSkipped := newThreadSkipTracker()
+	source.threadSkip = threadRepliesSkipped
 
-	channels, err := c.fetchChannels(ctx, workspaceID)
+	channels, err := c.fetchChannelsWithClient(ctx, source.historyClient, workspaceID)
 	if err != nil {
 		return err
 	}
@@ -214,7 +226,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		}
 		selectedChannels = append(selectedChannels, channel)
 	}
-	if err := c.syncChannels(ctx, st, workspaceID, selectedChannels, opts, now, userRepliesAvailable, threadRepliesSkipped); err != nil {
+	if err := c.syncChannelsWithSource(ctx, st, workspaceID, selectedChannels, opts, now, userRepliesAvailable, source); err != nil {
 		return err
 	}
 
@@ -223,7 +235,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		userByID map[string]slack.User
 	)
 	if c.dmPolicy.Enabled(c.tokens.User != "") && userRepliesAvailable && c.user != nil {
-		users, err = c.getUsers(ctx, c.bot)
+		users, err = c.getUsers(ctx, source.historyClient)
 		if err != nil {
 			return err
 		}
@@ -270,7 +282,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	}
 
 	if users == nil {
-		users, err = c.getUsers(ctx, c.bot)
+		users, err = c.getUsers(ctx, source.historyClient)
 		if err != nil {
 			return err
 		}
@@ -300,17 +312,21 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 	if err := st.SetSyncState(ctx, "doctor", "threads", "coverage", threadCoverage); err != nil {
 		return err
 	}
-	return st.SetSyncState(ctx, SourceBot, "workspace", workspaceID, now.Format(time.RFC3339))
+	return st.SetSyncState(ctx, source.sourceName, "workspace", workspaceID, now.Format(time.RFC3339))
 }
 
 func (c *Client) fetchChannels(ctx context.Context, workspaceID string) ([]slack.Channel, error) {
+	return c.fetchChannelsWithClient(ctx, c.bot, workspaceID)
+}
+
+func (c *Client) fetchChannelsWithClient(ctx context.Context, client *slack.Client, workspaceID string) ([]slack.Channel, error) {
 	var (
 		cursor   string
 		channels []slack.Channel
 		seen     = map[string]bool{}
 	)
 	for {
-		page, nextCursor, err := c.getConversations(ctx, &slack.GetConversationsParameters{
+		page, nextCursor, err := c.getConversations(ctx, client, &slack.GetConversationsParameters{
 			Cursor:          cursor,
 			ExcludeArchived: false,
 			Limit:           200,
