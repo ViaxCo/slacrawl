@@ -212,12 +212,6 @@ func TestSyncRequiresWorkspaceID(t *testing.T) {
 	require.ErrorContains(t, err, "workspace ID is required")
 }
 
-func TestFilterChannelsByIDAndName(t *testing.T) {
-	channels := []ChannelRecord{{ID: "C1", Name: "alpha"}, {ID: "C2", Name: "beta"}}
-	require.Equal(t, []ChannelRecord{channels[1]}, filterChannels(channels, []string{"#alpha"}))
-	require.Equal(t, []ChannelRecord{channels[0]}, filterChannels(channels, []string{"C2"}))
-}
-
 func TestSyncExplicitChannelAvoidsGlobalEnumeration(t *testing.T) {
 	server := newTargetedGatewayServer(t)
 	defer server.Close()

@@ -9,14 +9,15 @@ import (
 )
 
 type ChannelRecord struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Kind       string `json:"kind"`
-	Topic      string `json:"topic"`
-	Purpose    string `json:"purpose"`
-	Permalink  string `json:"permalink"`
-	IsPrivate  bool   `json:"is_private"`
-	IsArchived bool   `json:"is_archived"`
+	native     *referenceChannel // Ephemeral admission facts; never change archived payload JSON.
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Kind       string            `json:"kind"`
+	Topic      string            `json:"topic"`
+	Purpose    string            `json:"purpose"`
+	Permalink  string            `json:"permalink"`
+	IsPrivate  bool              `json:"is_private"`
+	IsArchived bool              `json:"is_archived"`
 }
 
 type UserRecord struct {

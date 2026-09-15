@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/openclaw/slacrawl/internal/admission"
 )
 
 type referenceResponse struct {
@@ -23,11 +25,13 @@ type referenceResponseMetadata struct {
 }
 
 type referenceChannel struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	IsPrivate  bool   `json:"is_private"`
-	IsArchived bool   `json:"is_archived"`
-	Topic      struct {
+	admission.NativeFlags
+	ContextTeamID string            `json:"context_team_id"`
+	Latest        *referenceMessage `json:"latest"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	IsArchived    bool              `json:"is_archived"`
+	Topic         struct {
 		Value string `json:"value"`
 	} `json:"topic"`
 	Purpose struct {
@@ -50,15 +54,20 @@ type referenceUser struct {
 }
 
 type referenceMessage struct {
-	TS          string `json:"ts"`
-	ThreadTS    string `json:"thread_ts"`
-	User        string `json:"user"`
-	BotID       string `json:"bot_id"`
-	Username    string `json:"username"`
-	Text        string `json:"text"`
-	ReplyCount  int    `json:"reply_count"`
-	LatestReply string `json:"latest_reply"`
-	Reactions   []struct {
+	Channel         string            `json:"channel"`
+	ContextTeamID   string            `json:"context_team_id"`
+	SubMessage      *referenceMessage `json:"message"`
+	PreviousMessage *referenceMessage `json:"previous_message"`
+	Root            *referenceMessage `json:"root"`
+	TS              string            `json:"ts"`
+	ThreadTS        string            `json:"thread_ts"`
+	User            string            `json:"user"`
+	BotID           string            `json:"bot_id"`
+	Username        string            `json:"username"`
+	Text            string            `json:"text"`
+	ReplyCount      int               `json:"reply_count"`
+	LatestReply     string            `json:"latest_reply"`
+	Reactions       []struct {
 		Name  string `json:"name"`
 		Count int    `json:"count"`
 	} `json:"reactions"`
@@ -69,7 +78,7 @@ type referenceMessage struct {
 	} `json:"files"`
 }
 
-func (c *Client) referenceChannels(ctx context.Context, tools toolset) ([]ChannelRecord, error) {
+func (c *Client) referenceChannels(ctx context.Context, tools toolset, requireSuccess bool) ([]ChannelRecord, error) {
 	return collectPages(c.maxPages, func(cursor string) (page[ChannelRecord], error) {
 		raw, err := c.mcp.CallToolText(ctx, tools.searchChannels, map[string]any{
 			"cursor": cursor,
@@ -82,6 +91,9 @@ func (c *Client) referenceChannels(ctx context.Context, tools toolset) ([]Channe
 		if err := decodeReferenceResponse(raw, &response); err != nil {
 			return page[ChannelRecord]{}, fmt.Errorf("decode reference Slack channels: %w", err)
 		}
+		if requireSuccess && !response.OK {
+			return page[ChannelRecord]{}, errors.New("native MCP catalog did not report successful Slack response")
+		}
 		channels := make([]ChannelRecord, 0, len(response.Channels))
 		for _, channel := range response.Channels {
 			kind := "public_channel"
@@ -89,6 +101,7 @@ func (c *Client) referenceChannels(ctx context.Context, tools toolset) ([]Channe
 				kind = "private_channel"
 			}
 			channels = append(channels, ChannelRecord{
+				native:     &channel,
 				ID:         channel.ID,
 				Name:       channel.Name,
 				Kind:       kind,
@@ -131,7 +144,7 @@ func (c *Client) referenceUsers(ctx context.Context, tools toolset) ([]UserRecor
 	})
 }
 
-func (c *Client) referenceChannelMessages(ctx context.Context, tools toolset, channelID, oldest string) (channelPage, error) {
+func (c *Client) referenceChannelMessages(ctx context.Context, tools toolset, workspaceID, channelID, oldest string) (channelPage, error) {
 	raw, err := c.mcp.CallToolText(ctx, tools.readChannel, map[string]any{
 		"channel_id": channelID,
 		"limit":      c.pageSize,
@@ -143,6 +156,9 @@ func (c *Client) referenceChannelMessages(ctx context.Context, tools toolset, ch
 	if err := decodeReferenceResponse(raw, &response); err != nil {
 		return channelPage{}, fmt.Errorf("decode reference Slack channel history: %w", err)
 	}
+	if err := validateReferenceMessages(response.Messages, workspaceID, channelID, ""); err != nil {
+		return channelPage{}, err
+	}
 	messages := make([]MessageRecord, 0, len(response.Messages))
 	for _, message := range response.Messages {
 		if !timestampAtLeast(message.TS, oldest) {
@@ -153,7 +169,7 @@ func (c *Client) referenceChannelMessages(ctx context.Context, tools toolset, ch
 	return channelPage{ChannelID: channelID, Messages: messages}, nil
 }
 
-func (c *Client) referenceThreadMessages(ctx context.Context, tools toolset, channelID, threadTS string) (threadPage, error) {
+func (c *Client) referenceThreadMessages(ctx context.Context, tools toolset, workspaceID, channelID, threadTS string) (threadPage, error) {
 	raw, err := c.mcp.CallToolText(ctx, tools.readThread, map[string]any{
 		"channel_id": channelID,
 		"thread_ts":  threadTS,
@@ -165,10 +181,16 @@ func (c *Client) referenceThreadMessages(ctx context.Context, tools toolset, cha
 	if err := decodeReferenceResponse(raw, &response); err != nil {
 		return threadPage{}, fmt.Errorf("decode reference Slack thread: %w", err)
 	}
+	if err := validateReferenceMessages(response.Messages, workspaceID, channelID, threadTS); err != nil {
+		return threadPage{}, err
+	}
 	result := threadPage{}
 	for i, message := range response.Messages {
 		record := referenceMessageRecord(channelID, message)
 		if message.TS == threadTS || i == 0 && result.Parent == nil {
+			if message.TS != threadTS {
+				return threadPage{}, errors.New("MCP thread parent does not match requested conversation and timestamp")
+			}
 			record.ThreadTS = ""
 			copy := record
 			result.Parent = &copy
@@ -176,6 +198,9 @@ func (c *Client) referenceThreadMessages(ctx context.Context, tools toolset, cha
 		}
 		record.ThreadTS = threadTS
 		result.Replies = append(result.Replies, record)
+	}
+	if err := validateThreadPage(result, channelID, threadTS); err != nil {
+		return threadPage{}, err
 	}
 	return result, nil
 }

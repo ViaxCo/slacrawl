@@ -15,6 +15,7 @@ import (
 
 	"github.com/slack-go/slack"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/search"
 	"github.com/openclaw/slacrawl/internal/store"
@@ -29,6 +30,7 @@ const (
 var channelIDRE = regexp.MustCompile(`^[CDG][A-Z0-9]+$`)
 
 type Options struct {
+	DMPolicy        admission.DMPolicy
 	WorkspaceID     string
 	Channels        []string
 	ExcludeChannels []string
@@ -41,11 +43,13 @@ type Options struct {
 }
 
 type Summary struct {
-	WorkspaceID string `json:"workspace_id,omitempty"`
-	Channels    int    `json:"channels"`
-	Users       int    `json:"users"`
-	Messages    int    `json:"messages"`
-	Replies     int    `json:"replies"`
+	NoEligibleConversations bool   `json:"no_eligible_conversations,omitempty"`
+	OmittedDM               int    `json:"omitted_dm,omitempty"`
+	WorkspaceID             string `json:"workspace_id,omitempty"`
+	Channels                int    `json:"channels"`
+	Users                   int    `json:"users"`
+	Messages                int    `json:"messages"`
+	Replies                 int    `json:"replies"`
 }
 
 func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
@@ -62,21 +66,30 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	if opts.DMPolicy == admission.Exclude && tools.provider != providerReference {
+		return Summary{}, errors.New("include_dms=false requires native conversation type evidence; this text MCP adapter cannot verify it; use --source api or a qualified reference MCP server")
+	}
+	selection, err := resolveAdmissionChannels(ctx, client, tools, opts)
+	if err != nil {
+		return Summary{}, err
+	}
+	channels, omittedDM, err := admitMCPChannels(selection, workspaceID, opts.DMPolicy)
+	if err != nil {
+		return Summary{}, err
+	}
+	summary := Summary{WorkspaceID: workspaceID, OmittedDM: omittedDM}
+	if opts.DMPolicy == admission.Exclude && len(channels) == 0 {
+		summary.NoEligibleConversations = true
+		return summary, nil
+	}
 	now := time.Now().UTC()
 	if err := st.EnsureWorkspace(ctx, store.Workspace{
-		ID:        workspaceID,
-		Name:      workspaceID,
-		RawJSON:   store.MarshalRaw(map[string]any{"source": SourceName}),
-		UpdatedAt: now,
+		ID: workspaceID, Name: workspaceID,
+		RawJSON: store.MarshalRaw(map[string]any{"source": SourceName}), UpdatedAt: now,
 	}); err != nil {
 		return Summary{}, err
 	}
 
-	channels, err := resolveChannels(ctx, client, tools, opts.Channels)
-	if err != nil {
-		return Summary{}, err
-	}
-	channels = filterChannels(channels, opts.ExcludeChannels)
 	userCount := 0
 	if len(opts.Channels) == 0 {
 		users, err := client.users(ctx, tools)
@@ -96,13 +109,13 @@ func Sync(ctx context.Context, st *store.Store, opts Options) (Summary, error) {
 		return Summary{}, err
 	}
 	restoreRequested := opts.Since != "" || opts.Full
-	summary := Summary{WorkspaceID: workspaceID, Users: userCount}
+	summary.Users = userCount
 	for _, channel := range selected {
 		enforceRetention, err := syncEnforcesRetention(ctx, st, workspaceID, channel.ID, oldestByChannel[channel.ID], restoreRequested)
 		if err != nil {
 			return summary, err
 		}
-		channelResult, err := client.channelMessages(ctx, tools, channel.ID, oldestByChannel[channel.ID])
+		channelResult, err := client.channelMessages(ctx, tools, workspaceID, channel.ID, oldestByChannel[channel.ID])
 		if err != nil {
 			return summary, fmt.Errorf("read MCP channel: %w", err)
 		}
@@ -193,7 +206,7 @@ func syncEnforcesRetention(ctx context.Context, st *store.Store, workspaceID, ch
 }
 
 func syncThread(ctx context.Context, st *store.Store, client *Client, tools toolset, workspaceID, channelID, threadTS string, enforceRetention bool, now time.Time) (int, error) {
-	thread, err := client.threadMessages(ctx, tools, channelID, threadTS)
+	thread, err := client.threadMessages(ctx, tools, workspaceID, channelID, threadTS)
 	if err != nil {
 		return 0, fmt.Errorf("read MCP thread: %w", err)
 	}
@@ -218,67 +231,6 @@ func syncThread(ctx context.Context, st *store.Store, client *Client, tools tool
 		return 0, persistenceError(err)
 	}
 	return result.MessagesWritten, nil
-}
-
-func resolveChannels(ctx context.Context, client *Client, tools toolset, selectors []string) ([]ChannelRecord, error) {
-	if len(selectors) == 0 {
-		return client.channels(ctx, tools, "")
-	}
-	seen := map[string]struct{}{}
-	var channels []ChannelRecord
-	for _, selector := range selectors {
-		selector = strings.TrimSpace(strings.TrimPrefix(selector, "#"))
-		if selector == "" {
-			continue
-		}
-		if channelIDRE.MatchString(selector) {
-			if _, ok := seen[selector]; !ok {
-				seen[selector] = struct{}{}
-				channels = append(channels, ChannelRecord{ID: selector})
-			}
-			continue
-		}
-		matches, err := client.channels(ctx, tools, selector)
-		if err != nil {
-			return nil, err
-		}
-		found := false
-		for _, channel := range matches {
-			if !strings.EqualFold(channel.Name, selector) && !strings.EqualFold(channel.ID, selector) {
-				continue
-			}
-			found = true
-			if _, ok := seen[channel.ID]; !ok {
-				seen[channel.ID] = struct{}{}
-				channels = append(channels, channel)
-			}
-		}
-		if !found {
-			return nil, fmt.Errorf("MCP channel %q not found", selector)
-		}
-	}
-	return channels, nil
-}
-
-func filterChannels(channels []ChannelRecord, excluded []string) []ChannelRecord {
-	if len(excluded) == 0 {
-		return channels
-	}
-	set := make(map[string]struct{}, len(excluded))
-	for _, value := range excluded {
-		set[strings.ToLower(strings.TrimPrefix(strings.TrimSpace(value), "#"))] = struct{}{}
-	}
-	filtered := make([]ChannelRecord, 0, len(channels))
-	for _, channel := range channels {
-		if _, ok := set[strings.ToLower(channel.ID)]; ok {
-			continue
-		}
-		if _, ok := set[strings.ToLower(channel.Name)]; ok {
-			continue
-		}
-		filtered = append(filtered, channel)
-	}
-	return filtered
 }
 
 func syncPlan(ctx context.Context, st *store.Store, workspaceID string, channels []ChannelRecord, opts Options) (map[string]string, []ChannelRecord, error) {
