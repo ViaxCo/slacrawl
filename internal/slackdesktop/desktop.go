@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/store"
 )
@@ -46,6 +47,12 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 		// Remove them before any derived state reaches the archive.
 		extracted.Drafts = nil
 	}
+	prepared, err := prepareDesktop(extracted, opts)
+	if err != nil {
+		return Source{}, err
+	}
+	extracted = prepared.data
+	source.Admission = &prepared.summary
 	source.Summary = extracted.RootState.Summary
 	source.Local = localSummary(extracted)
 	source.IndexedDB = extracted.IndexedDB
@@ -54,8 +61,6 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 	filter := newIngestFilter(opts)
 	filter.resolveKnownChannelIDs(desktopChannelIDs(extracted))
 	source.Summary.AppTeamsKeys = filter.workspaceIDs(source.Summary.AppTeamsKeys)
-	channelNames := channelNamesByWorkspaceID(extracted.ReduxStates)
-	workspaceCandidates := channelWorkspaceCandidates(extracted.ReduxStates)
 	statusByWorkspaceUser := map[string][]CustomStatus{}
 	for _, status := range extracted.Statuses {
 		statusByWorkspaceUser[status.WorkspaceID+":"+status.UserID] = append(statusByWorkspaceUser[status.WorkspaceID+":"+status.UserID], status.Statuses...)
@@ -95,33 +100,20 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 	}
 
 	channelHints := map[string]store.Channel{}
-	for workspaceID, channelIDs := range extracted.Recent {
-		for _, channelID := range channelIDs {
-			resolvedWorkspaceID, ok := resolveChannelWorkspace(channelID, workspaceID, workspaceCandidates)
-			if !ok {
-				continue
-			}
-			if !filter.allowChannelNames(resolvedWorkspaceID, channelID, channelNames.get(resolvedWorkspaceID, channelID)) {
-				continue
-			}
-			mergeChannelHint(channelHints, store.Channel{
-				ID:          channelID,
-				WorkspaceID: resolvedWorkspaceID,
-				Name:        channelID,
-				Kind:        "desktop_recent",
-				RawJSON:     store.MarshalRaw(map[string]any{"workspace_id": resolvedWorkspaceID, "persist_workspace_id": workspaceID, "channel_id": channelID, "source": "recentlyJoinedChannels"}),
-				UpdatedAt:   now,
-			})
-		}
+	for _, record := range prepared.recent {
+		channelID, workspaceID := record.value.channelID, record.value.persistWorkspaceID
+		resolvedWorkspaceID := record.workspaceID
+		mergeChannelHint(channelHints, store.Channel{
+			ID:          channelID,
+			WorkspaceID: resolvedWorkspaceID,
+			Name:        channelID,
+			Kind:        "desktop_recent",
+			RawJSON:     store.MarshalRaw(map[string]any{"workspace_id": resolvedWorkspaceID, "persist_workspace_id": workspaceID, "channel_id": channelID, "source": "recentlyJoinedChannels"}),
+			UpdatedAt:   now,
+		})
 	}
-	for _, marker := range extracted.ReadMarkers {
-		workspaceID, ok := resolveChannelWorkspace(marker.ChannelID, marker.WorkspaceID, workspaceCandidates)
-		if !ok {
-			continue
-		}
-		if !filter.allowChannelNames(workspaceID, marker.ChannelID, channelNames.get(workspaceID, marker.ChannelID)) {
-			continue
-		}
+	for _, record := range prepared.markers {
+		marker, workspaceID := record.value, record.workspaceID
 		mergeChannelHint(channelHints, store.Channel{
 			ID:          marker.ChannelID,
 			WorkspaceID: workspaceID,
@@ -138,33 +130,9 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 		ts          string
 	}
 	legacyDraftDeletions := make([]legacyDraftDeletion, 0)
-	for _, draft := range extracted.Drafts {
-		if len(draft.Destinations) == 0 {
-			continue
-		}
+	for _, record := range prepared.drafts {
+		draft, workspaceID := record.value, record.workspaceID
 		channelID := draft.Destinations[0].ChannelID
-		workspaceID := draft.WorkspaceID
-		if workspaceID == "" {
-			workspaceID = workspaceForDraft(extracted.LocalConfig.Teams, channelID, draft)
-		}
-		if workspaceID == "" {
-			if resolvedWorkspaceID, ok := resolveChannelWorkspace(channelID, "", workspaceCandidates); ok {
-				workspaceID = resolvedWorkspaceID
-			} else {
-				if filter.workspaceID != "" {
-					continue
-				}
-				workspaceID = firstWorkspaceID(extracted.LocalConfig.Teams)
-			}
-		}
-		resolvedWorkspaceID, ok := resolveChannelWorkspace(channelID, workspaceID, workspaceCandidates)
-		if !ok {
-			continue
-		}
-		workspaceID = resolvedWorkspaceID
-		if !filter.allowChannelNames(workspaceID, channelID, channelNames.get(workspaceID, channelID)) {
-			continue
-		}
 
 		mergeChannelHint(channelHints, store.Channel{
 			ID:          channelID,
@@ -220,7 +188,7 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 			return Source{}, err
 		}
 	}
-	if err := ingestReduxStates(ctx, st, extracted.ReduxStates, now, filter); err != nil {
+	if err := ingestPreparedReduxStates(ctx, st, prepared.redux, now, filter); err != nil {
 		return Source{}, err
 	}
 
@@ -254,9 +222,12 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 	if err := st.SetSyncState(ctx, sourceName, "local_storage", "custom_status_count", intString(source.Local.CustomStatusCount)); err != nil {
 		return Source{}, err
 	}
-	if err := st.SetSyncState(ctx, sourceName, "local_storage", "expandable_count", intString(source.Local.ExpandableCount)); err != nil {
-		return Source{}, err
+	if opts.DMPolicy != admission.Exclude {
+		if err := st.SetSyncState(ctx, sourceName, "local_storage", "expandable_count", intString(source.Local.ExpandableCount)); err != nil {
+			return Source{}, err
+		}
 	}
+
 	for teamID, downloads := range extracted.RootState.Downloads {
 		if !filter.allowWorkspace(teamID) {
 			continue
@@ -265,14 +236,8 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 			return Source{}, err
 		}
 	}
-	for _, marker := range extracted.ReadMarkers {
-		workspaceID, ok := resolveChannelWorkspace(marker.ChannelID, marker.WorkspaceID, workspaceCandidates)
-		if !ok {
-			continue
-		}
-		if !filter.allowChannelNames(workspaceID, marker.ChannelID, channelNames.get(workspaceID, marker.ChannelID)) {
-			continue
-		}
+	for _, record := range prepared.markers {
+		marker := record.value
 		if err := st.SetSyncState(ctx, sourceName, "read_marker", marker.ChannelID, marker.TS); err != nil {
 			return Source{}, err
 		}

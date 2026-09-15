@@ -511,15 +511,24 @@ must agree with the envelope, including nested edited/deleted/root messages.
 Slack Connect event/author workspace IDs and differing event/message timestamps
 are not conversation identity conflicts.
 
-This controls future API/tail intake only. It does not purge archived DMs or
-change desktop, MCP, provider, or import intake. It does not certify the archive
-or a Git share as safe to publish: admitted messages can contain sensitive text
+This controls future API/tail/desktop intake only. It does not purge archived DMs
+or change MCP, provider, or import intake. Desktop uses the policy as described
+below. It does not certify the archive or a Git share as safe to publish:
+admitted messages can contain sensitive text
 and file metadata, and a current channel type does not establish that its
 history lacks messages from a converted group DM.
 
 ## Desktop Source
 
 Desktop ingestion is optional and read-only.
+
+`[sync].include_dms = false` also gates desktop conversation-derived writes.
+Omitted/true preserve desktop recovery defaults. Strict exclusion requires
+selected public/private channel metadata and omits unknown, conflicting, or
+heuristic records; every draft destination must be eligible. Fixed omission
+counts explain partial intake. Existing archived rows, independent profiles,
+and custom statuses remain. See [Desktop DM exclusion](desktop-mode.md#excluding-direct-messages)
+for classification, decode coverage, and retained-history limits.
 
 ```toml
 [slack.desktop]

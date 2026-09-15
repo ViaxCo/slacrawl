@@ -43,11 +43,13 @@ const (
 var reduxDecoderScript string
 
 type ReduxDecodedState struct {
-	WorkspaceID string         `json:"workspace_id"`
-	UserID      string         `json:"user_id"`
-	Channels    []ReduxChannel `json:"channels"`
-	Members     []ReduxMember  `json:"members"`
-	Messages    []ReduxMessage `json:"messages"`
+	WorkspaceID  string          `json:"workspace_id"`
+	UserID       string          `json:"user_id"`
+	Channels     []ReduxChannel  `json:"channels"`
+	Members      []ReduxMember   `json:"members"`
+	Messages     []ReduxMessage  `json:"messages"`
+	Provenance   reduxProvenance `json:"provenance"`
+	observations map[string]kindObservations
 }
 
 type ReduxChannel struct {
@@ -137,6 +139,7 @@ func extractIndexedDBStates(ctx context.Context, path string) ([]ReduxDecodedSta
 	}
 
 	byIdentity := map[string]ReduxDecodedState{}
+	observations := map[string]kindObservations{}
 	for _, ref := range refs {
 		if err := ctx.Err(); err != nil {
 			return nil, summary, err
@@ -179,6 +182,7 @@ func extractIndexedDBStates(ctx context.Context, path string) ([]ReduxDecodedSta
 			continue
 		}
 		summary.DecodedBlobCount++
+		observeReduxKinds(observations, state)
 		key := state.WorkspaceID + "|" + state.UserID
 		current, ok := byIdentity[key]
 		if !ok || reduxStateScore(state) > reduxStateScore(current) {
@@ -196,48 +200,29 @@ func extractIndexedDBStates(ctx context.Context, path string) ([]ReduxDecodedSta
 		}
 		return states[i].WorkspaceID < states[j].WorkspaceID
 	})
+	if len(states) > 0 {
+		states[0].observations = observations
+	}
 	summary.DecodedStateCount = len(states)
 	return states, summary, nil
 }
 
-func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecodedState, now time.Time, filter ingestFilter) error {
-	mergedChannelNames := channelNamesByWorkspaceID(states)
-	workspaceCandidates := channelWorkspaceCandidates(states)
+func ingestPreparedReduxStates(ctx context.Context, st *store.Store, states []preparedReduxState, now time.Time, filter ingestFilter) error {
 	for _, state := range states {
-		if state.WorkspaceID == "" {
+		if state.workspaceID == "" {
 			continue
 		}
-		if filter.allowWorkspace(state.WorkspaceID) {
-			if err := upsertIndexedDBWorkspace(ctx, st, state.WorkspaceID, now); err != nil {
+		if filter.allowWorkspace(state.workspaceID) {
+			if err := upsertIndexedDBWorkspace(ctx, st, state.workspaceID, now); err != nil {
 				return err
 			}
 		}
-		allowedChannels := map[string]struct{}{}
-		channelWorkspaces := map[string]string{}
-		knownChannelNames := map[string][]string{}
-		referencedUsers := map[string]struct{}{}
-		memberNames := map[string]string{}
-		for _, member := range state.Members {
-			memberNames[member.ID] = firstNonEmpty(member.Profile.DisplayName, member.Profile.RealName, member.Name, member.Real, member.ID)
-		}
-		for _, channel := range state.Channels {
-			workspaceID := channelContextWorkspaceID(channel.ContextTeamID, state.WorkspaceID)
-			channelWorkspaces[channel.ID] = workspaceID
-			channelName := reduxChannelName(channel, memberNames)
-			filterChannelNames := mergedChannelNames.get(workspaceID, channel.ID)
-			knownChannelNames[channel.ID] = filterChannelNames
-			if !filter.allowChannelNames(workspaceID, channel.ID, filterChannelNames) {
-				continue
-			}
+
+		for _, record := range state.channels {
+			channel, workspaceID := record.value, record.workspaceID
+			channelName := reduxChannelName(channel, state.memberNames)
 			if err := upsertIndexedDBWorkspace(ctx, st, workspaceID, now); err != nil {
 				return err
-			}
-			allowedChannels[channel.ID] = struct{}{}
-			if channel.User != "" {
-				referencedUsers[channel.User] = struct{}{}
-			}
-			for _, memberID := range channel.Members {
-				referencedUsers[memberID] = struct{}{}
 			}
 			if err := st.UpsertChannel(ctx, store.Channel{
 				ID:          channel.ID,
@@ -258,41 +243,10 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 				return err
 			}
 		}
-		messageBatch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, min(len(state.Messages), 500))}
-		for _, message := range state.Messages {
-			if message.Channel == "" || message.TS == "" {
-				continue
-			}
-			workspaceID, ok := channelWorkspaces[message.Channel]
-			if !ok {
-				workspaceID, ok = resolveChannelWorkspace(message.Channel, state.WorkspaceID, workspaceCandidates)
-				if !ok {
-					continue
-				}
-			}
-			if !filter.allowWorkspace(workspaceID) {
-				continue
-			}
-			channelNames, knownChannel := knownChannelNames[message.Channel]
-			if len(channelNames) == 0 {
-				channelNames = mergedChannelNames.get(workspaceID, message.Channel)
-			}
-			if _, ok := allowedChannels[message.Channel]; !ok && (knownChannel || !isSlackConversationID(message.Channel)) {
-				continue
-			}
-			if !filter.allowChannelNames(workspaceID, message.Channel, channelNames) {
-				continue
-			}
+		messageBatch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, min(len(state.messages), 500))}
+		for _, record := range state.messages {
+			message, workspaceID := record.value, record.workspaceID
 			text := strings.TrimSpace(message.Text)
-			if text == "" && message.Subtype == "" && message.Type == "" {
-				continue
-			}
-			if message.User != "" {
-				referencedUsers[message.User] = struct{}{}
-			}
-			if message.ParentUserID != "" {
-				referencedUsers[message.ParentUserID] = struct{}{}
-			}
 			messageBatch.Messages = append(messageBatch.Messages, store.MessageWrite{
 				Message: store.Message{
 					ChannelID:      message.Channel,
@@ -329,13 +283,8 @@ func ingestReduxStates(ctx context.Context, st *store.Store, states []ReduxDecod
 				return err
 			}
 		}
-		for _, member := range state.Members {
-			workspaceID := fallback(member.TeamID, state.WorkspaceID)
-			if !filter.allowWorkspace(workspaceID) {
-				if _, referenced := referencedUsers[member.ID]; !referenced {
-					continue
-				}
-			}
+		for _, member := range state.members {
+			workspaceID := fallback(member.TeamID, state.workspaceID)
 			if err := upsertDesktopUser(ctx, st, store.User{
 				ID:          member.ID,
 				WorkspaceID: workspaceID,
