@@ -351,6 +351,10 @@ Share config:
 - `[share].repo_path` is the local clone / working repo path used for publish and update
 - `[share].branch` defaults to `main`
 - `[share].auto_update` controls whether read commands import stale git snapshots before querying
+- explicit `[sync].include_dms = false` rejects legacy Git snapshot imports because the format has no DM admission evidence; omitted/true preserve import behavior
+- subscribe checks this policy before saving an importing configuration; update/restore check before opening the archive or acquiring Git data
+- automatic paths first open the archive to check staleness, then reject before Git acquisition, snapshot/media import, or successful-import state changes
+- `subscribe --no-import`, fresh automatic reads, `auto_update = false`, and observation-only status/doctor remain available; publish is not a DM filter
 - `publish --tag <name>` creates an immutable tag for a committed snapshot
 - routine `update` imports merge by stable row identity, preserve destination-only rows and newer tombstones, and never infer deletion from a row missing in the snapshot
 - `update --restore` is the explicit exact-replacement mode
@@ -462,9 +466,9 @@ purged history.
 
 ### Git share sync
 
-1. clone or open the configured share repo
-2. read `manifest.json`
-3. skip import when the manifest generation timestamp matches the last imported manifest
+1. reject explicit DM exclusion before snapshot acquisition/import; every importing owner entry point checks the same policy, including unchanged-manifest and historical restore paths
+2. clone or open the configured share repo and read `manifest.json`
+3. if the manifest generation timestamp matches, skip table import unless missing media metadata must be restored; still refresh successful-import state and restore requested media
 4. otherwise merge the sharded compressed JSONL snapshot by stable identity; clear snapshot tables only for explicit restore
 5. rebuild FTS rows locally
 6. record last import timestamps in `sync_state`

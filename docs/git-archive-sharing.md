@@ -4,6 +4,21 @@ Git archive sharing separates the machine that can access Slack from machines th
 
 Use a private remote. A snapshot contains Slack data and belongs inside the same visibility boundary as the source archive.
 
+Explicit `[sync].include_dms = false` rejects legacy snapshot imports. The
+snapshot format stores raw archive tables without evidence that can enforce DM
+exclusion. This includes initial subscribe, update, exact/historical restore,
+and stale automatic imports. Omitted/true preserves the existing behavior.
+
+To keep using your local archive and API/native sync with DM exclusion, set
+`[share].auto_update = false`. Fresh automatic reads and configuration-only
+`subscribe --no-import --no-auto-update` remain available. Rejection happens
+before saving an importing subscribe configuration or acquiring/importing
+snapshot data, media, or successful-import state. Automatic paths still open
+the archive to check staleness.
+
+Publishing remains an unfiltered snapshot of the archive tables. This policy
+does not purge archived DMs or certify a snapshot as safe to publish.
+
 ## Configure the archive
 
 Add a share block to the publisher's config:
@@ -95,7 +110,6 @@ slacrawl update --restore --ref backup-2026-06-19
 
 When `auto_update = true`, these read commands import a stale snapshot before querying:
 
-- `status`
 - `report`
 - `search`
 - `messages`
@@ -103,10 +117,12 @@ When `auto_update = true`, these read commands import a stale snapshot before qu
 - `sql`
 - `users`
 - `channels`
+- `digest` and `analytics`
+- `files`
 
-`stale_after` sets the refresh age. `status` and `doctor` report the share repository, last import time, and freshness state.
+`stale_after` sets the refresh age. `status` and `doctor` only report the share repository, last import time, and freshness state; they do not refresh it.
 
-When a publisher also has a share remote configured, `sync --source bot` and `sync --source all` warm from the git snapshot before contacting Slack.
+Non-Desktop `sync`, `tail`, and `files fetch` also refresh stale snapshots before their source operations. These imports obey the same DM policy. Desktop-only `sync --source desktop`/`wiretap` and `watch` do not auto-import Git snapshots.
 
 ## Snapshot contents and media
 

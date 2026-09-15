@@ -448,10 +448,24 @@ Behavior:
 - snapshots include eligible cached public-channel media by default; table shards are gzip-compressed and media files retain their raw cache layout
 - `subscribe` writes a git-reader config, disables Slack API and desktop sources for that config, clones the repo, and imports the snapshot
 - pass `--db` to `subscribe` when you want the reader archive to use a non-default SQLite file
-- `update` pulls and imports only when the manifest changed
-- `status`, `search`, `messages`, `mentions`, `sql`, `users`, `channels`, and `report` auto-refresh stale git-backed snapshots before querying when `auto_update = true`
+- `update` pulls and merges changed snapshots; an unchanged manifest can still restore missing media and refresh successful-import state
+- `search`, `messages`, `mentions`, `sql`, `users`, `channels`, `report`, `digest`, `analytics`, and `files` auto-refresh stale git-backed snapshots before querying when `auto_update = true`
 - `stale_after` controls how old the last successful import can be before the next read pulls/imports again
-- `status` and `doctor` show the configured share repo plus last import / manifest freshness details
+- `status` and `doctor` only observe the configured share repo and last import / manifest freshness; they do not auto-refresh
+
+With `[sync].include_dms = false`, legacy Git snapshot imports stop because
+their raw table format cannot enforce DM exclusion. This covers subscribe,
+update, exact/historical restore, and stale automatic imports before read,
+non-Desktop sync, tail, or file-fetch commands. Subscribe rejects before saving
+its importing configuration; explicit updates reject before opening the archive
+or acquiring Git data. Automatic paths open the archive to check staleness,
+then reject before acquisition, snapshot/media import, or freshness updates.
+
+Set `[share].auto_update = false` to continue querying the local archive or
+syncing API/native sources while retaining DM exclusion. Fresh automatic reads,
+`subscribe --no-import`, and Desktop-only sync/watch remain available.
+Omitted/true keeps the existing merge and restore behavior. This policy neither
+purges existing DMs nor filters `publish`; snapshots can still contain them.
 
 ## Token Sources
 
@@ -565,9 +579,10 @@ must agree with the envelope, including nested edited/deleted/root messages.
 Slack Connect event/author workspace IDs and differing event/message timestamps
 are not conversation identity conflicts.
 
-This controls future API/tail/desktop/MCP intake only. It does not purge archived
-DMs or change provider or import intake. Desktop uses the policy as described
-below; MCP uses the native evidence requirements above. It does not certify the archive or a Git share as safe to publish:
+This controls future API/tail/desktop/MCP intake and rejects legacy Git share
+imports. It does not purge archived DMs or change provider or Slack-export
+import intake. Desktop uses the policy as described below; MCP uses the native
+evidence requirements above. It does not certify the archive or a Git share as safe to publish:
 admitted messages can contain sensitive text
 and file metadata, and a current channel type does not establish that its
 history lacks messages from a converted group DM.
