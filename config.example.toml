@@ -78,7 +78,8 @@ full_history = true
 # Desktop requires selected public/private metadata and reports omitted records.
 # MCP requires native catalog evidence, including for explicit IDs; text adapters stop before data calls.
 # Legacy Git share imports reject false; share.auto_update=false permits local/API work.
-# Provider/Slack-export intake and previously archived rows are unchanged.
+# Provider v1 rejects false before checkpoint access/process launch; use API or a workspace JSON export.
+# Slack-export imports require admitted non-DM conversations; previously archived rows are unchanged.
 # auto_join = true # auto-join public channels during sync (default: true; set false to only sync already-joined channels)
 # exclude_channels = [] # channel names to skip during sync, case-insensitive (default: empty)
 

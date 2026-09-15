@@ -337,6 +337,17 @@ Use `[[providers]]` to adapt another local archive to the canonical SQLite
 schema without adding a source-specific integration to `slacrawl` itself.
 Each provider is an explicit sync source and is not included in `--source all`.
 
+With `[sync].include_dms = false`, provider v1 sync stops before reading its
+checkpoint or launching the adapter. The protocol accepts arbitrary channel
+kinds and opaque raw payloads, so it cannot establish DM exclusion. Use API sync
+or a supported Slack workspace JSON export with this setting. Omitted/true keep
+existing provider behavior, request bytes, and checkpoint scopes.
+
+This gate governs provider intake. The CLI may initialize the archive and check
+Git-share freshness first; earlier configuration/share errors keep precedence.
+It does not purge existing DMs or certify an archive as safe to export.
+`slack.desktop.include_drafts` remains specific to Desktop intake.
+
 ```toml
 [[providers]]
 name = "archive"
@@ -643,8 +654,8 @@ Slack Connect event/author workspace IDs and differing event/message timestamps
 are not conversation identity conflicts.
 
 This controls future API/tail/desktop/MCP and Slack-export intake and rejects
-legacy Git share imports. It does not purge archived DMs or change provider
-intake. Desktop uses the policy as described below; MCP uses the native
+legacy Git share imports and external provider v1 sync. It does not purge
+archived DMs. Desktop uses the policy as described below; MCP uses the native
 evidence requirements above. It does not certify the archive or a Git share as safe to publish:
 admitted messages can contain sensitive text
 and file metadata, and a current channel type does not establish that its
