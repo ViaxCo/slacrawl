@@ -72,8 +72,10 @@ repair_every = "30m"
 desktop_refresh_every = "5m"
 full_history = true
 # include_dms = true # API default: enabled with SLACK_USER_TOKEN; requires im:history, mpim:history, im:read, mpim:read.
-# Set false to exclude IM/MPIM from API sync before writes.
-# Unknown conversation types then fail. Other sources and existing rows are unchanged.
+# Set false to exclude DMs from API sync, tail repair, and live tail before writes.
+# Live tail otherwise keeps delivered DMs; untyped/metadata events under false
+# require conversations.info read access and fail without ACK when lookup fails.
+# Other sources and existing rows are unchanged.
 # auto_join = true # auto-join public channels during sync (default: true; set false to only sync already-joined channels)
 # exclude_channels = [] # channel names to skip during sync, case-insensitive (default: empty)
 

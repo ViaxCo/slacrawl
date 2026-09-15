@@ -75,6 +75,10 @@ func (c *Client) Tail(ctx context.Context, st *store.Store, workspaceID string, 
 }
 
 func (c *Client) HandleEventsAPIEvent(ctx context.Context, st *store.Store, workspaceID string, event slackevents.EventsAPIEvent) error {
+	allowed, err := c.admitTailEvent(ctx, st, workspaceID, event)
+	if err != nil || !allowed {
+		return err
+	}
 	now := c.now()
 	switch ev := event.InnerEvent.Data.(type) {
 	case *slackevents.MessageEvent:
@@ -92,11 +96,11 @@ func (c *Client) HandleEventsAPIEvent(ctx context.Context, st *store.Store, work
 		}
 		return err
 	case *slackevents.ChannelRenameEvent:
-		return st.RenameChannel(ctx, ev.Channel.ID, ev.Channel.Name)
+		return st.RenameChannel(ctx, workspaceID, ev.Channel.ID, ev.Channel.Name)
 	case *slackevents.ChannelArchiveEvent:
-		return st.SetChannelArchived(ctx, ev.Channel, true)
+		return st.SetChannelArchived(ctx, workspaceID, ev.Channel, true)
 	case *slackevents.ChannelUnarchiveEvent:
-		return st.SetChannelArchived(ctx, ev.Channel, false)
+		return st.SetChannelArchived(ctx, workspaceID, ev.Channel, false)
 	default:
 		return nil
 	}
