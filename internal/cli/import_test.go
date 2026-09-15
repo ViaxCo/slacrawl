@@ -126,7 +126,7 @@ func TestImportRejectsSameChannelTimestampInDifferentWorkspaces(t *testing.T) {
 	stdout.Reset()
 	err := app.Run(ctx, []string{"--config", configPath, "--json", "import", zipPath, "--workspace", "T2"})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "already exists in workspace T1")
+	require.Contains(t, err.Error(), "already exists in another workspace")
 
 	st, err := store.Open(dbPath)
 	require.NoError(t, err)

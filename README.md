@@ -54,6 +54,13 @@ Already have a Slack export? Import its ZIP or extracted directory instead of sy
 slacrawl import ~/Downloads/slack-export.zip --workspace T01234567
 ```
 
+Set `[sync].include_dms = false` in the selected config to exclude DM and group-DM
+conversations from workspace JSON export imports. Unqualified types or ambiguous
+conversation ownership stop the import. Omitted/true retain DM inclusion.
+Dry-run checks the export without initializing or repairing the archive.
+See [Slack export admission](docs/configuration.md#slack-export-admission) for
+supported formats, file-change detection, and privacy limits.
+
 ## Choose an ingestion source
 
 Every source feeds the same SQLite archive and search index.

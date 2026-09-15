@@ -400,6 +400,42 @@ Share config:
 14. update FTS rows and mentions
 15. write checkpoints, channel skips, and join attempts
 
+### Slack export import
+
+1. Read all four workspace JSON catalog roles and reserve every ID/name locator
+   and physical payload owner before opening the archive, including excluded
+   and unused fallback candidates.
+2. Apply `[sync].include_dms`: omitted/true retain DM inclusion; explicit false
+   vetoes every occurrence of a DM ID and requires positive non-DM evidence.
+   Fully sparse records use compatible catalog privacy; any native discriminator
+   disables sparse fallback. Positive native type/privacy wins over non-DM
+   catalog naming; DM catalogs/native IM/MPIM always veto. Recognized native
+   flag names use case-insensitive matching for both classification and veto.
+3. Strict catalogs and admitted message JSON reject repeated decoded object
+   keys, including nested objects and case-folded catalog ID/name/type keys.
+   Reject unsupported strict formats, ambiguous locators, directory identities
+   or ZIP entries/payload spans. Keep `os.Root` confinement, same-owner aliases,
+   retained ZIP entries and frozen local-header metadata.
+4. Strict all-excluded intake ends before archive/runtime initialization.
+   Dry-run opens only an existing read-only archive, or uses absent-as-empty;
+   ordinary admitted intake keeps writable initialization/migration/index repair.
+5. Scan admitted bodies once before archive row writes. Validate retained raw
+   channel/context identity in every recognized case spelling before projection
+   or skips, choose the name/ID
+   branch once, record file identity/digests, and check existing DB collisions.
+   Any name-branch raw row wins; only zero rows permit ID fallback.
+   Before metadata writes, check existing workspace ownership of admitted
+   channels and every retained user ID. Dry-run performs the same checks.
+6. Re-read each selected file through its retained source, verify its actual
+   opened identity and digest, then decode that same buffer. Never rescan
+   directories/catalogs or select a new fallback during execution.
+7. Preserve 500-message transactions, source priority and force behavior.
+   Changed/missing planned files stop intake; prior commits remain and the
+   pending remainder is discarded. Report fixed DM omission counts.
+8. This is future intake admission, not old-DM purging, producer authentication,
+   complete capture, historical DM-origin proof, or safe-export qualification.
+   Import retention and concurrent priority atomicity remain separate work.
+
 ### MCP sync
 
 1. discover the configured MCP adapter; explicit `include_dms = false` rejects

@@ -3,7 +3,9 @@ package importer
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"errors"
+	"github.com/openclaw/slacrawl/internal/admission"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,18 +25,18 @@ func TestExportZIPMode(t *testing.T) {
 	require.Len(t, users, 2)
 	require.Equal(t, "U1", users[0].ID)
 
-	channels, err := ex.Channels()
+	channels, err := exportChannelsOfKind(ex, "public", "private")
 	require.NoError(t, err)
 	require.Len(t, channels, 3)
 	require.Equal(t, "public", channels[0].Kind)
 	require.Equal(t, "private", channels[2].Kind)
 
-	dms, err := ex.DMs()
+	dms, err := exportChannelsOfKind(ex, "im")
 	require.NoError(t, err)
 	require.Len(t, dms, 1)
 	require.Equal(t, "im", dms[0].Kind)
 
-	mpims, err := ex.MPIMs()
+	mpims, err := exportChannelsOfKind(ex, "mpim")
 	require.NoError(t, err)
 	require.Len(t, mpims, 1)
 	require.Equal(t, "mpim", mpims[0].Kind)
@@ -64,15 +66,15 @@ func TestExportDirectoryModeWithMissingOptionalFiles(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, ex.Close()) }()
 
-	channels, err := ex.Channels()
+	channels, err := exportChannelsOfKind(ex, "public", "private")
 	require.NoError(t, err)
 	require.Len(t, channels, 2)
 
-	dms, err := ex.DMs()
+	dms, err := exportChannelsOfKind(ex, "im")
 	require.NoError(t, err)
 	require.Empty(t, dms)
 
-	mpims, err := ex.MPIMs()
+	mpims, err := exportChannelsOfKind(ex, "mpim")
 	require.NoError(t, err)
 	require.Empty(t, mpims)
 
@@ -90,7 +92,7 @@ func TestMalformedJSON(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, ex.Close()) }()
 
-	_, err = ex.Channels()
+	_, err = exportChannelsOfKind(ex, "public", "private")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "parse channels.json")
 }
@@ -107,7 +109,7 @@ func TestMalformedMessagesJSON(t *testing.T) {
 	messages, iterErr := collectMessages(ex, "general")
 	require.Error(t, iterErr)
 	require.Contains(t, iterErr.Error(), "parse messages file")
-	require.Len(t, messages, 2)
+	require.Empty(t, messages)
 }
 
 func TestMissingChannelDirectoryDoesNotError(t *testing.T) {
@@ -147,18 +149,49 @@ func TestChannelsRejectTraversalNames(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, ex.Close()) }()
 
-	_, err = ex.Channels()
+	_, err = exportChannelsOfKind(ex, "public", "private")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid channels.json name")
 }
 
-func collectMessages(ex *Export, channel string) ([]MessageEnvelope, error) {
-	messages := []MessageEnvelope{}
-	for env, err := range ex.Messages(channel) {
-		if err != nil {
-			return messages, err
+func exportChannelsOfKind(ex *Export, kinds ...string) ([]ChannelInfo, error) {
+	plan, err := ex.Prepare("T1", admission.Default)
+	if err != nil {
+		return nil, err
+	}
+	out := []ChannelInfo{}
+	for _, channel := range plan.Channels() {
+		for _, kind := range kinds {
+			if channel.Kind == kind {
+				out = append(out, channel)
+			}
 		}
-		messages = append(messages, env)
+	}
+	return out, nil
+}
+
+func collectMessages(ex *Export, channel string) ([]MessageEnvelope, error) {
+	if err := validateChannelDirName(channel); err != nil {
+		return nil, err
+	}
+	plan, err := ex.Prepare("T1", admission.Default)
+	if err != nil {
+		return nil, err
+	}
+	if err := plan.Scan(context.Background(), func(ChannelInfo, MessageEnvelope) error { return nil }); err != nil {
+		return nil, err
+	}
+	messages := []MessageEnvelope{}
+	for index, info := range plan.Channels() {
+		if info.Name != channel && info.ID != channel {
+			continue
+		}
+		for env, err := range plan.Messages(index) {
+			if err != nil {
+				return messages, err
+			}
+			messages = append(messages, env)
+		}
 	}
 	return messages, nil
 }
@@ -248,6 +281,9 @@ func TestDirectoryExportRejectsEscapingSymlinks(t *testing.T) {
 		t.Run(target, func(t *testing.T) {
 			outside := writeFixtureDir(t, minimalFixtureFiles())
 			root := t.TempDir()
+			if target != "channels.json" {
+				require.NoError(t, os.WriteFile(filepath.Join(root, "channels.json"), []byte(`[{"id":"C1","name":"general"}]`), 0600))
+			}
 			link := filepath.Join(root, target)
 			require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o750))
 			require.NoError(t, os.Symlink(filepath.Join(outside, target), link))
@@ -258,7 +294,7 @@ func TestDirectoryExportRejectsEscapingSymlinks(t *testing.T) {
 			case "users.json":
 				_, err = ex.Users()
 			case "channels.json":
-				_, err = ex.Channels()
+				_, err = exportChannelsOfKind(ex, "public", "private")
 			default:
 				var messages []MessageEnvelope
 				messages, err = collectMessages(ex, "general")
@@ -271,6 +307,7 @@ func TestDirectoryExportRejectsEscapingSymlinks(t *testing.T) {
 
 func TestDirectoryExportAllowsContainedSymlinksAndLinkedRoot(t *testing.T) {
 	root := writeFixtureDir(t, map[string]string{
+		"channels.json":        `[{"id":"C1","name":"general"}]`,
 		"data/2026-01-01.json": `[{"text":"inside","ts":"1.0"}]`,
 	})
 	require.NoError(t, os.Symlink("data", filepath.Join(root, "general")))

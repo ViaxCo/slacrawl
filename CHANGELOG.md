@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Honor explicit `sync.include_dms = false` for Slack workspace JSON export imports before archive initialization. Reserve all conversation locators, omit DM bodies, and reject unqualified types, duplicate JSON keys, or identity conflicts. Check existing channel/user ownership before metadata writes under every policy. Verify a prepared file plan before writes, preserve committed batches on later file changes, and make dry-run use an existing archive read-only without initialization or repair. Existing DMs are not purged; omitted/true retain DM inclusion.
+
 - Reject API history/replies pages with missing or blank top-level message timestamps before page writes or thread work, including periodic repair. Keep earlier pages and the pending retry interval; valid native parent echoes remain supported.
 
 - Report incomplete native MCP history/replies before advancing successful workspace sync state when Slack returns more-page or history/message-limit signals. Keep valid fetched writes and concrete errors; require explicit successful native responses under every DM policy without changing text adapters or tool arguments.
