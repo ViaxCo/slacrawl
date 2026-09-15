@@ -176,7 +176,7 @@ func TestRetainedThreadFailuresKeepWork(t *testing.T) {
 }
 
 func TestRetainedThreadPageSuccessKeepsCurrentWork(t *testing.T) {
-	for _, failure := range []string{"unsuccessful", "absent", "null"} {
+	for _, failure := range []string{"unsuccessful", "absent", "null", "native-error"} {
 		t.Run(failure, func(t *testing.T) {
 			ctx := context.Background()
 			st := mustStore(t)
@@ -218,6 +218,9 @@ func TestRetainedThreadPageSuccessKeepsCurrentWork(t *testing.T) {
 				}
 				require.Equal(t, "second", form.Get("cursor"))
 				require.Equal(t, attempts[len(attempts)-1], work[0])
+				if !corrected && failure == "native-error" {
+					return map[string]any{"ok": false, "error": "rejected-reply-canary"}, nil
+				}
 				if !corrected && failure != "unsuccessful" {
 					payload := map[string]any{"ok": true}
 					if failure == "null" {
@@ -236,7 +239,10 @@ func TestRetainedThreadPageSuccessKeepsCurrentWork(t *testing.T) {
 			client.now = func() time.Time { return time.Unix(1710000200, 0).UTC() }
 			runErr := client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"})
 			wantError := "conversations.replies response did not report success"
-			if failure != "unsuccessful" {
+			if failure == "native-error" {
+				wantError = "slack conversations.replies API response failed"
+				requireNativeErrorCode(t, runErr, "rejected-reply-canary")
+			} else if failure != "unsuccessful" {
 				wantError = "conversations.replies response did not provide a collection array; page remains uncertified"
 			}
 			require.EqualError(t, runErr, wantError)
@@ -380,7 +386,8 @@ func TestHistoryPageChildrenPersistThreadWork(t *testing.T) {
 			case "root-page-limited":
 				require.ErrorContains(t, err, "completeness of the requested interval is uncertified")
 			default:
-				require.ErrorContains(t, err, "synthetic_later_history_failure")
+				require.ErrorContains(t, err, "slack conversations.history API response failed")
+				requireNativeErrorCode(t, err, "synthetic_later_history_failure")
 			}
 			require.Equal(t, map[string]int{"root-child-error": 2, "child-root-incomplete": 1, "root-page-limited": 2, "child-page-error": 3, "known": 2, "synced": 3, "since": 2, "repair": 2}[mode], histories)
 			require.Equal(t, map[bool]int{true: 1, false: 0}[mode == "synced"], replies)
@@ -516,7 +523,10 @@ func TestRetainedThreadRevivalRequeuesCanceledWork(t *testing.T) {
 			err = client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123"})
 			failed := mode == "history-error" || mode == "history-incomplete" || mode == "history-limited"
 			if failed {
-				require.ErrorContains(t, err, map[string]string{"history-error": "synthetic_after_revival_failure", "history-incomplete": "has_more without a continuation cursor", "history-limited": "completeness of the requested interval is uncertified"}[mode])
+				require.ErrorContains(t, err, map[string]string{"history-error": "slack conversations.history API response failed", "history-incomplete": "has_more without a continuation cursor", "history-limited": "completeness of the requested interval is uncertified"}[mode])
+				if mode == "history-error" {
+					requireNativeErrorCode(t, err, "synthetic_after_revival_failure")
+				}
 				workspaceAfter, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='workspace'")
 				require.NoError(t, err)
 				require.Equal(t, workspaceBefore, workspaceAfter)

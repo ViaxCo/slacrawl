@@ -21,9 +21,9 @@ func TestPendingThreadDoctorAndFreshness(t *testing.T) {
 		wantReason, wantText                string
 	}{
 		{"api-only", "api-user", "bot", "partial", false, "retained_api_thread_work", "partial: retained API thread skips or pending work"},
-		{"mcp-only", "mcp", "mcp", "full", false, "", "full historical replies"},
+		{"mcp-only", "mcp", "mcp", "full", false, "", "user auth available for replies"},
 		{"api-with-success", "api-user", "bot", "partial", true, "retained_api_thread_work", "partial: retained API thread skips or pending work"},
-		{"unrelated-source", "api-bot", "bot", "full", false, "", "full historical replies"},
+		{"unrelated-source", "api-bot", "bot", "full", false, "", "user auth available for replies"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()

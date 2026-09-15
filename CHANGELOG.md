@@ -19,6 +19,8 @@
 
 - Preserve unvisited API thread-skip diagnostics during restricted or incomplete Full syncs, and explain retained thread work in Doctor's partial-coverage output. Require unrestricted traversal before bulk cleanup, retain generation guards, and keep observed omissions visible despite later success. Thanks @vincentkoc! (#229, #230)
 
+- Keep native API payloads, arbitrary error strings, and pagination cursors out of diagnostics while preserving typed causes and known machine errors. Report failed DM capability probes and caller cancellation truthfully in Doctor. Thanks @vincentkoc! (#236, #237, #238)
+
 - Require explicit native API success, present page collections, and a bound authenticated workspace before accepting data or completing sync work. Preserve earlier valid writes, pending retries, credential precedence, and typed Slack errors. Thanks @vincentkoc! (#231, #232, #233, #234, #235)
 
 - Preserve unfinished MCP reply work across history-hint loss, failed batches, and restarts; guard ordinary replies by generation and reconcile committed tombstones. Keep explicit `--since` and `--full --since` restricted to returned roots without consuming older backlog. Thanks @vincentkoc! (#217, #220)

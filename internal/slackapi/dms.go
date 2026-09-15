@@ -2,7 +2,7 @@ package slackapi
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"sort"
 	"strings"
 
@@ -41,7 +41,7 @@ func (c *Client) fetchDMs(ctx context.Context, workspaceID string, skips *thread
 			return out, nil
 		}
 		if seen[nextCursor] {
-			return nil, fmt.Errorf("conversations.list repeated cursor %q", nextCursor)
+			return nil, errors.New("conversations.list repeated cursor")
 		}
 		seen[nextCursor] = true
 		cursor = nextCursor

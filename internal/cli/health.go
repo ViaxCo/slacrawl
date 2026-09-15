@@ -69,7 +69,7 @@ func (a *App) runDoctor(ctx context.Context, configPath string, args []string, f
 	}
 	tokens := cfg.ResolveTokens()
 	diag, err := slackapi.NewWithOptions(tokens, a.apiURL, a.httpClient).WithDMPolicy(admission.FromConfig(cfg.Sync.IncludeDMs)).Doctor(ctx)
-	if err != nil && !errors.Is(err, context.Canceled) {
+	if err != nil {
 		return err
 	}
 	workspaceAPI, err := a.workspaceDoctorReports(ctx, cfg)
@@ -184,6 +184,9 @@ func (a *App) runDoctor(ctx context.Context, configPath string, args []string, f
 		"status":            status,
 		"fts_available":     true,
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return a.writeOutput("Doctor", report, format, true)
 }
 
@@ -264,7 +267,7 @@ func (a *App) workspaceDoctorReports(ctx context.Context, cfg config.Config) ([]
 	for _, workspaceID := range workspaceIDs {
 		tokens := cfg.ResolveTokensForWorkspace(workspaceID)
 		diag, err := slackapi.NewWithOptions(tokens, a.apiURL, a.httpClient).WithDMPolicy(admission.FromConfig(cfg.Sync.IncludeDMs)).Doctor(ctx)
-		if err != nil && !errors.Is(err, context.Canceled) {
+		if err != nil {
 			return nil, fmt.Errorf("doctor %s: %w", workspaceID, err)
 		}
 		reports = append(reports, map[string]any{

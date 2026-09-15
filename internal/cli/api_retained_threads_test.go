@@ -146,7 +146,10 @@ func TestAPIRetainedThreadsFromCLI(t *testing.T) {
 			wantError := ""
 			switch name {
 			case "hint-loss-restart":
-				wantPending, wantRows, wantError = 1, 2, "sync workspace T123: synthetic_replies_failure"
+				wantPending, wantRows, wantError = 1, 2, "sync workspace T123: slack conversations.replies API response failed"
+				var native slack.SlackErrorResponse
+				require.ErrorAs(t, runErr, &native)
+				require.Equal(t, "synthetic_replies_failure", native.Err)
 			case "unavailable-resume":
 				wantReplies, wantPending, wantRows = 0, 1, 2
 			case "scope-skip-resume":
