@@ -107,6 +107,28 @@ or missing selected files fail; new files require a new import. See
 [Slack export admission](configuration.md#slack-export-admission) for format and
 privacy limits.
 
+To import a [Slackdump](https://github.com/rusq/slackdump) archive, first convert
+it to a standard Slack export. Use a copy of the source archive: Slackdump may
+migrate database inputs while opening them.
+
+```sh
+slackdump convert -f export -files=false -avatars=false -o ./export.zip ./archive-copy
+slacrawl import ./export.zip --workspace T01234567
+```
+
+Use `-o ./export` for directory output. This path is verified with Slackdump
+[`f7319928`](https://github.com/rusq/slackdump/commit/f7319928b0993b23d7e9bd8af5e4c69b6f1d2af4)
+database and chunk-directory archives, including threads across export dates.
+That converter groups files by the America/Los_Angeles calendar and preserves
+message timestamps. The stored fixtures are synthetic; this does not certify
+live capture completeness, attachments or avatars.
+
+Explicit `include_dms = false` applies the import policy above and normalizes
+native private-channel evidence. With omitted/true compatibility settings, a
+modern private channel in `channels.json` retains kind `public_channel` and
+`is_private = true`. DM exclusion does not remove older archive rows or certify
+that an archive is safe to publish.
+
 Desktop and Socket Mode loops serve different sources:
 
 ```sh

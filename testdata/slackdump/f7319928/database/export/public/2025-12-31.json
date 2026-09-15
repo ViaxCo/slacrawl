@@ -1,0 +1,76 @@
+[
+  {
+    "type": "message",
+    "channel": "CPUBLIC",
+    "user": "UME",
+    "text": "slackdump-public-parent",
+    "ts": "1767225600.000001",
+    "thread_ts": "1767225600.000001",
+    "reply_count": 2,
+    "reply_users": [
+      "UME"
+    ],
+    "replies": [
+      {
+        "user": "UME",
+        "ts": "1767225600.000002"
+      },
+      {
+        "user": "UME",
+        "ts": "1767312000.000001"
+      }
+    ],
+    "latest_reply": "1767312000.000001",
+    "team": "TTEST",
+    "replace_original": false,
+    "delete_original": false,
+    "metadata": {
+      "event_type": "",
+      "event_payload": null
+    },
+    "blocks": null,
+    "user_team": "TTEST",
+    "source_team": "TTEST",
+    "user_profile": {
+      "avatar_hash": "",
+      "image_72": "",
+      "first_name": "",
+      "real_name": "",
+      "display_name": "",
+      "team": "",
+      "name": "me",
+      "is_restricted": false,
+      "is_ultra_restricted": false
+    },
+    "reply_users_count": 1
+  },
+  {
+    "type": "message",
+    "channel": "CPUBLIC",
+    "user": "UME",
+    "text": "slackdump-public-reply-one",
+    "ts": "1767225600.000002",
+    "thread_ts": "1767225600.000001",
+    "team": "TTEST",
+    "replace_original": false,
+    "delete_original": false,
+    "metadata": {
+      "event_type": "",
+      "event_payload": null
+    },
+    "blocks": null,
+    "user_team": "TTEST",
+    "source_team": "TTEST",
+    "user_profile": {
+      "avatar_hash": "",
+      "image_72": "",
+      "first_name": "",
+      "real_name": "",
+      "display_name": "",
+      "team": "",
+      "name": "me",
+      "is_restricted": false,
+      "is_ultra_restricted": false
+    }
+  }
+]

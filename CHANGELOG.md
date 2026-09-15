@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Verify and document importing Slackdump-converted ZIP and directory exports from database and chunk archives. Preserve real synthetic converter fixtures for thread identity, DM exclusion, source/FTS consistency and repeat-import coverage; no importer behavior or upstream dependency changes.
+
 - Track MCP channel-history completion separately from stored messages and replies. Keep failed or incomplete intervals pending, preserve completed empty scans, and retry with current retention bounds. Prevent newer replies or API/Desktop rows from skipping unread history; reject non-finite history timestamps before filtering. Keep checkpoints local to the archive and out of freshness timestamps. First intake after upgrade, fresh import or whole-snapshot restore establishes its own history checkpoint; native server window limits remain unchanged.
 - Explain recovery when text MCP history exceeds the page limit: use a temporary larger positive budget for the same channel and scope, then restore the normal limit after completion. Large first scans require this operator-managed bootstrap; repeated capped attempts do not resume across invocations.
 
