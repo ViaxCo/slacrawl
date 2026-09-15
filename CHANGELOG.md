@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve unvisited API thread-skip diagnostics during restricted or incomplete Full syncs, and explain retained thread work in Doctor's partial-coverage output. Require unrestricted traversal before bulk cleanup, retain generation guards, and keep observed omissions visible despite later success. Thanks @vincentkoc! (#229, #230)
+
 - Preserve unfinished MCP reply work across history-hint loss, failed batches, and restarts; guard ordinary replies by generation and reconcile committed tombstones. Keep explicit `--since` and `--full --since` restricted to returned roots without consuming older backlog. Thanks @vincentkoc! (#217, #220)
 
 - Persist retained API thread work across lost reply hints, failures, restarts, and token changes; isolate unavailable roots so healthy threads and later channels continue. Keep pending work generation-guarded, local to the archive, excluded from freshness, and removed atomically by deletion or purge. Thanks @vincentkoc! (#217, #219)

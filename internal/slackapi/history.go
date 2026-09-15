@@ -93,7 +93,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 				return err
 			}
 		}
-		outcome, err := c.syncThread(ctx, st, workspaceID, channel.ID, threadTS, enforceRetention, now, work)
+		outcome, err := c.syncThread(ctx, st, workspaceID, channel.ID, threadTS, enforceRetention, now, work, source.threadSkip)
 		if outcome == threadSyncUnattempted {
 			return err
 		}
@@ -101,6 +101,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		if err != nil {
 			if work != nil && channelSkipReason(err) == "thread_not_found" {
 				// An unavailable retained root does not imply a channel-wide access failure.
+				source.threadSkip.RecordOmission()
 				_, saveErr := saveSkip("thread_not_found")
 				return saveErr
 			}
@@ -148,6 +149,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		})
 		if err != nil {
 			if source.skipMissingScope && isMissingScopeError(err) {
+				source.threadSkip.RecordOmission()
 				return st.SetSyncState(ctx, source.sourceName, "channel_skip", channel.ID, "missing_scope")
 			}
 			if source.allowJoin && !joined && channelSkipReason(err) == "not_in_channel" && !channel.IsPrivate {
@@ -164,6 +166,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 				}
 			}
 			if isChannelHistorySkipped(err) {
+				source.threadSkip.RecordOmission()
 				return st.SetSyncState(ctx, source.sourceName, "channel_skip", channel.ID, channelSkipReason(err))
 			}
 			return fmt.Errorf("channel %s history: %w", channel.ID, err)
@@ -205,6 +208,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 				return err
 			}
 			for _, skip := range result.CollisionsSkipped {
+				source.threadSkip.RecordOmission()
 				c.skipMessageCollision(skip.Err, workspaceID, skip.ChannelID, skip.TS)
 				collidedTSs[skip.TS] = struct{}{}
 			}
@@ -283,7 +287,7 @@ const (
 	threadSyncUnattempted
 )
 
-func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID string, channelID string, threadTS string, enforceRetention bool, now time.Time, work *store.ThreadWork) (threadSyncResult, error) {
+func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID string, channelID string, threadTS string, enforceRetention bool, now time.Time, work *store.ThreadWork, skips *threadSkipTracker) (threadSyncResult, error) {
 	cursor := ""
 	seen := map[string]bool{}
 	// Rejection before the first request must leave a later page free to
@@ -345,6 +349,7 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 				return threadSyncRevoked, nil
 			}
 			for _, skip := range result.CollisionsSkipped {
+				skips.RecordOmission()
 				c.skipMessageCollision(skip.Err, workspaceID, skip.ChannelID, skip.TS)
 			}
 		}
@@ -493,7 +498,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 	if len(channels) == 0 {
 		return nil
 	}
-	channels, err := c.admitChannels(workspaceID, channels)
+	channels, err := c.admitChannels(workspaceID, channels, source.threadSkip)
 	if err != nil || len(channels) == 0 {
 		return err
 	}
@@ -528,6 +533,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 				return err
 			}
 			if skip {
+				source.threadSkip.RecordOmission()
 				continue
 			}
 			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, oldestByChannel[channel.ID], restoreRequested, now, userRepliesAvailable, source); err != nil {
@@ -559,6 +565,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 				return
 			}
 			if skip {
+				source.threadSkip.RecordOmission()
 				continue
 			}
 			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, oldestByChannel[channel.ID], restoreRequested, now, userRepliesAvailable, source); err != nil {
@@ -720,6 +727,7 @@ type threadSkipTracker struct {
 	mu       sync.Mutex
 	scopes   map[string]string
 	channels map[string]string
+	omitted  bool
 }
 
 func newThreadSkipTracker() *threadSkipTracker {
@@ -727,6 +735,25 @@ func newThreadSkipTracker() *threadSkipTracker {
 		scopes:   make(map[string]string),
 		channels: make(map[string]string),
 	}
+}
+
+// Omitted work vetoes full coverage without entering the replies skip cache.
+// Workers share this monotonic fact; later successful pages cannot clear it.
+func (t *threadSkipTracker) RecordOmission() {
+	if t != nil {
+		t.mu.Lock()
+		t.omitted = true
+		t.mu.Unlock()
+	}
+}
+
+func (t *threadSkipTracker) Omitted() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.omitted
 }
 
 func (t *threadSkipTracker) Record(channelID, scope, reason string) {
@@ -800,7 +827,7 @@ func (c *Client) dmMissingScope(ctx context.Context, workspaceID string) string 
 		missing[scope] = struct{}{}
 	}
 
-	dms, err := c.fetchDMs(ctx, workspaceID)
+	dms, err := c.fetchDMs(ctx, workspaceID, nil)
 	if err != nil {
 		if isMissingScopeError(err) {
 			addMissing("im:read")

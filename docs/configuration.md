@@ -642,6 +642,15 @@ Individual `workspace_api` diagnostics and stored `status.thread_state` remain
 unchanged. Recent channel skips combine `api-bot` and `api-user`, newest first
 with channel-ID tie ordering and one limit of 20.
 
+If retained API work changes global coverage from full to partial, Doctor adds
+`slack_api.thread_coverage_reason = "retained_api_thread_work"` and displays
+`partial: retained API thread skips or pending work`. It does not describe a
+valid user session as missing. An already-partial global auth result keeps the
+authentication explanation, even when retained work also lowers the named
+aggregate. JSON omits an unset reason; `--format log` includes
+`thread_coverage_reason="-"`. With valid user auth and no recognized reason,
+human output reports `partial` without guessing the cause.
+
 ### Retained API threads
 
 Ordinary API sync and `--full` without `--since` revisit eligible roots already
@@ -677,12 +686,26 @@ preparation and concurrent-sync fairness remain follow-up work.
 
 Successful replies retire only the generation that was processed. Retained
 requests and writes recheck that generation and the parent's live ownership;
-deletion or renewal during a request discards its stale response. Full cleanup
+deletion or renewal during a request discards its stale response. Bulk retirement
+of unrelated legacy thread skips requires Full with no `--since`, no channel
+allow-list and no effective channel exclusions, after DM enumeration completes
+with DMs enabled and no conversation or message work omitted. Full cleanup also
 keeps thread-skip records while API replies work in that workspace is still
-pending; another workspace's pending work does not block cleanup. Remaining
-retained work runs after complete history traversal and before the completed history
-horizon is saved. A replies failure can therefore stop later channel or media
-work while preserving committed messages and the pending history interval.
+pending; another workspace's pending work does not block cleanup. Successful
+individual replies still clear their own skip
+during scoped runs. Remaining retained work runs after complete history traversal
+and before the completed history horizon is saved. A replies failure can therefore
+stop later channel or media work while preserving committed messages and the
+pending history interval.
+
+DM catalog filtering or missing scope, admission drops, recoverable history skips,
+unavailable retained roots, and channel or message ownership collisions keep this
+sync's recorded thread coverage partial. A later successful channel or concurrent
+thread completion does not erase that omission. Scoped
+runs retain unvisited diagnostics; successful scoped replies still clear their
+own skips. This does not add durable collision retry jobs or guarantee a later
+Doctor capability probe will report the same coverage.
+Static scope restrictions alone retain the existing scoped coverage behavior.
 
 When a retained root returns `thread_not_found`, its job remains pending with
 a root-specific skip and partial coverage. Healthy roots and later channels

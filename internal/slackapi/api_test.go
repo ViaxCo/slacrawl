@@ -940,6 +940,10 @@ func newMockSlackServer(t *testing.T) *mockSlackServer {
 			}
 			_, _ = w.Write([]byte(`{"ok":true,"team":"Test Team","team_id":"T123","user":"bot","user_id":"Ubot","bot_id":"B123"}`))
 		case "/conversations.list":
+			if mustFormValues(r).Get("types") == "im,mpim" {
+				_, _ = w.Write([]byte(`{"ok":true,"channels":[],"response_metadata":{"next_cursor":""}}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"ok":true,"channels":[{"id":"C123","name":"general","is_channel":true,"is_private":false,"is_archived":false,"is_shared":false,"is_general":true,"topic":{"value":"topic"},"purpose":{"value":"purpose"}}],"response_metadata":{"next_cursor":""}}`))
 		case "/conversations.history":
 			_, _ = w.Write([]byte(`{"ok":true,"messages":[{"type":"message","user":"U123","text":"root message","ts":"1710000000.000100","reply_count":1,"latest_reply":"1710000001.000200"}],"response_metadata":{"next_cursor":""}}`))
@@ -1976,7 +1980,7 @@ func TestSyncThreadRejectsRepeatedCursor(t *testing.T) {
 	defer cancel()
 	client := NewWithOptions(config.Tokens{Bot: "xoxb-test", User: "xoxp-test"}, server.URL+"/", server.Client())
 	client.sleep = func(context.Context, time.Duration) error { return nil }
-	_, err := client.syncThread(ctx, st, "T123", "C123", "1710000000.000100", false, now, nil)
+	_, err := client.syncThread(ctx, st, "T123", "C123", "1710000000.000100", false, now, nil, nil)
 	require.ErrorContains(t, err, `conversations.replies repeated cursor "stuck"`)
 	require.Equal(t, 2, calls)
 }

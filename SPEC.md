@@ -189,6 +189,13 @@ Nested `slack_api.thread_coverage` belongs to global-token diagnostics. Top-leve
 `api-user/thread_skip` rows or pending API thread work downgrade either full result to partial in both
 fields, without changing individual workspace diagnostics or persisted status.
 
+When retained work changes global coverage from full to partial, Doctor sets
+optional `slack_api.thread_coverage_reason` to `retained_api_thread_work`.
+Human output names the retained API skips or pending work instead of reporting
+missing user authentication. An already-partial global auth diagnosis keeps its
+original meaning; valid user auth without a recognized reason renders neutral
+`partial`. JSON omits an unset reason; log output includes it as `"-"`.
+
 ### `purge`
 
 Purpose:
@@ -425,6 +432,9 @@ Share config:
     - a corrected retry resumes the pending interval before clearing it
     - periodic repair uses the same scan completion rules; one-message capability probes only decode responses
     - existing channel skips and join attempts remain separately recorded
+    - bulk retirement of legacy API thread skips requires Full with no Since, no channel allow-list and no effective exclusions, plus completed DM enumeration and no observed omissions; the atomic same-workspace pending-work guard still applies
+    - DM catalog filtering or missing scope, admission drops, recoverable history skips, unavailable retained roots, and channel/history/reply collisions prevent this Sync from claiming full thread coverage; successful individual replies still retire their own work and skip
+    - static scope restrictions alone do not redefine other scoped coverage behavior. The omission fact belongs to this Sync; it does not create durable collision work or guarantee what a later Doctor capability probe reports
     - primary history uses `api-bot` rank 2 or `api-user` rank 1; workspace success records that source, coverage remains source-specific, and ordinary message reconciliation is unchanged
     - Tail and periodic repair keep their bot-owned catalog/history path; selecting a primary for Sync never reassigns the stored bot client
 

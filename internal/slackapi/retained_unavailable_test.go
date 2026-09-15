@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/store"
 )
@@ -105,4 +106,50 @@ func TestUnavailableScopedThreadStillFails(t *testing.T) {
 	pending, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='thread_pending_v1'")
 	require.NoError(t, err)
 	require.Empty(t, pending)
+}
+
+func TestUnavailableRetainedRootKeepsFullSyncPartialAfterConcurrentCompletion(t *testing.T) {
+	ctx := context.Background()
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+	const root = "1710000001.000000"
+	retainedOwnerSeed(t, st, root)
+	require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|legacy", "retained warning"))
+	completed := false
+	client := primaryOwnerClient(t, config.Tokens{User: "fixture-user"}, func(r *http.Request, form url.Values) (any, error) {
+		switch r.URL.Path {
+		case "/conversations.list":
+			channels := []any{}
+			if form.Get("types") != "im,mpim" {
+				channels = []any{
+					map[string]any{"id": "C123", "is_channel": true},
+					map[string]any{"id": "COTHER", "is_channel": true},
+				}
+			}
+			return map[string]any{"ok": true, "channels": channels}, nil
+		case "/conversations.replies":
+			return map[string]any{"ok": false, "error": "thread_not_found"}, nil
+		case "/conversations.history":
+			if form.Get("channel") == "COTHER" {
+				// Another worker completes the root after this scan observed its omission.
+				work, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+				require.NoError(t, err)
+				require.Len(t, work, 1)
+				completed, err = st.CompleteThreadWork(ctx, work[0], "T123|C123|"+root)
+				require.NoError(t, err)
+			}
+		}
+		return primaryOwnerResponse(r.URL.Path), nil
+	}).WithDMPolicy(admission.Include)
+	require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123", Full: true, Concurrency: 1}))
+	require.True(t, completed)
+	value, err := st.GetSyncState(ctx, SourceUser, "thread_skip", "T123|legacy")
+	require.NoError(t, err)
+	require.Equal(t, "retained warning", value)
+	archive, err := st.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "partial", archive.ThreadState)
+	work, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
+	require.NoError(t, err)
+	require.Empty(t, work)
 }
