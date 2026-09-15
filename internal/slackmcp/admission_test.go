@@ -535,7 +535,7 @@ func TestMCPNativeDefaultPayloadsAndReplay(t *testing.T) {
 				require.NoError(t, err)
 				rows, err := st.QueryReadOnly(context.Background(), "select raw_json from channels")
 				require.NoError(t, err)
-				require.Equal(t, `{"id":"CONE","name":"one","kind":"public_channel","topic":"","purpose":"","permalink":"","is_private":false,"is_archived":false}`, rows[0]["raw_json"])
+				require.Equal(t, `{"context_team_id":"TLOCAL","id":"CONE","is_im":true,"name":"one"}`, rows[0]["raw_json"])
 				rows, err = st.QueryReadOnly(context.Background(), "select raw_json from messages")
 				require.NoError(t, err)
 				require.Equal(t, `{"channel_id":"CONE","channel_name":"","ts":"1710000000.000001","thread_ts":"","author_id":"UEXTERNAL","author_name":"","occurred_at":"","text":"allowed","reply_count":0,"latest_reply":""}`, rows[0]["raw_json"])

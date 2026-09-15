@@ -9,7 +9,7 @@ import (
 )
 
 type ChannelRecord struct {
-	native     *referenceChannel // Ephemeral admission facts; never change archived payload JSON.
+	native     *referenceChannel // Typed admission facts and the original native object.
 	ID         string            `json:"id"`
 	Name       string            `json:"name"`
 	Kind       string            `json:"kind"`

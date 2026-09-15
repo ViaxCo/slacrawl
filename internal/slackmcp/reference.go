@@ -35,6 +35,7 @@ func (r referenceResponse) coverage() messageCoverage {
 }
 
 type referenceChannel struct {
+	raw json.RawMessage
 	admission.NativeFlags
 	ContextTeamID string            `json:"context_team_id"`
 	Latest        *referenceMessage `json:"latest"`
@@ -47,6 +48,20 @@ type referenceChannel struct {
 	Purpose struct {
 		Value string `json:"value"`
 	} `json:"purpose"`
+}
+
+// Keep the delivered object, including absent or duplicate fields, separately
+// from typed admission facts. Re-encoding those facts would invent evidence.
+// Preserve normal JSON merging when a repeated catalog reuses a slice element.
+func (c *referenceChannel) UnmarshalJSON(data []byte) error {
+	type decodedChannel referenceChannel
+	decoded := decodedChannel(*c)
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*c = referenceChannel(decoded)
+	c.raw = append(json.RawMessage(nil), data...)
+	return nil
 }
 
 type referenceUser struct {

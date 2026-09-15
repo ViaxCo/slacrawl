@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve exact native MCP channel objects when inserting new archive channels, so later selection can inspect the delivered type and identity evidence. Keep missing and conflicting fields intact without retaining the whole catalog. Existing channels, human-text records and direct-ID stubs stay unchanged; routine sync does not repair older lossy metadata or certify DM origin/content safety.
+
 - Add an internal two-file projection artifact writer and independent verifier. Exclusively create a fresh destination, preserve explicit message fields and nullable values, and verify canonical JSON, expected content, checksums and file identities before returning a receipt. Failed output remains for inspection; this adds no CLI/Git integration or publication approval and makes no atomic visibility or crash-durability claim.
 
 - Add an internal read-only selection core for future export projections. Bind explicit workspace/channel/message rows, require retained native public-channel evidence and selected thread parents, and resolve only explicit labels and message fields with keep/replace text choices. Private plans are serializable; no CLI, output writer or publication path is added, and current type evidence does not certify historical origin or content safety.
