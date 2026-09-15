@@ -631,6 +631,33 @@ optional release notifier that runs before CLI dispatch.
 6. record last import timestamps in `sync_state`
 7. copy eligible cached media when enabled, verify its hashes, and preserve destination-only media during routine merges
 
+### Private export selection core
+
+`internal/share` prepares and resolves a versioned, JSON-serializable private
+selection plan from an existing archive file. Each operation opens the Store
+read-only and selects explicit workspace, channel and message identities in one
+transaction. SQLite URIs and in-memory sources are outside this file contract.
+Per-record hashes bind exact scalar values, including SQL NULL versus empty
+text, plus raw-payload hashes. Source changes reject resolution; derived search,
+profile and unselected rows are not part of the selection.
+
+Selected channels must have a recognized stored public kind, no stored private
+flag, and retained native `is_channel=true` with explicit false private/group/IM/
+MPIM flags. Reject malformed, duplicated or conflicting recognized identity/type
+fields. Missing native evidence, including archived MCP channel records that
+omit these flags, cannot qualify. Drafts and deleted messages are ineligible.
+Replies require their selected eligible root in the same channel; selection
+never adds parents, profiles or other rows implicitly.
+
+The projection contains workspace/channel IDs and explicit labels (IDs by
+default), then message channel ID, timestamp, user ID, chosen text, thread
+timestamp and edit timestamp. Text requires an explicit keep or replace choice;
+replacement may be empty. Nullable emitted scalars preserve NULL versus empty.
+Raw payloads, source bindings, deletion/draft metadata and derived content remain
+private. This core has no CLI, file writer or publishing path. Current native
+type evidence does not establish lifetime DM origin or review quoted private
+content. Operators remain responsible for selection, labels and text choices.
+
 ### Desktop-local sync
 
 1. discover the Slack Desktop path

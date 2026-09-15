@@ -28,6 +28,27 @@ behavior, including archived DMs and drafts. Intake settings do not purge those
 rows or certify a snapshot as safe to publish. The publication gate does not
 change the optional release notifier that runs before command dispatch.
 
+## Selection core for future projections
+
+The internal selection API prepares a private, versioned plan for explicitly
+chosen workspace, channel and message IDs. It reads an existing archive without
+initializing or repairing it, binds the selected scalar values and raw hashes,
+and rejects changed source rows when resolving the plan. Plans contain private
+bindings and text choices; they are not shareable output or publication approval.
+
+The in-memory result includes explicit labels (IDs by default), message author
+IDs, text selected with keep/replace, and thread/edit timestamps. It omits raw
+payloads, profiles, source and deletion/draft metadata, and derived indexes.
+Replies require an explicitly selected parent. Channels need unambiguous retained
+native public-channel flags as well as a public stored kind; sparse or archived
+MCP metadata without those flags remains unqualified.
+
+There is no selection command, output writer or publication integration yet.
+Current channel type cannot prove that a conversation was never a DM, and kept
+or replacement text can quote private content. Selection, labels and content
+review remain the operator's responsibility; this is not a complete sanitizer.
+Legacy snapshot publishing and its DM-exclusion gate remain unchanged.
+
 ## Configure the archive
 
 Add a share block to the publisher's config:
