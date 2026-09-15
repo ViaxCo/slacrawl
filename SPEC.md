@@ -398,7 +398,14 @@ Share config:
    - collapse odd whitespace for stable FTS / mention extraction
 13. upsert canonical rows
 14. update FTS rows and mentions
-15. write checkpoints, channel skips, and join attempts
+15. follow every nonempty history/replies cursor, including short or empty pages
+    - after valid page writes and scheduled thread work, reject terminal `has_more = true` without a continuation cursor
+    - retain history `is_limited = true` across accessible pages and report requested-interval completeness as uncertified after traversal; this does not prove that a particular bounded interval has missing rows
+    - concrete request, decoding, identity, timestamp, store, and thread failures retain precedence
+16. write successful coverage only after these checks; failures preserve valid writes, previous `Latest`/`Complete`, and attempted `Pending`, without advancing ordinary workspace success
+    - a corrected retry resumes the pending interval before clearing it
+    - periodic repair uses the same scan completion rules; one-message capability probes only decode responses
+    - existing channel skips and join attempts remain separately recorded
 
 ### Slack export import
 

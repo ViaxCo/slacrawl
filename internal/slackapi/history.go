@@ -73,6 +73,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 	cursor := ""
 	seen := map[string]bool{}
 	joined := false
+	historyLimited := false
 	for {
 		resp, err := c.getConversationHistory(ctx, source.token, &slack.GetConversationHistoryParameters{
 			ChannelID: channel.ID,
@@ -104,6 +105,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 			return fmt.Errorf("channel %s history: %w", channel.ID, err)
 		}
+		historyLimited = historyLimited || resp.IsLimited
 		if err := validateMessagePage(resp.Messages, channel.ID); err != nil {
 			return fmt.Errorf("channel %s history: %w", channel.ID, err)
 		}
@@ -151,6 +153,9 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 		}
 		if resp.NextCursor == "" {
+			if resp.HasMore {
+				return errors.New("conversations.history returned has_more without a continuation cursor; scan remains incomplete; slacrawl does not support timestamp pagination")
+			}
 			break
 		}
 		if seen[resp.NextCursor] {
@@ -158,6 +163,11 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		}
 		seen[resp.NextCursor] = true
 		cursor = resp.NextCursor
+	}
+	// A later accessible page cannot certify an earlier limited response.
+	// Keep the old completed horizon and pending interval for a retry.
+	if historyLimited {
+		return errors.New("Slack reported a history/message limit; completeness of the requested interval is uncertified; review workspace history availability")
 	}
 	coverage.Latest = horizon
 	coverage.Complete = true
@@ -204,6 +214,9 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 			}
 		}
 		if resp.NextCursor == "" {
+			if resp.HasMore {
+				return errors.New("conversations.replies returned has_more without a continuation cursor; scan remains incomplete; slacrawl does not support timestamp pagination")
+			}
 			return nil
 		}
 		if seen[resp.NextCursor] {
