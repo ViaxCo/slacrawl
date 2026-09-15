@@ -86,11 +86,14 @@ type SyncStateWrite struct {
 }
 
 type WriteBatch struct {
-	Workspaces []Workspace
-	Channels   []Channel
-	Users      []User
-	Messages   []MessageWrite
-	SyncStates []SyncStateWrite
+	Workspaces      []Workspace
+	Channels        []Channel
+	Users           []User
+	Messages        []MessageWrite
+	SyncStates      []SyncStateWrite
+	PendingThreads  []ThreadWork
+	ThreadGuard     *ThreadWork
+	ThreadDiscovery *ThreadWorkDiscovery
 }
 
 type CollisionSkip struct {
@@ -102,6 +105,8 @@ type CollisionSkip struct {
 type WriteBatchResult struct {
 	MessagesWritten   int
 	CollisionsSkipped []CollisionSkip
+	PendingThreads    []ThreadWork
+	ThreadWorkRevoked bool
 }
 
 type Mention struct {

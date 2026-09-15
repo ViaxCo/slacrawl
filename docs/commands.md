@@ -68,6 +68,11 @@ more pages or a Slack history/message limit, `sync --source mcp` (alias
 preserves the previous successful workspace sync record. See
 [native response coverage](configuration.md#native-response-coverage).
 
+Ordinary API sync revisits retained thread roots and resumes saved replies work.
+`--full` does too; explicit `--since`, `--full --since` and Tail repair leave the
+ordinary backlog untouched. Replies need user authentication; unavailable replies
+keep partial coverage and pending work. See [Retained API threads](configuration.md#retained-api-threads).
+
 Import a workspace export with an explicit workspace ID:
 
 ```sh

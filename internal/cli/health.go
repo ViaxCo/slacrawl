@@ -108,7 +108,11 @@ func (a *App) runDoctor(ctx context.Context, configPath string, args []string, f
 			if err != nil {
 				return err
 			}
-			if hasThreadSkips {
+			hasPendingThreads, err := st.HasSyncStateType(ctx, slackapi.SourceUser, store.ThreadPendingEntityType)
+			if err != nil {
+				return err
+			}
+			if hasThreadSkips || hasPendingThreads {
 				threadCoverage = "partial"
 				diag.ThreadCoverage = threadCoverage
 			}
@@ -373,7 +377,10 @@ select
     when source_name = 'share' then 'backup'
     else source_name
   end as source,
-  max(updated_at) as last_seen_at,
+  coalesce(max(case
+    when entity_type = 'thread_pending_v1' and source_name in ('api-user', 'mcp') then null
+    else updated_at
+  end), '') as last_seen_at,
   count(*) as sync_entries
 from sync_state
 where source_name != 'doctor'
