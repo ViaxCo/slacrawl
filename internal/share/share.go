@@ -98,6 +98,15 @@ func ValidateImportPolicy(policy admission.DMPolicy) error {
 	return nil
 }
 
+// ValidateExportPolicy precedes archive and Git work because legacy snapshots
+// cannot exclude all DM-derived content already present in the archive.
+func ValidateExportPolicy(policy admission.DMPolicy) error {
+	if policy == admission.Exclude {
+		return errors.New("legacy Git share exports cannot enforce sync.include_dms=false; keep this archive local")
+	}
+	return nil
+}
+
 func EnsureRepo(ctx context.Context, opts Options) error {
 	return mirror.EnsureRepo(ctx, mirrorOptions(opts))
 }
@@ -150,6 +159,9 @@ func CreateImmutableTag(ctx context.Context, opts Options) (string, error) {
 }
 
 func Export(ctx context.Context, s *store.Store, opts Options) (Manifest, error) {
+	if err := ValidateExportPolicy(opts.DMPolicy); err != nil {
+		return Manifest{}, err
+	}
 	if opts.IncludeMedia && strings.TrimSpace(opts.CacheDir) != "" {
 		var manifest Manifest
 		err := media.WithCacheLock(ctx, opts.CacheDir, func() error {
