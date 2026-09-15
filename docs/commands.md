@@ -53,6 +53,12 @@ slacrawl sync --source wiretap
 
 Slack API pagination, including the member directory (`users.list`), stops with a `repeated cursor` error if a response revisits a page cursor, preventing a stuck sync. Pages already stored remain available for the next incremental sync.
 
+Native reference MCP history/replies require `ok=true`. If a response reports
+more pages or a Slack history/message limit, `sync --source mcp` (alias
+`connector`) keeps valid fetched writes but exits with an actionable error and
+preserves the previous successful workspace sync record. See
+[native response coverage](configuration.md#native-response-coverage).
+
 Import a workspace export with an explicit workspace ID:
 
 ```sh
