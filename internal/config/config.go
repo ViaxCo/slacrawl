@@ -450,13 +450,6 @@ func (c Config) ShareMediaEnabled() bool {
 	return *c.Share.Media
 }
 
-func (c Config) IncludeDMsResolved(hasUserToken bool) bool {
-	if c.Sync.IncludeDMs != nil {
-		return *c.Sync.IncludeDMs
-	}
-	return hasUserToken
-}
-
 func EnsureRuntimeDirs(c Config) error {
 	paths := []string{
 		filepath.Dir(c.DBPath),

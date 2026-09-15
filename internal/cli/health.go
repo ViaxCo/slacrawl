@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/openclaw/crawlkit/control"
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/config"
 	"github.com/openclaw/slacrawl/internal/share"
 	"github.com/openclaw/slacrawl/internal/slackapi"
@@ -67,7 +68,7 @@ func (a *App) runDoctor(ctx context.Context, configPath string, args []string, f
 		return err
 	}
 	tokens := cfg.ResolveTokens()
-	diag, err := slackapi.New(tokens).WithIncludeDMs(cfg.IncludeDMsResolved(tokens.User != "")).Doctor(ctx)
+	diag, err := slackapi.New(tokens).WithDMPolicy(admission.FromConfig(cfg.Sync.IncludeDMs)).Doctor(ctx)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
@@ -250,7 +251,7 @@ func (a *App) workspaceDoctorReports(ctx context.Context, cfg config.Config) ([]
 	reports := make([]map[string]any, 0, len(workspaceIDs))
 	for _, workspaceID := range workspaceIDs {
 		tokens := cfg.ResolveTokensForWorkspace(workspaceID)
-		diag, err := slackapi.New(tokens).WithIncludeDMs(cfg.IncludeDMsResolved(tokens.User != "")).Doctor(ctx)
+		diag, err := slackapi.New(tokens).WithDMPolicy(admission.FromConfig(cfg.Sync.IncludeDMs)).Doctor(ctx)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			return nil, fmt.Errorf("doctor %s: %w", workspaceID, err)
 		}

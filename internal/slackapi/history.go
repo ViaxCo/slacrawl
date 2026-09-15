@@ -104,6 +104,9 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 			return fmt.Errorf("channel %s history: %w", channel.ID, err)
 		}
+		if err := validateMessagePage(resp.Messages, channel.ID); err != nil {
+			return fmt.Errorf("channel %s history: %w", channel.ID, err)
+		}
 		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(resp.Messages))}
 		threadTSs := make([]string, 0)
 		queuedThreads := map[string]struct{}{}
@@ -174,6 +177,9 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 		})
 		if err != nil {
 			return err
+		}
+		if err := validateMessagePage(resp.Messages, channelID); err != nil {
+			return fmt.Errorf("channel %s replies: %w", channelID, err)
 		}
 		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(resp.Messages))}
 		for _, rawMsg := range resp.Messages {
@@ -337,6 +343,10 @@ func (c *Client) warnLogger() *slog.Logger {
 func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions, now time.Time, userRepliesAvailable bool, source channelSyncSource) error {
 	if len(channels) == 0 {
 		return nil
+	}
+	channels, err := c.admitChannels(workspaceID, channels)
+	if err != nil || len(channels) == 0 {
+		return err
 	}
 	source.coverageScope = opts.Since
 	channels, oldestByChannel, err := c.channelSyncPlan(ctx, st, workspaceID, channels, opts, source.sourceName)
@@ -629,7 +639,7 @@ func isMissingScopeError(err error) bool {
 }
 
 func (c *Client) dmMissingScope(ctx context.Context, workspaceID string) string {
-	if !c.includeDMs || c.user == nil {
+	if !c.dmPolicy.Enabled(c.tokens.User != "") || c.user == nil {
 		return ""
 	}
 	missing := make(map[string]struct{})
