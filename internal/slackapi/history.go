@@ -2,8 +2,6 @@ package slackapi
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,7 +16,7 @@ import (
 	"github.com/openclaw/slacrawl/internal/store"
 )
 
-func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.Store, workspaceID string, channel slack.Channel, oldest string, restoreRequested bool, now time.Time, userRepliesAvailable bool, source channelSyncSource) error {
+func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.Store, workspaceID string, channel slack.Channel, opts store.APIHistoryOptions, now time.Time, userRepliesAvailable bool, source channelSyncSource) error {
 	if source.token == "" {
 		return errors.New("history token is required")
 	}
@@ -28,31 +26,23 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 	if source.sourceRank == 0 {
 		source.sourceRank = 2
 	}
-	retentionFloor, err := st.ChannelRetentionFloor(ctx, workspaceID, channel.ID)
+	attempt, err := st.BeginAPIHistory(ctx, store.APIHistoryScope{
+		SourceName: source.sourceName, WorkspaceID: workspaceID, ChannelID: channel.ID, Since: source.coverageScope,
+	}, opts, fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000))
 	if err != nil {
 		return err
 	}
-	enforceRetention := store.ShouldEnforceRetention(oldest, retentionFloor, restoreRequested)
-	if !enforceRetention {
-		retentionFloor = ""
-	}
-	coverage, err := loadHistoryCoverage(ctx, st, source.sourceName, workspaceID, channel.ID, source.coverageScope)
-	if err != nil {
-		return err
-	}
-	coverage.Pending = &oldest
-	if err := saveHistoryCoverage(ctx, st, source.sourceName, workspaceID, channel.ID, source.coverageScope, coverage); err != nil {
-		return err
-	}
-	horizon := fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000)
-	inclusive := retentionFloor != "" && oldest == retentionFloor
+	oldest, horizon := attempt.Oldest, attempt.Latest
+	enforceRetention, inclusive := attempt.EnforceRetention, attempt.Inclusive
+	checkAttempt := func() error { return st.CheckAPIHistory(ctx, attempt) }
+	historyIncomplete := false
 	syncedThreads := map[string]struct{}{}
 	pendingThreads := map[string]store.ThreadWork{}
 	completedThreads := map[string]struct{}{}
 	var discovery *store.ThreadWorkDiscovery
 	if source.retainedThreads {
 		discovery = &store.ThreadWorkDiscovery{SourceName: SourceUser, WorkspaceID: workspaceID, ChannelID: channel.ID, ExcludedTS: completedThreads}
-		work, err := st.PrepareThreadWork(ctx, SourceUser, workspaceID, channel.ID)
+		work, err := st.PrepareThreadWork(ctx, SourceUser, workspaceID, channel.ID, &attempt)
 		if err != nil {
 			return err
 		}
@@ -61,6 +51,9 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		}
 	}
 	syncThreadOnce := func(threadTS string) error {
+		if err := checkAttempt(); err != nil {
+			return err
+		}
 		if _, ok := syncedThreads[threadTS]; ok {
 			return nil
 		}
@@ -75,12 +68,10 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		}
 		threadKey := workspaceID + "|" + channel.ID + "|" + threadTS
 		saveSkip := func(reason string) (bool, error) {
-			if work == nil {
-				return true, st.SetSyncState(ctx, SourceUser, "thread_skip", threadKey, reason)
-			}
 			result, err := st.ApplyWriteBatch(ctx, store.WriteBatch{
-				ThreadGuard: work,
-				SyncStates:  []store.SyncStateWrite{{SourceName: SourceUser, EntityType: "thread_skip", EntityID: threadKey, Value: reason}},
+				HistoryGuard: &attempt,
+				ThreadGuard:  work,
+				SyncStates:   []store.SyncStateWrite{{SourceName: SourceUser, EntityType: "thread_skip", EntityID: threadKey, Value: reason}},
 			})
 			return !result.ThreadWorkRevoked, err
 		}
@@ -93,7 +84,10 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 				return err
 			}
 		}
-		outcome, err := c.syncThread(ctx, st, workspaceID, channel.ID, threadTS, enforceRetention, now, work, source.threadSkip)
+		outcome, err := c.syncThread(ctx, st, workspaceID, channel.ID, threadTS, enforceRetention, now, work, source.threadSkip, &attempt)
+		if outcome == threadSyncIncomplete {
+			historyIncomplete = true
+		}
 		if outcome == threadSyncUnattempted {
 			return err
 		}
@@ -117,23 +111,29 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 			return err
 		}
-		if outcome == threadSyncRevoked {
+		if outcome == threadSyncRevoked || outcome == threadSyncIncomplete {
 			return nil
 		}
 		if work != nil {
-			completed, err := st.CompleteThreadWork(ctx, *work, threadKey)
+			completed, err := st.CompleteThreadWork(ctx, *work, threadKey, &attempt)
 			if completed {
 				completedThreads[threadTS] = struct{}{}
 			}
 			return err
 		}
-		err = st.DeleteSyncState(ctx, SourceUser, "thread_skip", threadKey)
+		_, err = st.ApplyWriteBatch(ctx, store.WriteBatch{HistoryGuard: &attempt, SyncStateDeletes: []store.SyncStateDelete{{SourceName: SourceUser, EntityType: "thread_skip", EntityID: threadKey}}})
 		if err == nil {
 			completedThreads[threadTS] = struct{}{}
 		}
 		return err
 	}
 
+	saveChannelState := func(entityType, value string) error {
+		_, err := st.ApplyWriteBatch(ctx, store.WriteBatch{HistoryGuard: &attempt, SyncStates: []store.SyncStateWrite{
+			{SourceName: source.sourceName, EntityType: entityType, EntityID: channel.ID, Value: value},
+		}})
+		return err
+	}
 	cursor := ""
 	seen := map[string]bool{}
 	joined := false
@@ -146,28 +146,34 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			Oldest:    oldest,
 			Latest:    horizon,
 			Inclusive: inclusive,
-		})
+		}, checkAttempt)
 		if err != nil {
 			if source.skipMissingScope && isMissingScopeError(err) {
 				source.threadSkip.RecordOmission()
-				return st.SetSyncState(ctx, source.sourceName, "channel_skip", channel.ID, "missing_scope")
+				return saveChannelState("channel_skip", "missing_scope")
 			}
 			if source.allowJoin && !joined && channelSkipReason(err) == "not_in_channel" && !channel.IsPrivate {
+				if err := checkAttempt(); err != nil {
+					return err
+				}
 				joinErr := c.joinConversation(ctx, channel.ID)
+				if err := checkAttempt(); err != nil {
+					return err
+				}
 				if joinErr == nil {
 					joined = true
-					if setErr := st.SetSyncState(ctx, source.sourceName, "channel_join", channel.ID, "joined"); setErr != nil {
+					if setErr := saveChannelState("channel_join", "joined"); setErr != nil {
 						return setErr
 					}
 					continue
 				}
-				if setErr := st.SetSyncState(ctx, source.sourceName, "channel_join", channel.ID, "failed:"+joinErr.Error()); setErr != nil {
+				if setErr := saveChannelState("channel_join", "failed:"+joinErr.Error()); setErr != nil {
 					return setErr
 				}
 			}
 			if isChannelHistorySkipped(err) {
 				source.threadSkip.RecordOmission()
-				return st.SetSyncState(ctx, source.sourceName, "channel_skip", channel.ID, channelSkipReason(err))
+				return saveChannelState("channel_skip", channelSkipReason(err))
 			}
 			return fmt.Errorf("channel %s history: %w", channel.ID, err)
 		}
@@ -175,7 +181,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		if err := validateMessagePage(resp.Messages, channel.ID); err != nil {
 			return fmt.Errorf("channel %s history: %w", channel.ID, err)
 		}
-		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(resp.Messages)), ThreadDiscovery: discovery}
+		batch := store.WriteBatch{HistoryGuard: &attempt, Messages: make([]store.MessageWrite, 0, len(resp.Messages)), ThreadDiscovery: discovery}
 		threadTSs := make([]string, 0)
 		queuedThreads := map[string]struct{}{}
 		for _, rawMsg := range resp.Messages {
@@ -202,11 +208,12 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 		}
 		collidedTSs := map[string]struct{}{}
-		if len(batch.Messages) > 0 {
+		{
 			result, err := st.ApplyWriteBatch(ctx, batch)
 			if err != nil {
 				return err
 			}
+			historyIncomplete = historyIncomplete || len(result.CollisionsSkipped) > 0
 			for _, skip := range result.CollisionsSkipped {
 				source.threadSkip.RecordOmission()
 				c.skipMessageCollision(skip.Err, workspaceID, skip.ChannelID, skip.TS)
@@ -247,7 +254,7 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 		if err != nil {
 			return err
 		}
-		batch := store.WriteBatch{ThreadDiscovery: discovery}
+		batch := store.WriteBatch{HistoryGuard: &attempt, ThreadDiscovery: discovery}
 		for _, root := range roots {
 			batch.PendingThreads = append(batch.PendingThreads, store.ThreadWork{SourceName: SourceUser, WorkspaceID: workspaceID, ChannelID: channel.ID, TS: root.TS})
 		}
@@ -273,10 +280,12 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 		}
 	}
-	coverage.Latest = horizon
-	coverage.Complete = true
-	coverage.Pending = nil
-	return saveHistoryCoverage(ctx, st, source.sourceName, workspaceID, channel.ID, source.coverageScope, coverage)
+	// Keep the exact attempted interval and its prior completed horizon when
+	// any page omitted a collision, without vetoing another channel's progress.
+	if historyIncomplete {
+		return st.CheckAPIHistory(ctx, attempt)
+	}
+	return st.CompleteAPIHistory(ctx, attempt)
 }
 
 type threadSyncResult uint8
@@ -285,22 +294,39 @@ const (
 	threadSyncComplete threadSyncResult = iota
 	threadSyncRevoked
 	threadSyncUnattempted
+	threadSyncIncomplete
 )
 
-func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID string, channelID string, threadTS string, enforceRetention bool, now time.Time, work *store.ThreadWork, skips *threadSkipTracker) (threadSyncResult, error) {
+func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID string, channelID string, threadTS string, enforceRetention bool, now time.Time, work *store.ThreadWork, skips *threadSkipTracker, history *store.APIHistoryAttempt) (threadSyncResult, error) {
 	cursor := ""
 	seen := map[string]bool{}
 	// Rejection before the first request must leave a later page free to
 	// process newly admitted work; revocation after a request still counts.
 	revokedResult := threadSyncUnattempted
+	outcome := threadSyncComplete
+	revokedOutcome := func(fallback threadSyncResult) threadSyncResult {
+		if outcome == threadSyncIncomplete {
+			return outcome
+		}
+		return fallback
+	}
+	checkAttempt := func() error {
+		if history != nil {
+			return st.CheckAPIHistory(ctx, *history)
+		}
+		return ctx.Err()
+	}
 	for {
+		if err := checkAttempt(); err != nil {
+			return revokedOutcome(revokedResult), err
+		}
 		if work != nil {
 			current, err := st.ThreadWorkCurrent(ctx, *work)
 			if err != nil {
-				return revokedResult, err
+				return revokedOutcome(revokedResult), err
 			}
 			if !current {
-				return revokedResult, nil
+				return revokedOutcome(revokedResult), nil
 			}
 		}
 		revokedResult = threadSyncRevoked
@@ -309,23 +335,29 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 			Timestamp: threadTS,
 			Cursor:    cursor,
 			Limit:     200,
-		})
+		}, checkAttempt)
+		if err := checkAttempt(); err != nil {
+			return revokedOutcome(revokedResult), err
+		}
 		if work != nil {
 			current, checkErr := st.ThreadWorkCurrent(ctx, *work)
 			if checkErr != nil {
-				return threadSyncComplete, checkErr
+				return outcome, checkErr
 			}
 			if !current {
-				return threadSyncRevoked, nil
+				return revokedOutcome(threadSyncRevoked), nil
 			}
 		}
 		if err != nil {
-			return threadSyncComplete, err
+			return outcome, err
 		}
 		if err := validateMessagePage(resp.Messages, channelID); err != nil {
-			return threadSyncComplete, fmt.Errorf("channel %s replies: %w", channelID, err)
+			return outcome, fmt.Errorf("channel %s replies: %w", channelID, err)
 		}
-		batch := store.WriteBatch{Messages: make([]store.MessageWrite, 0, len(resp.Messages)), ThreadGuard: work}
+		batch := store.WriteBatch{HistoryGuard: history, Messages: make([]store.MessageWrite, 0, len(resp.Messages)), ThreadGuard: work}
+		if work == nil {
+			batch.PendingThreadOnCollision = &store.ThreadWork{SourceName: SourceUser, WorkspaceID: workspaceID, ChannelID: channelID, TS: threadTS}
+		}
 		for _, rawMsg := range resp.Messages {
 			msg := rawMsg.Message
 			if msg.Channel == "" {
@@ -340,13 +372,16 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 		}
 		// Empty guarded pages also establish whether this generation still owns
 		// the response before cursor traversal or completion.
-		if len(batch.Messages) > 0 || work != nil {
+		if len(batch.Messages) > 0 || work != nil || history != nil {
 			result, err := st.ApplyWriteBatch(ctx, batch)
 			if err != nil {
-				return threadSyncComplete, err
+				return outcome, err
 			}
 			if result.ThreadWorkRevoked {
-				return threadSyncRevoked, nil
+				return revokedOutcome(threadSyncRevoked), nil
+			}
+			if len(result.CollisionsSkipped) > 0 {
+				outcome = threadSyncIncomplete
 			}
 			for _, skip := range result.CollisionsSkipped {
 				skips.RecordOmission()
@@ -355,12 +390,12 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 		}
 		if resp.NextCursor == "" {
 			if resp.HasMore {
-				return threadSyncComplete, errors.New("conversations.replies returned has_more without a continuation cursor; scan remains incomplete; slacrawl does not support timestamp pagination")
+				return outcome, errors.New("conversations.replies returned has_more without a continuation cursor; scan remains incomplete; slacrawl does not support timestamp pagination")
 			}
-			return threadSyncComplete, nil
+			return outcome, nil
 		}
 		if seen[resp.NextCursor] {
-			return threadSyncComplete, errors.New("conversations.replies repeated cursor")
+			return outcome, errors.New("conversations.replies repeated cursor")
 		}
 		seen[resp.NextCursor] = true
 		cursor = resp.NextCursor
@@ -502,7 +537,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 	}
 	source.coverageScope = opts.Since
 	source.retainedThreads = opts.ordinarySync && opts.Since == ""
-	channels, oldestByChannel, err := c.channelSyncPlan(ctx, st, workspaceID, channels, opts, source.sourceName)
+	channels, historyOptions, err := c.channelSyncPlan(ctx, st, workspaceID, channels, opts)
 	if err != nil {
 		return err
 	}
@@ -516,7 +551,6 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 	if workerCount > len(channels) {
 		workerCount = len(channels)
 	}
-	restoreRequested := !opts.enforceRetention && (opts.Since != "" || opts.Full)
 	tracker := progress.New(c.logger, progress.Options{
 		Name:  "sync",
 		Unit:  "channels",
@@ -534,7 +568,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 				source.threadSkip.RecordOmission()
 				continue
 			}
-			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, oldestByChannel[channel.ID], restoreRequested, now, userRepliesAvailable, source); err != nil {
+			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, historyOptions, now, userRepliesAvailable, source); err != nil {
 				tracker.Finish(err)
 				return err
 			}
@@ -566,7 +600,7 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 				source.threadSkip.RecordOmission()
 				continue
 			}
-			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, oldestByChannel[channel.ID], restoreRequested, now, userRepliesAvailable, source); err != nil {
+			if err := c.syncChannelMessagesWithSource(ctx, st, workspaceID, channel, historyOptions, now, userRepliesAvailable, source); err != nil {
 				select {
 				case errCh <- err:
 				default:
@@ -618,97 +652,34 @@ func (c *Client) syncChannelsWithSource(ctx context.Context, st *store.Store, wo
 	}
 }
 
-func (c *Client) channelSyncPlan(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions, sources ...string) ([]slack.Channel, map[string]string, error) {
-	out := make(map[string]string, len(channels))
-	if opts.Since != "" {
-		for _, channel := range channels {
-			out[channel.ID] = opts.Since
-		}
-		return channels, out, nil
+func (c *Client) channelSyncPlan(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions) ([]slack.Channel, store.APIHistoryOptions, error) {
+	options := store.APIHistoryOptions{Full: opts.Full, RestoreRequested: !opts.enforceRetention && (opts.Since != "" || opts.Full)}
+	if opts.Since != "" || opts.Full || !opts.LatestOnly {
+		return channels, options, nil
 	}
-	if opts.Full {
-		return channels, out, nil
-	}
-
 	cursors, err := st.ChannelSyncCursors(ctx, workspaceID)
 	if err != nil {
-		return nil, nil, err
+		return nil, options, err
 	}
 	latestByChannel := make(map[string]store.ChannelSyncCursor, len(cursors))
 	for _, cursor := range cursors {
 		latestByChannel[cursor.ID] = cursor
 	}
 	selected := make([]slack.Channel, 0, len(channels))
-	source := SourceBot
-	if len(sources) > 0 && sources[0] != "" {
-		source = sources[0]
-	}
 	for _, channel := range channels {
 		cursor, ok := latestByChannel[channel.ID]
 		if !ok {
-			floor, err := st.ChannelRetentionFloor(ctx, workspaceID, channel.ID)
-			if err != nil {
-				return nil, nil, err
-			}
 			seeded, err := st.ChannelRetentionSeeded(ctx, workspaceID, channel.ID)
 			if err != nil {
-				return nil, nil, err
+				return nil, options, err
 			}
-			cursor = store.ChannelSyncCursor{ID: channel.ID, RetentionFloor: floor, RetentionSeeded: seeded}
+			cursor.RetentionSeeded = seeded
 		}
-		if opts.LatestOnly && cursor.LatestTS == "" && !cursor.RetentionSeeded {
-			continue
+		if cursor.LatestTS != "" || cursor.RetentionSeeded {
+			selected = append(selected, channel)
 		}
-		selected = append(selected, channel)
-		coverage, err := loadHistoryCoverage(ctx, st, source, workspaceID, channel.ID, "")
-		if err != nil {
-			return nil, nil, err
-		}
-		oldest := ""
-		if coverage.Pending != nil {
-			oldest = *coverage.Pending
-		} else if coverage.Complete {
-			oldest = repairOldest(coverage.Latest, time.Hour)
-		}
-		out[channel.ID] = cursor.ApplyRetentionFloor(oldest)
 	}
-	return selected, out, nil
-}
-
-// A saved message is an observation, not evidence that all older pages were
-// read. Keep the in-flight interval until the complete request chain succeeds.
-type historyCoverage struct {
-	Complete bool    `json:"complete"`
-	Latest   string  `json:"latest"` // Completed request horizon, including empty history.
-	Pending  *string `json:"pending,omitempty"`
-}
-
-func historyCoverageKey(workspaceID, channelID, since string) string {
-	key, _ := json.Marshal([]string{workspaceID, channelID, since})
-	return string(key)
-}
-
-func loadHistoryCoverage(ctx context.Context, st *store.Store, source, workspaceID, channelID, since string) (historyCoverage, error) {
-	raw, err := st.GetSyncState(ctx, source, "history_coverage_v1", historyCoverageKey(workspaceID, channelID, since))
-	if errors.Is(err, sql.ErrNoRows) {
-		return historyCoverage{}, nil
-	}
-	if err != nil {
-		return historyCoverage{}, err
-	}
-	var coverage historyCoverage
-	if err := json.Unmarshal([]byte(raw), &coverage); err != nil {
-		return historyCoverage{}, fmt.Errorf("invalid API history coverage checkpoint: %w", err)
-	}
-	return coverage, nil
-}
-
-func saveHistoryCoverage(ctx context.Context, st *store.Store, source, workspaceID, channelID, since string, coverage historyCoverage) error {
-	raw, err := json.Marshal(coverage)
-	if err != nil {
-		return err
-	}
-	return st.SetSyncState(ctx, source, "history_coverage_v1", historyCoverageKey(workspaceID, channelID, since), string(raw))
+	return selected, options, nil
 }
 
 func isChannelHistorySkipped(err error) bool {
@@ -872,7 +843,7 @@ func (c *Client) probeDMAccess(ctx context.Context, workspaceID string) (string,
 		_, historyErr := c.getConversationHistory(ctx, c.tokens.User, &slack.GetConversationHistoryParameters{
 			ChannelID: sample.channelID,
 			Limit:     1,
-		})
+		}, nil)
 		if ctx.Err() != nil {
 			return joinScopes(missing), failure, ctx.Err()
 		}

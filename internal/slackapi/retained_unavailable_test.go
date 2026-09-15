@@ -39,7 +39,7 @@ func TestUnavailableRetainedRootDoesNotBlockHealthyWork(t *testing.T) {
 		}, nil))
 	}
 	for _, channel := range []string{"C123", "COTHER"} {
-		require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", channel, "", historyCoverage{
+		require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", channel, "", store.APIHistoryState{
 			Complete: true, Latest: "1710100000.000000",
 		}))
 	}
@@ -135,7 +135,7 @@ func TestUnavailableRetainedRootKeepsFullSyncPartialAfterConcurrentCompletion(t 
 				work, err := st.PendingThreadWork(ctx, SourceUser, "T123", "C123")
 				require.NoError(t, err)
 				require.Len(t, work, 1)
-				completed, err = st.CompleteThreadWork(ctx, work[0], "T123|C123|"+root)
+				completed, err = st.CompleteThreadWork(ctx, work[0], "T123|C123|"+root, nil)
 				require.NoError(t, err)
 			}
 		}

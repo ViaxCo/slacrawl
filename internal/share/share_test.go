@@ -1370,6 +1370,48 @@ func TestHistoryCheckpointImportFailuresRollBackAndRetry(t *testing.T) {
 	}
 }
 
+func TestSharedHistoricalCoverageClampsLocalPending(t *testing.T) {
+	for _, restore := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restore=%t", restore), func(t *testing.T) {
+			ctx := context.Background()
+			source := seedStore(t, filepath.Join(t.TempDir(), "source.db"))
+			defer func() { require.NoError(t, source.Close()) }()
+			require.NoError(t, source.SetSyncState(ctx, "doctor", "threads", "coverage", "full"))
+			opts := Options{RepoPath: filepath.Join(t.TempDir(), "share")}
+			manifest, err := Export(ctx, source, opts)
+			require.NoError(t, err)
+			require.Equal(t, 1, manifest.Version)
+			reader := seedStore(t, filepath.Join(t.TempDir(), "reader.db"))
+			defer func() { require.NoError(t, reader.Close()) }()
+			scope := store.APIHistoryScope{SourceName: "api-bot", WorkspaceID: "T1", ChannelID: "C1"}
+			_, err = reader.BeginAPIHistory(ctx, scope, store.APIHistoryOptions{}, "1710000100.000000")
+			require.NoError(t, err)
+			pending, err := reader.APIHistory(ctx, scope)
+			require.NoError(t, err)
+			importer := Import
+			if restore {
+				importer = Restore
+			}
+			_, err = importer(ctx, reader, opts)
+			require.NoError(t, err)
+			raw, err := reader.GetSyncState(ctx, "doctor", "threads", "coverage")
+			require.NoError(t, err)
+			require.Equal(t, "full", raw, "shared markers remain historical data")
+			state, err := reader.APIHistory(ctx, scope)
+			require.NoError(t, err)
+			if restore {
+				require.Equal(t, store.APIHistoryState{}, state, "Restore still clears local progress rather than importing completion")
+			} else {
+				require.Equal(t, pending, state, "merge preserves the receiver's local pending attempt")
+			}
+			status, err := reader.Status(ctx)
+			require.NoError(t, err)
+			require.Equal(t, map[bool]string{true: "full", false: "partial"}[restore], status.ThreadState)
+			require.Equal(t, 1, status.Messages)
+		})
+	}
+}
+
 func historySnapshotRow(source, entityType, key, value string) map[string]any {
 	return map[string]any{"source_name": source, "entity_type": entityType, "entity_id": key, "value": value, "updated_at": "2000-01-01T00:00:00Z"}
 }

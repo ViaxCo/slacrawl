@@ -95,12 +95,12 @@ func TestUserPrimaryCoverageOwnership(t *testing.T) {
 			st := mustStore(t)
 			defer func() { require.NoError(t, st.Close()) }()
 			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Name: "fixture", Kind: "public_channel", RawJSON: "{}", UpdatedAt: time.Unix(1700000000, 0)}))
-			botCoverage := historyCoverage{Complete: true, Latest: "1710000100.000000"}
-			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", botCoverage))
-			old := historyCoverage{}
+			botCoverage := store.APIHistoryState{Complete: true, Latest: "1710000100.000000"}
+			require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", botCoverage))
+			old := store.APIHistoryState{}
 			if !tc.noUserCoverage {
-				old = historyCoverage{Complete: true, Latest: "1709900000.000000", Pending: new("1709800000.000000")}
-				require.NoError(t, saveHistoryCoverage(ctx, st, SourceUser, "T123", "C123", tc.since, old))
+				old = store.APIHistoryState{Complete: true, Latest: "1709900000.000000", Pending: new("1709800000.000000")}
+				require.NoError(t, seedAPIHistory(ctx, st, SourceUser, "T123", "C123", tc.since, old))
 			}
 			if tc.floor != "" {
 				require.NoError(t, st.SetSyncState(ctx, "retention", "channel_floor", "T123|C123", tc.floor))
@@ -125,7 +125,7 @@ func TestUserPrimaryCoverageOwnership(t *testing.T) {
 			syncErr := client.Sync(ctx, st, opts)
 			require.ErrorContains(t, syncErr, "slack conversations.history API response failed")
 			requireNativeErrorCode(t, syncErr, "synthetic_history_failure")
-			pending, err := loadHistoryCoverage(ctx, st, SourceUser, "T123", "C123", tc.since)
+			pending, err := readAPIHistory(ctx, st, SourceUser, "T123", "C123", tc.since)
 			require.NoError(t, err)
 			require.Equal(t, old.Complete, pending.Complete)
 			require.Equal(t, old.Latest, pending.Latest)
@@ -141,10 +141,10 @@ func TestUserPrimaryCoverageOwnership(t *testing.T) {
 				require.Equal(t, "1710000200.000000", form.Get("latest"))
 				require.Equal(t, map[bool]string{true: "1", false: "0"}[tc.floor != ""], form.Get("inclusive"))
 			}
-			complete, err := loadHistoryCoverage(ctx, st, SourceUser, "T123", "C123", tc.since)
+			complete, err := readAPIHistory(ctx, st, SourceUser, "T123", "C123", tc.since)
 			require.NoError(t, err)
-			require.Equal(t, historyCoverage{Complete: true, Latest: "1710000200.000000"}, complete)
-			botAfter, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			require.Equal(t, store.APIHistoryState{Complete: true, Latest: "1710000200.000000"}, complete)
+			botAfter, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			require.Equal(t, botCoverage, botAfter)
 		})

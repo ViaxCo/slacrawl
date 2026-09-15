@@ -24,7 +24,7 @@ func TestExplicitSinceLeavesUnreturnedRetainedRootsAlone(t *testing.T) {
 				Text: "old root", NormalizedText: "old root", RawJSON: "{}",
 				SourceName: SourceName, SourceRank: SourceRank, UpdatedAt: now,
 			}, nil))
-			_, err := st.PrepareThreadWork(ctx, SourceName, "T123", "C123")
+			_, err := st.PrepareThreadWork(ctx, SourceName, "T123", "C123", nil)
 			require.NoError(t, err)
 			before, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='thread_pending_v1'")
 			require.NoError(t, err)

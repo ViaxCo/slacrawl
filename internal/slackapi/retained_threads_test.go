@@ -26,7 +26,7 @@ func TestRetainedThreadScope(t *testing.T) {
 			st := mustStore(t)
 			defer func() { require.NoError(t, st.Close()) }()
 			retainedOwnerSeed(t, st, "1710000001.000000")
-			_, err := st.PrepareThreadWork(ctx, SourceUser, "T123", "C123")
+			_, err := st.PrepareThreadWork(ctx, SourceUser, "T123", "C123", nil)
 			require.NoError(t, err)
 			before, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='thread_pending_v1'")
 			require.NoError(t, err)
@@ -125,8 +125,8 @@ func TestRetainedThreadFailuresKeepWork(t *testing.T) {
 			st := mustStore(t)
 			defer func() { require.NoError(t, st.Close()) }()
 			retainedOwnerSeed(t, st, "1710000001.000000")
-			prior := historyCoverage{Complete: true, Latest: "1710000200.000000"}
-			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", prior))
+			prior := store.APIHistoryState{Complete: true, Latest: "1710000200.000000"}
+			require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", prior))
 			client := primaryOwnerClient(t, config.Tokens{Bot: "fixture-bot", User: "fixture-user"}, func(r *http.Request, _ url.Values) (any, error) {
 				if r.URL.Path == "/conversations.history" {
 					if mode == "history-error" {
@@ -164,7 +164,7 @@ func TestRetainedThreadFailuresKeepWork(t *testing.T) {
 			pending, err := st.PendingThreadWork(context.Background(), SourceUser, "T123", "C123")
 			require.NoError(t, err)
 			require.Len(t, pending, 1)
-			coverage, err := loadHistoryCoverage(context.Background(), st, SourceBot, "T123", "C123", "")
+			coverage, err := readAPIHistory(context.Background(), st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			if mode != "skip" {
 				require.Equal(t, prior.Latest, coverage.Latest)
@@ -183,11 +183,11 @@ func TestRetainedThreadPageSuccessKeepsCurrentWork(t *testing.T) {
 			defer func() { require.NoError(t, st.Close()) }()
 			const rootTS = "1710000001.000000"
 			retainedOwnerSeed(t, st, rootTS)
-			initial, err := st.PrepareThreadWork(ctx, SourceUser, "T123", "C123")
+			initial, err := st.PrepareThreadWork(ctx, SourceUser, "T123", "C123", nil)
 			require.NoError(t, err)
 			require.Len(t, initial, 1)
 			require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|C123|"+rootTS, "not_in_channel"))
-			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1709900000.000000"}))
+			require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", store.APIHistoryState{Complete: true, Latest: "1709900000.000000"}))
 			require.NoError(t, st.SetSyncState(ctx, SourceBot, "workspace", "T123", "2020-01-01T00:00:00Z"))
 			require.NoError(t, st.SetSyncState(ctx, "doctor", "threads", "coverage", "stored-status"))
 			const skipQuery = "select * from sync_state where source_name='api-user' and entity_type='thread_skip'"
@@ -259,9 +259,10 @@ func TestRetainedThreadPageSuccessKeepsCurrentWork(t *testing.T) {
 			require.Equal(t, beforeSkip, repairKeyRows(t, st, skipQuery))
 			require.Equal(t, beforeProgress, repairKeyRows(t, st, progressQuery))
 			require.Equal(t, beforeParent, repairKeyParent(t, st))
-			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			coverage, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
-			require.Equal(t, historyCoverage{Complete: true, Latest: "1709900000.000000", Pending: new("1709896400.000000")}, coverage)
+			require.NotEmpty(t, coverage.Generation)
+			require.Equal(t, store.APIHistoryState{Complete: true, Latest: "1709900000.000000", Pending: new("1709896400.000000"), Generation: coverage.Generation, PendingLatest: "1710000200.000000"}, coverage)
 			require.Equal(t, []string{"1710000002.000000|FEARLIERREPLY|earlier-reply.txt|UEARLIERREPLY"}, repairKeyDerived(t, st))
 			assertAdmissionCanariesAbsent(t, st, runErr.Error(), "rejected-reply-canary", "UREJECTEDREPLYCANARY", "FREJECTEDREPLYCANARY")
 			corrected = true
@@ -274,9 +275,9 @@ func TestRetainedThreadPageSuccessKeepsCurrentWork(t *testing.T) {
 			require.Empty(t, pending)
 			require.Empty(t, repairKeyRows(t, st, skipQuery))
 			require.Equal(t, beforeParent, repairKeyParent(t, st))
-			coverage, err = loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			coverage, err = readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
-			require.Equal(t, historyCoverage{Complete: true, Latest: "1710000200.000000"}, coverage)
+			require.Equal(t, store.APIHistoryState{Complete: true, Latest: "1710000200.000000"}, coverage)
 			require.Equal(t, []map[string]any{{"ts": rootTS, "thread_ts": rootTS}, {"ts": "1710000002.000000", "thread_ts": rootTS}, {"ts": "1710000003.000000", "thread_ts": rootTS}}, repairKeyRows(t, st, "select ts,thread_ts from messages order by ts"))
 			require.Equal(t, []string{"1710000002.000000|FEARLIERREPLY|earlier-reply.txt|UEARLIERREPLY", "1710000003.000000|FRECOVEREDREPLY|recovered-reply.txt|URECOVEREDREPLY"}, repairKeyDerived(t, st))
 			assertAdmissionCanariesAbsent(t, st, "", "rejected-reply-canary", "UREJECTEDREPLYCANARY", "FREJECTEDREPLYCANARY")
@@ -293,8 +294,8 @@ func TestHistoryPageChildrenPersistThreadWork(t *testing.T) {
 			const rootTS, childTS = "1710000001.000000", "1710000002.000000"
 			now := time.Unix(1710000400, 0).UTC()
 			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Name: "fixture", Kind: "public_channel", RawJSON: "{}", UpdatedAt: now}))
-			prior := historyCoverage{Complete: true, Latest: "1710000200.000000"}
-			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", prior))
+			prior := store.APIHistoryState{Complete: true, Latest: "1710000200.000000"}
+			require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", prior))
 			require.NoError(t, st.SetSyncState(ctx, SourceBot, "workspace", "T123", "2020-01-01T00:00:00Z"))
 			workspaceBefore, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='workspace'")
 			require.NoError(t, err)
@@ -414,7 +415,7 @@ func TestHistoryPageChildrenPersistThreadWork(t *testing.T) {
 			workspaceAfter, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='workspace'")
 			require.NoError(t, err)
 			require.Equal(t, workspaceBefore, workspaceAfter)
-			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			coverage, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			require.Equal(t, prior.Latest, coverage.Latest)
 			require.True(t, coverage.Complete)
@@ -434,8 +435,8 @@ func TestRetainedThreadRevivalRequeuesCanceledWork(t *testing.T) {
 			const rootTS, childTS = "1710000001.000000", "1710000002.000000"
 			now := time.Unix(1710000400, 0).UTC()
 			retainedOwnerSeed(t, st, rootTS)
-			prior := historyCoverage{Complete: true, Latest: "1710000200.000000"}
-			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", prior))
+			prior := store.APIHistoryState{Complete: true, Latest: "1710000200.000000"}
+			require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", prior))
 			require.NoError(t, st.SetSyncState(ctx, SourceBot, "workspace", "T123", "2020-01-01T00:00:00Z"))
 			workspaceBefore, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='workspace'")
 			require.NoError(t, err)
@@ -469,7 +470,7 @@ func TestRetainedThreadRevivalRequeuesCanceledWork(t *testing.T) {
 						}
 						if mode == "renewed" {
 							retainedOwnerSeed(t, st, rootTS)
-							_, err := st.PrepareThreadWork(ctx, SourceUser, "T123", "C123")
+							_, err := st.PrepareThreadWork(ctx, SourceUser, "T123", "C123", nil)
 							require.NoError(t, err)
 							require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|C123|"+rootTS, "new attempt skip"))
 							newer, err = st.QueryReadOnly(ctx, workQuery)
@@ -557,7 +558,7 @@ func TestRetainedThreadRevivalRequeuesCanceledWork(t *testing.T) {
 				require.NoError(t, err)
 				require.Empty(t, rows, "the canceled response must remain discarded")
 			}
-			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			coverage, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			if failed {
 				require.Equal(t, prior.Latest, coverage.Latest)
@@ -657,7 +658,7 @@ func TestRetainedThreadConcurrentSyncKeepsOwner(t *testing.T) {
 			before, err := ownerStore.QueryReadOnly(ctx, workQuery)
 			require.NoError(t, err)
 			close(historyRelease)
-			require.NoError(t, <-contenderDone)
+			require.ErrorIs(t, <-contenderDone, store.ErrAPIHistorySuperseded)
 			require.Zero(t, contenderReplies)
 			after, err := contenderStore.QueryReadOnly(ctx, workQuery)
 			require.NoError(t, err)
@@ -708,7 +709,7 @@ func TestRetainedThreadUnownedHintCanAcquireLaterPage(t *testing.T) {
 				require.NoError(t, err)
 				require.Empty(t, pending)
 				retainedOwnerSeed(t, other, rootTS)
-				pending, err = other.PrepareThreadWork(ctx, SourceUser, "T123", "C123")
+				pending, err = other.PrepareThreadWork(ctx, SourceUser, "T123", "C123", nil)
 				require.NoError(t, err)
 				require.Len(t, pending, 1)
 				priorGeneration = pending[0].Generation
@@ -864,9 +865,9 @@ func TestRetainedThreadUnattemptedRevocationCanAcquireLaterPage(t *testing.T) {
 				require.Empty(t, skips)
 				require.Equal(t, []map[string]any{{"ts": childTS, "thread_ts": secondTS, "source_name": SourceUser, "source_rank": int64(1)}}, rows)
 			}
-			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			coverage, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
-			require.Equal(t, historyCoverage{Complete: true, Latest: "1710000400.000000"}, coverage)
+			require.Equal(t, store.APIHistoryState{Complete: true, Latest: "1710000400.000000"}, coverage)
 			status, err := st.Status(ctx)
 			require.NoError(t, err)
 			require.Equal(t, map[bool]string{true: "partial", false: "full"}[mode == "cached-skip"], status.ThreadState)
@@ -880,7 +881,7 @@ func TestTailDeletionRetiresPendingThread(t *testing.T) {
 	ctx := context.Background()
 	retainedOwnerSeed(t, st, "1710000001.000000")
 	for _, source := range []string{SourceUser, "mcp"} {
-		_, err := st.PrepareThreadWork(ctx, source, "T123", "C123")
+		_, err := st.PrepareThreadWork(ctx, source, "T123", "C123", nil)
 		require.NoError(t, err)
 	}
 	require.NoError(t, st.SetSyncState(ctx, SourceUser, "thread_skip", "T123|C123|1710000001.000000", "missing_scope"))
@@ -1001,7 +1002,7 @@ func TestRetainedThreadRespectsDMExclusion(t *testing.T) {
 	now := time.Unix(1710000000, 0).UTC()
 	require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "D123", WorkspaceID: "T123", Name: "dm", Kind: "im", RawJSON: "{}", UpdatedAt: now}))
 	require.NoError(t, st.UpsertMessage(ctx, store.Message{ChannelID: "D123", WorkspaceID: "T123", TS: "1710000001.000000", ReplyCount: 1, SourceName: SourceUser, SourceRank: 1, RawJSON: "{}", UpdatedAt: now}, nil))
-	_, err := st.PrepareThreadWork(ctx, SourceUser, "T123", "D123")
+	_, err := st.PrepareThreadWork(ctx, SourceUser, "T123", "D123", nil)
 	require.NoError(t, err)
 	before, err := st.QueryReadOnly(ctx, "select * from sync_state where entity_type='thread_pending_v1'")
 	require.NoError(t, err)

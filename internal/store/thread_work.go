@@ -122,7 +122,7 @@ func validateThreadWorkSource(source string) error {
 
 // PrepareThreadWork preserves both saved jobs and retained reply hints before
 // history can overwrite them. Discovery and renewal share one writer snapshot.
-func (s *Store) PrepareThreadWork(ctx context.Context, source, workspaceID, channelID string) ([]ThreadWork, error) {
+func (s *Store) PrepareThreadWork(ctx context.Context, source, workspaceID, channelID string, history *APIHistoryAttempt) ([]ThreadWork, error) {
 	if err := validateThreadWorkSource(source); err != nil {
 		return nil, err
 	}
@@ -131,6 +131,9 @@ func (s *Store) PrepareThreadWork(ctx context.Context, source, workspaceID, chan
 		return nil, err
 	}
 	defer rollback()
+	if _, err := checkAPIHistory(ctx, dbtx, history); err != nil {
+		return nil, err
+	}
 	pending, err := reconcileThreadWork(ctx, dbtx, source, workspaceID, channelID)
 	if err != nil {
 		return nil, err
@@ -349,12 +352,15 @@ where s.source_name = ? and s.entity_type = ? and s.entity_id = ? and s.value = 
 // Completion and API skip cleanup share a writer snapshot so an old response
 // cannot remove a renewed generation or the newer attempt's skip state.
 // The bool reports committed completion, not a revoked no-op.
-func (s *Store) CompleteThreadWork(ctx context.Context, work ThreadWork, apiSkipKey string) (bool, error) {
+func (s *Store) CompleteThreadWork(ctx context.Context, work ThreadWork, apiSkipKey string, history *APIHistoryAttempt) (bool, error) {
 	dbtx, commit, rollback, err := s.beginMessageTransaction(ctx, true)
 	if err != nil {
 		return false, err
 	}
 	defer rollback()
+	if _, err := checkAPIHistory(ctx, dbtx, history); err != nil {
+		return false, err
+	}
 	current, err := threadWorkCurrent(ctx, dbtx, work)
 	if err != nil || !current {
 		return false, err

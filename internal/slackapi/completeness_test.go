@@ -57,11 +57,11 @@ func TestConversationPagesRequireExplicitSuccess(t *testing.T) {
 					var err error
 					if method == "history" {
 						var page *conversationHistoryPage
-						page, err = client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123"})
+						page, err = client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123"}, nil)
 						require.Nil(t, page)
 					} else {
 						var page *conversationRepliesPage
-						page, err = client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"})
+						page, err = client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
 						require.Nil(t, page)
 					}
 					require.EqualError(t, err, "conversations."+method+" response did not report success")
@@ -76,11 +76,11 @@ func TestConversationPagesRequireExplicitSuccess(t *testing.T) {
 				return json.RawMessage(`{"ok":false,"messages":[42]}`), nil
 			})
 			if method == "history" {
-				page, err := client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123"})
+				page, err := client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123"}, nil)
 				require.Nil(t, page)
 				require.EqualError(t, err, "conversations.history response did not report success")
 			} else {
-				page, err := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"})
+				page, err := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
 				require.Nil(t, page)
 				require.EqualError(t, err, "conversations.replies response did not report success")
 			}
@@ -105,7 +105,7 @@ func TestConversationPagesRequireExplicitSuccess(t *testing.T) {
 				})
 				var err error
 				if method == "conversations.history" {
-					page, callErr := client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123"})
+					page, callErr := client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123"}, nil)
 					err = callErr
 					if tc.value == "[]" {
 						require.NotNil(t, page)
@@ -115,7 +115,7 @@ func TestConversationPagesRequireExplicitSuccess(t *testing.T) {
 						require.Nil(t, page)
 					}
 				} else {
-					page, callErr := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"})
+					page, callErr := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
 					err = callErr
 					if tc.value == "[]" {
 						require.NotNil(t, page)
@@ -172,11 +172,11 @@ func TestConversationPageSuccessPreservesNativeErrors(t *testing.T) {
 				var err error
 				if method == "history" {
 					var page *conversationHistoryPage
-					page, err = client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123"})
+					page, err = client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123"}, nil)
 					require.Nil(t, page)
 				} else {
 					var page *conversationRepliesPage
-					page, err = client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"})
+					page, err = client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
 					require.Nil(t, page)
 				}
 				var native slack.SlackErrorResponse
@@ -216,9 +216,9 @@ func TestConversationPageRateLimitRetryAndCancellation(t *testing.T) {
 				var page any
 				var err error
 				if method == "history" {
-					page, err = client.getConversationHistory(ctx, "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123", Cursor: "second"})
+					page, err = client.getConversationHistory(ctx, "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123", Cursor: "second"}, nil)
 				} else {
-					page, err = client.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000", Cursor: "second"})
+					page, err = client.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000", Cursor: "second"}, nil)
 				}
 				if canceled {
 					require.ErrorIs(t, err, context.Canceled)
@@ -268,7 +268,7 @@ func TestCompletenessDecoderPreservesCapabilityProbes(t *testing.T) {
 				if method == "history" {
 					// Verify Limit=1 requires a collection independently of Doctor's
 					// access diagnosis and without enforcing scan completion.
-					page, err := client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123", Limit: 1})
+					page, err := client.getConversationHistory(context.Background(), "fixture", &slack.GetConversationHistoryParameters{ChannelID: "C123", Limit: 1}, nil)
 					if missing {
 						require.Nil(t, page)
 						require.EqualError(t, err, "conversations.history response did not provide a collection array; page remains uncertified")
@@ -281,7 +281,7 @@ func TestCompletenessDecoderPreservesCapabilityProbes(t *testing.T) {
 						require.Equal(t, cursor, page.NextCursor)
 					}
 				} else {
-					page, err := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000001.000000", Limit: 1})
+					page, err := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000001.000000", Limit: 1}, nil)
 					if missing {
 						require.Nil(t, page)
 						require.EqualError(t, err, "conversations.replies response did not provide a collection array; page remains uncertified")
@@ -353,13 +353,13 @@ func TestHistoryCompletenessAcrossSources(t *testing.T) {
 				now := time.Unix(1710000200, 0).UTC()
 				channel := slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}}
 				require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Name: "fixture", UpdatedAt: now}))
-				prior := historyCoverage{Complete: true, Latest: "1709900000.000000"}
+				prior := store.APIHistoryState{Complete: true, Latest: "1709900000.000000"}
 				oldest := "1709896400.000000"
 				if mode == "unknown-limited" {
-					prior = historyCoverage{}
+					prior = store.APIHistoryState{}
 					oldest = ""
 				} else {
-					require.NoError(t, saveHistoryCoverage(ctx, st, sourceName, "T123", "C123", "", prior))
+					require.NoError(t, seedAPIHistory(ctx, st, sourceName, "T123", "C123", "", prior))
 				}
 				var cursorsMu sync.Mutex
 				var cursors []string
@@ -391,7 +391,7 @@ func TestHistoryCompletenessAcrossSources(t *testing.T) {
 				if sourceName == SourceUser {
 					source.sourceRank = 1
 				}
-				err := client.syncChannelMessagesWithSource(ctx, st, "T123", channel, oldest, false, now, false, source)
+				err := client.syncChannelMessagesWithSource(ctx, st, "T123", channel, store.APIHistoryOptions{}, now, false, source)
 				if mode == "more" {
 					require.ErrorContains(t, err, "has_more without a continuation cursor")
 				} else {
@@ -401,7 +401,7 @@ func TestHistoryCompletenessAcrossSources(t *testing.T) {
 				gotCursors := append([]string(nil), cursors...)
 				cursorsMu.Unlock()
 				require.Equal(t, []string{"", "second"}, gotCursors)
-				coverage, err := loadHistoryCoverage(ctx, st, sourceName, "T123", "C123", "")
+				coverage, err := readAPIHistory(ctx, st, sourceName, "T123", "C123", "")
 				require.NoError(t, err)
 				require.Equal(t, prior.Latest, coverage.Latest)
 				require.Equal(t, prior.Complete, coverage.Complete)
@@ -444,7 +444,7 @@ func TestHistoryPageSuccessRetriesPendingInterval(t *testing.T) {
 				defer func() { require.NoError(t, st.Close()) }()
 				now := time.Unix(1710000200, 0).UTC()
 				require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Name: "fixture", Kind: "public_channel", UpdatedAt: now}))
-				require.NoError(t, saveHistoryCoverage(ctx, st, tc.source, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1709900000.000000"}))
+				require.NoError(t, seedAPIHistory(ctx, st, tc.source, "T123", "C123", "", store.APIHistoryState{Complete: true, Latest: "1709900000.000000"}))
 				require.NoError(t, st.SetSyncState(ctx, tc.source, "workspace", "T123", "2020-01-01T00:00:00Z"))
 				require.NoError(t, st.SetSyncState(ctx, "doctor", "threads", "coverage", "stored-status"))
 				const progressQuery = "select * from sync_state where entity_type='workspace' or source_name='doctor' order by source_name,entity_id"
@@ -503,9 +503,10 @@ func TestHistoryPageSuccessRetriesPendingInterval(t *testing.T) {
 				}
 				require.Equal(t, []string{"", "second"}, cursors)
 				require.Equal(t, beforeProgress, repairKeyRows(t, st, progressQuery))
-				coverage, err := loadHistoryCoverage(ctx, st, tc.source, "T123", "C123", "")
+				coverage, err := readAPIHistory(ctx, st, tc.source, "T123", "C123", "")
 				require.NoError(t, err)
-				require.Equal(t, historyCoverage{Complete: true, Latest: "1709900000.000000", Pending: new("1709896400.000000")}, coverage)
+				require.NotEmpty(t, coverage.Generation)
+				require.Equal(t, store.APIHistoryState{Complete: true, Latest: "1709900000.000000", Pending: new("1709896400.000000"), Generation: coverage.Generation, PendingLatest: "1710000200.000000"}, coverage)
 				require.Equal(t, []map[string]any{{"ts": "1710000000.000000", "source_name": tc.source}}, repairKeyRows(t, st, "select ts,source_name from messages order by ts"))
 				require.Equal(t, []string{"1710000000.000000|FEARLIERPAGE|earlier-page.txt|UEARLIERPAGE"}, repairKeyDerived(t, st))
 				assertAdmissionCanariesAbsent(t, st, logs.String()+runErr.Error(), "rejected-page-canary", "UREJECTEDPAGECANARY", "FREJECTEDPAGECANARY")
@@ -513,9 +514,9 @@ func TestHistoryPageSuccessRetriesPendingInterval(t *testing.T) {
 				require.NoError(t, run())
 				require.Equal(t, []string{"", "second", "", "second"}, cursors)
 				require.Equal(t, []string{"1709896400.000000", "1709896400.000000", "1709896400.000000", "1709896400.000000"}, oldest)
-				coverage, err = loadHistoryCoverage(ctx, st, tc.source, "T123", "C123", "")
+				coverage, err = readAPIHistory(ctx, st, tc.source, "T123", "C123", "")
 				require.NoError(t, err)
-				require.Equal(t, historyCoverage{Complete: true, Latest: "1710000200.000000"}, coverage)
+				require.Equal(t, store.APIHistoryState{Complete: true, Latest: "1710000200.000000"}, coverage)
 				require.Equal(t, []map[string]any{{"ts": "1710000000.000000", "source_name": tc.source}, {"ts": "1710000002.000000", "source_name": tc.source}}, repairKeyRows(t, st, "select ts,source_name from messages order by ts"))
 				require.Equal(t, []string{"1710000000.000000|FEARLIERPAGE|earlier-page.txt|UEARLIERPAGE", "1710000002.000000|FRECOVEREDPAGE|recovered-page.txt|URECOVEREDPAGE"}, repairKeyDerived(t, st))
 				assertAdmissionCanariesAbsent(t, st, logs.String(), "rejected-page-canary", "UREJECTEDPAGECANARY", "FREJECTEDPAGECANARY")
@@ -541,7 +542,7 @@ func TestHistoryCompletenessKeepsConcreteFailures(t *testing.T) {
 			now := time.Unix(1710000200, 0).UTC()
 			channel := slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}}
 			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Name: "fixture", UpdatedAt: now}))
-			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1709900000.000000"}))
+			require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", store.APIHistoryState{Complete: true, Latest: "1709900000.000000"}))
 			if mode == "store" {
 				_, err := st.DB().ExecContext(ctx, "create trigger reject_second before insert on messages when new.ts='1710000001.000000' begin select raise(abort,'synthetic_write_failure'); end")
 				require.NoError(t, err)
@@ -580,7 +581,7 @@ func TestHistoryCompletenessKeepsConcreteFailures(t *testing.T) {
 			defer server.Close()
 			client := NewWithOptions(config.Tokens{Bot: "fixture", User: "fixture-user"}, server.URL+"/", server.Client())
 			source := channelSyncSource{token: "fixture", sourceName: SourceBot, sourceRank: 2}
-			err := client.syncChannelMessagesWithSource(ctx, st, "T123", channel, "1709896400.000000", false, now, true, source)
+			err := client.syncChannelMessagesWithSource(ctx, st, "T123", channel, store.APIHistoryOptions{}, now, true, source)
 			if mode == "cancellation" {
 				require.ErrorIs(t, err, context.Canceled)
 			} else {
@@ -597,7 +598,7 @@ func TestHistoryCompletenessKeepsConcreteFailures(t *testing.T) {
 			}
 			require.NotContains(t, err.Error(), "continuation cursor")
 			require.NotContains(t, err.Error(), "uncertified")
-			coverage, err := loadHistoryCoverage(context.Background(), st, SourceBot, "T123", "C123", "")
+			coverage, err := readAPIHistory(context.Background(), st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			require.True(t, coverage.Complete)
 			require.Equal(t, "1709900000.000000", coverage.Latest)
@@ -623,7 +624,7 @@ func TestRepairCompletenessRetriesPendingInterval(t *testing.T) {
 			defer st.Close()
 			now := time.Unix(1710000200, 0).UTC()
 			require.NoError(t, st.UpsertChannel(ctx, store.Channel{ID: "C123", WorkspaceID: "T123", Name: "fixture", Kind: "public_channel", UpdatedAt: now}))
-			require.NoError(t, saveHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "", historyCoverage{Complete: true, Latest: "1709900000.000000"}))
+			require.NoError(t, seedAPIHistory(ctx, st, SourceBot, "T123", "C123", "", store.APIHistoryState{Complete: true, Latest: "1709900000.000000"}))
 			require.NoError(t, st.SetSyncState(ctx, SourceBot, "workspace", "T123", "2020-01-01T00:00:00Z"))
 			beforeWorkspace, err := st.QueryReadOnly(ctx, "select * from sync_state where source_name='api-bot' and entity_type='workspace'")
 			require.NoError(t, err)
@@ -667,7 +668,7 @@ func TestRepairCompletenessRetriesPendingInterval(t *testing.T) {
 				wantError = "completeness of the requested interval is uncertified"
 			}
 			require.ErrorContains(t, client.repairWorkspace(ctx, st, "T123"), wantError)
-			coverage, err := loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			coverage, err := readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			require.True(t, coverage.Complete)
 			require.Equal(t, "1709900000.000000", coverage.Latest)
@@ -686,7 +687,7 @@ func TestRepairCompletenessRetriesPendingInterval(t *testing.T) {
 			gotStarts := append([]string(nil), starts...)
 			startsMu.Unlock()
 			require.Equal(t, []string{"1709896400.000000", "1709896400.000000"}, gotStarts)
-			coverage, err = loadHistoryCoverage(ctx, st, SourceBot, "T123", "C123", "")
+			coverage, err = readAPIHistory(ctx, st, SourceBot, "T123", "C123", "")
 			require.NoError(t, err)
 			require.True(t, coverage.Complete)
 			require.Nil(t, coverage.Pending)
@@ -890,11 +891,11 @@ func TestNativePageStatusErrors(t *testing.T) {
 					require.Nil(t, rows)
 					err = callErr
 				case "conversations.history":
-					page, callErr := client.getConversationHistory(context.Background(), client.tokens.User, &slack.GetConversationHistoryParameters{ChannelID: "C123"})
+					page, callErr := client.getConversationHistory(context.Background(), client.tokens.User, &slack.GetConversationHistoryParameters{ChannelID: "C123"}, nil)
 					require.Nil(t, page)
 					err = callErr
 				case "conversations.replies":
-					page, callErr := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"})
+					page, callErr := client.getConversationReplies(context.Background(), &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
 					require.Nil(t, page)
 					err = callErr
 				}
@@ -1212,9 +1213,9 @@ func TestCatalogFailurePreservesCompletedPublicWork(t *testing.T) {
 					require.Empty(t, repairKeyRows(t, st, "select * from users"), "neither a partial nor a complete user catalog is persisted before the failed DM phase")
 					require.Equal(t, []map[string]any{{"channel_id": "C123", "ts": "1710000000.000000", "source_name": source}}, repairKeyRows(t, st, "select channel_id,ts,source_name from messages"))
 					require.Equal(t, []string{"1710000000.000000|FCOMPLETEDPUBLIC|completed-public.txt|UCOMPLETEDPUBLIC"}, repairKeyDerived(t, st))
-					coverage, err := loadHistoryCoverage(ctx, st, source, "T123", "C123", "")
+					coverage, err := readAPIHistory(ctx, st, source, "T123", "C123", "")
 					require.NoError(t, err)
-					require.Equal(t, historyCoverage{Complete: true, Latest: "1710000200.000000"}, coverage, "the completed public interval survives later catalog failure")
+					require.Equal(t, store.APIHistoryState{Complete: true, Latest: "1710000200.000000"}, coverage, "the completed public interval survives later catalog failure")
 					assertAdmissionCanariesAbsent(t, st, "", "rejected-catalog-canary", "UREJECTED")
 					corrected = true
 					require.NoError(t, client.Sync(ctx, st, SyncOptions{WorkspaceID: "T123", Full: true}))
@@ -1497,7 +1498,7 @@ func nativeResponseCall(t *testing.T, ctx context.Context, client *Client, metho
 		}
 		return err
 	case "conversations.history":
-		page, err := client.getConversationHistory(ctx, client.tokens.User, &slack.GetConversationHistoryParameters{ChannelID: "C123"})
+		page, err := client.getConversationHistory(ctx, client.tokens.User, &slack.GetConversationHistoryParameters{ChannelID: "C123"}, nil)
 		if err != nil {
 			require.Nil(t, page)
 		} else {
@@ -1505,7 +1506,7 @@ func nativeResponseCall(t *testing.T, ctx context.Context, client *Client, metho
 		}
 		return err
 	case "conversations.replies":
-		page, err := client.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"})
+		page, err := client.getConversationReplies(ctx, &slack.GetConversationRepliesParameters{ChannelID: "C123", Timestamp: "1710000000.000000"}, nil)
 		if err != nil {
 			require.Nil(t, page)
 		} else {
