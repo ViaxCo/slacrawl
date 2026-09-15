@@ -2,6 +2,7 @@ package slackdesktop
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 
+	"github.com/openclaw/slacrawl/internal/admission"
 	"github.com/openclaw/slacrawl/internal/store"
 )
 
@@ -55,7 +57,7 @@ func TestParseLocalStorage(t *testing.T) {
 	require.Equal(t, "T111", data.Drafts[0].WorkspaceID)
 	require.Equal(t, "U111", data.Drafts[0].UserID)
 	require.Len(t, data.ReadMarkers, 1)
-	require.Equal(t, "C111", data.ReadMarkers[0].ChannelID)
+	require.Equal(t, ReadMarker{WorkspaceID: "T111", UserID: "U111", ChannelID: "C111", TS: "1710000002.000300", Reason: "viewed", PersistKey: "mark-1"}, data.ReadMarkers[0])
 	require.Len(t, data.Statuses, 1)
 	require.Equal(t, "Heads down", data.Statuses[0].Statuses[0].Text)
 	require.Len(t, data.Expandables, 1)
@@ -142,9 +144,12 @@ func TestIngestDesktopState(t *testing.T) {
 	require.Len(t, users, 1)
 	require.Equal(t, "desktop_local_user | :airplane: Travel", users[0].Title)
 
-	readTS, err := st.GetSyncState(context.Background(), sourceName, "read_marker", "C333")
+	readTS, err := st.GetSyncState(context.Background(), sourceName, "read_marker_v1", `["T111","C333"]`)
 	require.NoError(t, err)
 	require.Equal(t, "1710000003.000400", readTS)
+	legacyMarkers, err := st.QueryReadOnly(context.Background(), "select * from sync_state where source_name='desktop' and entity_type='read_marker'")
+	require.NoError(t, err)
+	require.Empty(t, legacyMarkers)
 
 	expandableCount, err := st.GetSyncState(context.Background(), sourceName, "expandables", "T111:U111")
 	require.NoError(t, err)
@@ -198,9 +203,12 @@ func TestIngestDesktopStateRespectsWorkspaceFilter(t *testing.T) {
 		require.Equal(t, "T222", message.WorkspaceID)
 	}
 
-	readTS, err := st.GetSyncState(context.Background(), sourceName, "read_marker", "C000000222")
+	readTS, err := st.GetSyncState(context.Background(), sourceName, "read_marker_v1", `["T222","C000000222"]`)
 	require.NoError(t, err)
 	require.Equal(t, "1710000002.000300", readTS)
+	legacyMarkers, err := st.QueryReadOnly(context.Background(), "select * from sync_state where source_name='desktop' and entity_type='read_marker'")
+	require.NoError(t, err)
+	require.Empty(t, legacyMarkers)
 	appTeams, err := st.GetSyncState(context.Background(), sourceName, "root_state", "app_teams")
 	require.NoError(t, err)
 	require.Equal(t, "T222", appTeams)
@@ -237,8 +245,11 @@ func TestIngestDesktopStateAllowsUnknownChannelsForNameExcludes(t *testing.T) {
 	require.Equal(t, 1, status.Channels)
 	require.Equal(t, 1, status.Messages)
 
-	_, err = st.GetSyncState(context.Background(), sourceName, "read_marker", "C111")
+	_, err = st.GetSyncState(context.Background(), sourceName, "read_marker_v1", `["T111","C111"]`)
 	require.NoError(t, err)
+	legacyMarkers, err := st.QueryReadOnly(context.Background(), "select * from sync_state where source_name='desktop' and entity_type='read_marker'")
+	require.NoError(t, err)
+	require.Empty(t, legacyMarkers)
 }
 
 func TestIngestReduxStatesAllowsUnknownChannelsForNameExcludesWithWorkspaceFilter(t *testing.T) {
@@ -1064,4 +1075,132 @@ func requireEmptyDir(t *testing.T, path string) {
 	entries, err := os.ReadDir(path)
 	require.NoError(t, err)
 	require.Empty(t, entries)
+}
+
+func TestDesktopReadMarkerIdentity(t *testing.T) {
+	for _, mode := range []string{"default", "include", "exclude", "legacy-and-replay", "users", "calls", "escaped-tuples", "purge"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			st := admissionStore(t)
+			call := func(channel, ts string) map[string]any {
+				return map[string]any{"method": "conversations.mark", "args": map[string]any{"channel": channel, "ts": ts}}
+			}
+			put := func(workspace, user string, calls map[string]any) {
+				db, err := leveldb.OpenFile(filepath.Join(root, localStorageDir), nil)
+				require.NoError(t, err)
+				body, err := json.Marshal(calls)
+				require.NoError(t, err)
+				require.NoError(t, db.Put([]byte("_https://app.slack.compersist-v1::"+workspace+"::"+user+"::persistedApiCalls"), body, nil))
+				require.NoError(t, db.Close())
+			}
+			rows := func(entityType string) []map[string]any {
+				out, err := st.QueryReadOnly(ctx, "select * from sync_state where source_name='desktop' and entity_type='"+entityType+"' order by entity_id")
+				require.NoError(t, err)
+				return out
+			}
+			put("T1", "U1", map[string]any{"one": call("CSHARED", "100")})
+			expected := map[string]string{"[\"T1\",\"CSHARED\"]": "100"}
+			opts := IngestOptions{}
+			wantCount := 1
+			switch mode {
+			case "default", "include", "exclude":
+				put("T2", "U2", map[string]any{"two": call("CSHARED", "200")})
+				expected["[\"T2\",\"CSHARED\"]"] = "200"
+				wantCount = 2
+				if mode == "include" {
+					opts.DMPolicy = admission.Include
+				}
+				if mode == "exclude" {
+					opts.DMPolicy = admission.Exclude
+					for _, workspace := range []string{"T1", "T2"} {
+						state := admissionState("CSHARED", map[string]any{"is_channel": true, "context_team_id": workspace})
+						state["selfTeamIds"] = map[string]any{"teamId": workspace}
+						state["messages"] = map[string]any{}
+						writeAdmissionBlob(t, root, workspace, state)
+					}
+				}
+			case "legacy-and-replay":
+				require.NoError(t, st.SetSyncState(ctx, sourceName, "read_marker", "CSHARED", "legacy-channel"))
+				require.NoError(t, st.SetSyncState(ctx, sourceName, "read_marker", "[\"T1\",\"CSHARED\"]", "legacy-json-looking-channel"))
+				require.NoError(t, st.SetSyncState(ctx, sourceName, "read_marker_v1", "[\"T2\",\"CSHARED\"]", "other-workspace"))
+				expected["[\"T2\",\"CSHARED\"]"] = "other-workspace"
+			case "users":
+				put("T1", "U2", map[string]any{"two": call("CSHARED", "2")})
+				parsed, err := ParseLocalStorage(filepath.Join(root, localStorageDir))
+				require.NoError(t, err)
+				require.Len(t, parsed.ReadMarkers, 2)
+				// Distinct LevelDB keys establish this order; calls within one
+				// decoded map still have no prescribed winner.
+				require.Equal(t, "U1", parsed.ReadMarkers[0].UserID)
+				require.Equal(t, "U2", parsed.ReadMarkers[1].UserID)
+				expected["[\"T1\",\"CSHARED\"]"] = "2"
+				wantCount = 2
+			case "calls":
+				put("T1", "U1", map[string]any{"one": call("CSHARED", "100"), "two": call("CSHARED", "2")})
+				wantCount = 2
+			case "escaped-tuples":
+				// These distinct tuples would collide if joined with '|'.
+				put("T|A", "U1", map[string]any{"one": call("C\"x", "10")})
+				put("T", "U1", map[string]any{"one": call("A|C\"x", "20")})
+				expected["[\"T|A\",\"C\\\"x\"]"] = "10"
+				expected["[\"T\",\"A|C\\\"x\"]"] = "20"
+				wantCount = 3
+			case "purge":
+				require.NoError(t, st.SetSyncState(ctx, sourceName, "read_marker", "CSHARED", "legacy"))
+			}
+			if mode == "default" || mode == "include" || mode == "exclude" {
+				scoped := opts
+				scoped.WorkspaceID = "T1"
+				first, err := Ingest(ctx, st, root, scoped)
+				require.NoError(t, err)
+				require.Equal(t, 1, first.Local.ReadMarkerCount)
+				firstRows := rows("read_marker_v1")
+				require.Len(t, firstRows, 1)
+				require.Equal(t, "[\"T1\",\"CSHARED\"]", firstRows[0]["entity_id"])
+				require.Equal(t, "100", firstRows[0]["value"])
+				scoped.WorkspaceID = "T2"
+				second, err := Ingest(ctx, st, root, scoped)
+				require.NoError(t, err)
+				require.Equal(t, 1, second.Local.ReadMarkerCount)
+				secondRows := rows("read_marker_v1")
+				require.Len(t, secondRows, 2)
+				require.Contains(t, secondRows, firstRows[0], "T2 intake preserves the complete T1 checkpoint row")
+				secondTS, err := st.GetSyncState(ctx, sourceName, "read_marker_v1", "[\"T2\",\"CSHARED\"]")
+				require.NoError(t, err)
+				require.Equal(t, "200", secondTS)
+			}
+			legacy := rows("read_marker")
+			source, err := Ingest(ctx, st, root, opts)
+			require.NoError(t, err)
+			require.Equal(t, wantCount, source.Local.ReadMarkerCount)
+			require.Equal(t, legacy, rows("read_marker"), "legacy rows, including timestamps, are historical evidence")
+			if mode == "legacy-and-replay" {
+				put("T1", "U1", map[string]any{"one": call("CSHARED", "1")})
+				_, err := Ingest(ctx, st, root, opts)
+				require.NoError(t, err)
+				expected["[\"T1\",\"CSHARED\"]"] = "1"
+				require.Equal(t, legacy, rows("read_marker"))
+			}
+			actual := rows("read_marker_v1")
+			require.Len(t, actual, len(expected))
+			for _, row := range actual {
+				key := row["entity_id"].(string)
+				require.Contains(t, expected, key)
+				if mode == "calls" {
+					require.Contains(t, []string{"100", "2"}, row["value"], "map iteration is not a maximum-timestamp reduction")
+				} else {
+					require.Equal(t, expected[key], row["value"], key)
+				}
+			}
+			if mode == "purge" {
+				require.NoError(t, st.UpsertMessage(ctx, store.Message{WorkspaceID: "T1", ChannelID: "CSHARED", TS: "1", Text: "purged", SourceName: indexedDBSourceName, SourceRank: 3, RawJSON: "{}", UpdatedAt: time.Unix(1, 0)}, nil))
+				report, err := st.PurgeMessages(ctx, store.PurgeOptions{Before: time.Unix(2, 0), Delete: true, RequireNoMedia: true})
+				require.NoError(t, err)
+				require.Equal(t, int64(1), report.Messages)
+				require.Equal(t, legacy, rows("read_marker"))
+				require.Equal(t, actual, rows("read_marker_v1"))
+			}
+		})
+	}
 }

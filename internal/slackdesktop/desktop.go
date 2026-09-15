@@ -236,9 +236,12 @@ func Ingest(ctx context.Context, st *store.Store, sourcePath string, opts Ingest
 			return Source{}, err
 		}
 	}
+	// Separate workspace keys from arbitrary legacy channel-only keys. Users
+	// and calls still share the existing per-workspace/channel overwrite order.
 	for _, record := range prepared.markers {
 		marker := record.value
-		if err := st.SetSyncState(ctx, sourceName, "read_marker", marker.ChannelID, marker.TS); err != nil {
+		key, _ := json.Marshal([2]string{record.workspaceID, marker.ChannelID})
+		if err := st.SetSyncState(ctx, sourceName, "read_marker_v1", string(key), marker.TS); err != nil {
 			return Source{}, err
 		}
 	}

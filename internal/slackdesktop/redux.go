@@ -269,6 +269,7 @@ func ingestPreparedReduxStates(ctx context.Context, st *store.Store, states []pr
 				},
 				Mentions:               reduxMentions(message.Text),
 				PreserveHigherPriority: true,
+				EnforceRetention:       true,
 				SkipWorkspaceCollision: true,
 			})
 			if len(messageBatch.Messages) == 500 {
