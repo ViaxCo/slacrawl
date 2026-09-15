@@ -10,7 +10,7 @@ import (
 )
 
 func (c *Client) fetchDMs(ctx context.Context, workspaceID string, skips *threadSkipTracker) ([]slack.Channel, error) {
-	if c.user == nil {
+	if c.tokens.User == "" {
 		return nil, nil
 	}
 
@@ -20,38 +20,31 @@ func (c *Client) fetchDMs(ctx context.Context, workspaceID string, skips *thread
 		seen   = map[string]bool{}
 	)
 	for {
-		type result struct {
-			channels   []slack.Channel
-			nextCursor string
-		}
-		page, err := retry(ctx, c.sleep, 3, func() (result, error) {
-			channels, nextCursor, callErr := c.user.GetConversationsContext(ctx, &slack.GetConversationsParameters{
-				Cursor:          cursor,
-				ExcludeArchived: false,
-				Limit:           200,
-				Types:           []string{"im", "mpim"},
-				TeamID:          workspaceID,
-			})
-			return result{channels: channels, nextCursor: nextCursor}, callErr
+		channels, nextCursor, err := c.getConversations(ctx, c.tokens.User, &slack.GetConversationsParameters{
+			Cursor:          cursor,
+			ExcludeArchived: false,
+			Limit:           200,
+			Types:           []string{"im", "mpim"},
+			TeamID:          workspaceID,
 		})
 		if err != nil {
 			return nil, err
 		}
-		for _, channel := range page.channels {
+		for _, channel := range channels {
 			if dmChannelKind(channel) == "" {
 				skips.RecordOmission()
 				continue
 			}
 			out = append(out, channel)
 		}
-		if page.nextCursor == "" {
+		if nextCursor == "" {
 			return out, nil
 		}
-		if seen[page.nextCursor] {
-			return nil, fmt.Errorf("conversations.list repeated cursor %q", page.nextCursor)
+		if seen[nextCursor] {
+			return nil, fmt.Errorf("conversations.list repeated cursor %q", nextCursor)
 		}
-		seen[page.nextCursor] = true
-		cursor = page.nextCursor
+		seen[nextCursor] = true
+		cursor = nextCursor
 	}
 }
 

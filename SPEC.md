@@ -417,6 +417,7 @@ Share config:
     - pending jobs stay local across Git share, do not advance freshness timestamps, and keep API Doctor thread coverage partial; MCP consumption remains a separate change
     - capability-aware thread preparation and concurrent-sync fairness remain a separate follow-up; history-commit preservation does not change preparation renewal
 12. validate every message channel ID in the complete history/replies page, including nested message, previous-message, and root fields, before normalizing or writing that page; earlier pages remain resumable on failure
+   - require explicit native `ok: true` and a present `messages` array before converting history/replies messages; preserve concrete Slack errors, and reject missing/null/false success with blank or absent error text without admitting that page
    - missing message channel IDs inherit the requested conversation
    - after identity validation, require a nonblank top-level timestamp under every policy, including periodic repair; preserve accepted timestamp bytes
    - nested metadata and catalog latest-message timestamps remain optional; native replies may echo the requested parent timestamp
@@ -432,13 +433,76 @@ Share config:
     - concrete request, decoding, identity, timestamp, store, and thread failures retain precedence
 16. write successful coverage only after these checks; failures preserve valid writes, previous `Latest`/`Complete`, and attempted `Pending`, without advancing ordinary workspace success
     - a corrected retry resumes the pending interval before clearing it
-    - periodic repair uses the same scan completion rules; one-message capability probes only decode responses
+    - periodic repair uses the same scan completion rules; one-message capability probes require page success but do not certify scan completion or change which errors Doctor reports
     - existing channel skips and join attempts remain separately recorded
     - bulk retirement of legacy API thread skips requires Full with no Since, no channel allow-list and no effective exclusions, plus completed DM enumeration and no observed omissions; the atomic same-workspace pending-work guard still applies
     - DM catalog filtering or missing scope, admission drops, recoverable history skips, unavailable retained roots, and channel/history/reply collisions prevent this Sync from claiming full thread coverage; successful individual replies still retire their own work and skip
     - static scope restrictions alone do not redefine other scoped coverage behavior. The omission fact belongs to this Sync; it does not create durable collision work or guarantee what a later Doctor capability probe reports
     - primary history uses `api-bot` rank 2 or `api-user` rank 1; workspace success records that source, coverage remains source-specific, and ordinary message reconciliation is unchanged
     - Tail and periodic repair keep their bot-owned catalog/history path; selecting a primary for Sync never reassigns the stored bot client
+
+Channel and user catalog pages also require explicit native success before rows
+or cursors return to their callers. Ordinary catalogs and users use the selected
+primary token; DM discovery uses the user token and repair keeps the bot token.
+Missing/null/false success without a concrete Slack error discards the current
+catalog operation, including earlier catalog pages. Previously completed public
+history survives a later user/DM catalog failure, while final workspace/Doctor
+markers and unvisited legacy skips remain unchanged until a corrected retry succeeds.
+Existing concrete missing-scope handling remains unchanged.
+
+Catalogs share the history/replies whole-body reader: trailing JSON and a read
+error after a valid object are rejected. Non-200 responses use the SDK's typed
+status error; only rate limits with Retry-After use the existing bounded retry
+policy. Typed catalog decoding still precedes success validation; this does not
+certify complete payload shape or expose suppressed Doctor probe errors.
+
+After native success, page admission requires a present array: `messages` for
+history/replies, `channels` for conversation catalogs, and `members` for user
+catalogs. Missing or null collections leave the page uncertified; nonarrays fail
+typed decoding. This is an archive-completeness requirement, not a claim that
+Slack defines every omitted/null collection as invalid. Explicit `[]` remains a
+valid empty page, and available cursors still continue pagination. Empty user
+catalogs retain the existing nil accumulator and enabled-DM second fetch.
+
+Earlier valid history/replies writes and pending work survive collection failure;
+catalog failures discard that catalog operation's collected pages. Corrected
+retries use the existing pending interval or restart the catalog. One-message
+capability probes also require arrays, without certifying scan completion.
+Doctor still suppresses non-scope probe failures. Authentication, info and join
+responses do not use this page-collection gate. The SDK's existing `ok: true`
+error short-circuit is unchanged.
+
+Authentication, conversation-info lookups and join attempts use the same native
+response owner. Each must report `ok: true` before its decoded result can be used;
+concrete Slack errors retain precedence over a missing/false success flag. These
+methods also reject trailing JSON and read errors after a valid object, retain
+typed HTTP status errors, and retry only rate limits with Retry-After. Typed
+payload decoding precedes success validation; success alone does not qualify
+workspace identity or other payload shape.
+
+Sync authenticates its selected primary token before archive writes, without
+falling back from a failed configured bot to a user token. Invalid optional user
+auth still permits bot history with partial reply coverage. Doctor treats failed
+bot auth as fatal and failed user auth as unavailable; Tail authenticates its bot
+before constructing Socket Mode. Untyped Tail lookups must succeed before type
+admission, writes or acknowledgement. Failed joins remain recorded, nonfatal
+history skips; only a successful join permits the history retry. Auth response
+headers remain private cloned metadata, excluded from archived JSON. Socket Mode
+still owns the bot SDK client; HTTP operations use explicit token strings.
+
+Workspace-bound API operations also require a nonblank `auth.test` team ID after
+trimming whitespace. A requested workspace only checks that identity; it never
+supplies a missing authenticated identity. Successful but unbound primary auth
+stops Sync and Tail before archive writes or Socket Mode startup. Successful but
+unbound optional user auth stops Sync and repair before writes, while concrete
+optional-user authentication failures retain bot-only fallback. Doctor treats an
+unbound bot identity as fatal and an unbound user identity as unavailable, and
+uses the canonical user workspace ID for its DM probe.
+
+Use workspace-scoped bot or user tokens. A valid workspace ID can accompany an
+enterprise ID, but the enterprise ID alone does not identify a workspace. This
+does not add organization-token resolution or a configured-workspace fallback;
+the existing `users.list` request still leaves `team_id` empty.
 
 ### Slack export import
 

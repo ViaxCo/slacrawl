@@ -592,3 +592,42 @@ func userPrimarySkipBaseline(t *testing.T) {
 	require.NoError(t, json.Unmarshal(output.Bytes(), &report))
 	require.Equal(t, []any{}, report["api_channel_skips"])
 }
+
+func TestNativeAuthFailureFromCLILeavesArchiveUnchanged(t *testing.T) {
+	for _, source := range []string{"api", "bot"} {
+		for _, primary := range []string{"bot", "user"} {
+			t.Run(source+"/"+primary, func(t *testing.T) {
+				cfg, configPath := userPrimaryConfig(t)
+				cfg.WorkspaceID = "T123"
+				cfg.Sync.IncludeDMs = new(false)
+				t.Setenv(cfg.Slack.User.TokenEnv, "fixture-user")
+				if primary == "bot" {
+					t.Setenv(cfg.Slack.Bot.TokenEnv, "fixture-bot")
+				}
+				require.NoError(t, cfg.Save(configPath))
+				userPrimarySeed(t, cfg.DBPath, []string{"T123"})
+				before := shareArchiveSnapshot(t, cfg.DBPath)
+				configBefore, err := os.ReadFile(configPath)
+				require.NoError(t, err)
+				var calls []string
+				var stdout, stderr bytes.Buffer
+				app := &App{Stdout: &stdout, Stderr: &stderr, apiURL: "https://fixture.invalid/", httpClient: &http.Client{Transport: cliRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+					require.NoError(t, r.ParseForm())
+					calls = append(calls, r.URL.Path+":"+r.Form.Get("token"))
+					require.Equal(t, "/auth.test", r.URL.Path)
+					require.Equal(t, url.Values{"token": {"fixture-" + primary}}, r.Form)
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":false,"team_id":"T123","team":"cli-auth-canary","user_id":"U123"}`)), Request: r}, nil
+				})}}
+				err = app.Run(context.Background(), []string{"--config", configPath, "--json", "sync", "--source", source, "--with-media=false"})
+				require.EqualError(t, err, "sync workspace T123: auth.test response did not report success")
+				require.Equal(t, []string{"/auth.test:fixture-" + primary}, calls, "failed bot auth must not fall back to the configured user")
+				require.Empty(t, stdout.String())
+				require.NotContains(t, stderr.String(), "cli-auth-canary")
+				require.Equal(t, before, shareArchiveSnapshot(t, cfg.DBPath))
+				configAfter, readErr := os.ReadFile(configPath)
+				require.NoError(t, readErr)
+				require.Equal(t, configBefore, configAfter)
+			})
+		}
+	}
+}

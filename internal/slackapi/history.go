@@ -19,8 +19,8 @@ import (
 )
 
 func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.Store, workspaceID string, channel slack.Channel, oldest string, restoreRequested bool, now time.Time, userRepliesAvailable bool, source channelSyncSource) error {
-	if source.historyClient == nil {
-		return errors.New("history client is required")
+	if source.token == "" {
+		return errors.New("history token is required")
 	}
 	if source.sourceName == "" {
 		source.sourceName = SourceBot
@@ -368,7 +368,6 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 }
 
 type channelSyncSource struct {
-	historyClient    *slack.Client
 	token            string
 	sourceName       string
 	sourceRank       int
@@ -381,12 +380,11 @@ type channelSyncSource struct {
 
 func (c *Client) syncChannels(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, opts SyncOptions, now time.Time, userRepliesAvailable bool, threadSkip *threadSkipTracker) error {
 	return c.syncChannelsWithSource(ctx, st, workspaceID, channels, opts, now, userRepliesAvailable, channelSyncSource{
-		historyClient: c.bot,
-		token:         c.tokens.Bot,
-		sourceName:    SourceBot,
-		sourceRank:    2,
-		allowJoin:     syncAutoJoin(opts),
-		threadSkip:    threadSkip,
+		token:      c.tokens.Bot,
+		sourceName: SourceBot,
+		sourceRank: 2,
+		allowJoin:  syncAutoJoin(opts),
+		threadSkip: threadSkip,
 	})
 }
 
@@ -816,7 +814,7 @@ func isMissingScopeError(err error) bool {
 }
 
 func (c *Client) dmMissingScope(ctx context.Context, workspaceID string) string {
-	if !c.dmPolicy.Enabled(c.tokens.User != "") || c.user == nil {
+	if !c.dmPolicy.Enabled(c.tokens.User != "") || c.tokens.User == "" {
 		return ""
 	}
 	missing := make(map[string]struct{})
@@ -888,10 +886,10 @@ func joinScopes(scopes map[string]struct{}) string {
 }
 
 func (c *Client) userAuthAvailable(ctx context.Context, workspaceID string) (bool, error) {
-	if c.user == nil {
+	if c.tokens.User == "" {
 		return false, nil
 	}
-	auth, err := c.authTest(ctx, c.user)
+	auth, err := c.authTest(ctx, c.tokens.User)
 	if err != nil {
 		return false, nil
 	}

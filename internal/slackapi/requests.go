@@ -3,6 +3,7 @@ package slackapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,14 +15,107 @@ import (
 	"github.com/slack-go/slack"
 )
 
-func (c *Client) getConversations(ctx context.Context, client *slack.Client, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
+func (c *Client) authTest(ctx context.Context, token string) (*slack.AuthTestResponse, error) {
+	return retry(ctx, c.sleep, 3, func() (*slack.AuthTestResponse, error) {
+		var response struct {
+			slack.SlackResponse
+			slack.AuthTestResponse
+		}
+		headers, err := c.postSlackForm(ctx, token, "auth.test", url.Values{}, &response)
+		if err != nil {
+			return nil, err
+		}
+		if err := nativeResponseSuccess("auth.test", response.SlackResponse); err != nil {
+			return nil, err
+		}
+		response.AuthTestResponse.Header = headers.Clone()
+		return &response.AuthTestResponse, nil
+	})
+}
+
+func (c *Client) getConversationInfo(ctx context.Context, channelID string) (*slack.Channel, error) {
+	if channelID == "" {
+		return nil, errors.New("ChannelID must be defined")
+	}
+	return retry(ctx, c.sleep, 3, func() (*slack.Channel, error) {
+		values := url.Values{"channel": {channelID}, "include_locale": {"false"}, "include_num_members": {"false"}}
+		var response struct {
+			Channel      slack.Channel   `json:"channel"`
+			Channels     []slack.Channel `json:"channels"`
+			Purpose      string          `json:"purpose"`
+			Topic        string          `json:"topic"`
+			NotInChannel bool            `json:"not_in_channel"`
+			slack.History
+			slack.SlackResponse
+			Metadata slack.ResponseMetadata `json:"response_metadata"`
+		}
+		if _, err := c.postSlackForm(ctx, c.tokens.Bot, "conversations.info", values, &response); err != nil {
+			return nil, err
+		}
+		if err := nativeResponseSuccess("conversations.info", response.SlackResponse); err != nil {
+			return nil, err
+		}
+		return &response.Channel, nil
+	})
+}
+
+func (c *Client) joinConversation(ctx context.Context, channelID string) error {
+	if c.bot == nil {
+		return errors.New("SLACK_BOT_TOKEN is required for join")
+	}
+	_, err := retry(ctx, c.sleep, 3, func() (struct{}, error) {
+		var response struct {
+			Channel  *slack.Channel `json:"channel"`
+			Warning  string         `json:"warning"`
+			Metadata *struct {
+				Warnings []string `json:"warnings"`
+			} `json:"response_metadata"`
+			slack.SlackResponse
+		}
+		if _, err := c.postSlackForm(ctx, c.tokens.Bot, "conversations.join", url.Values{"channel": {channelID}}, &response); err != nil {
+			return struct{}{}, err
+		}
+		return struct{}{}, nativeResponseSuccess("conversations.join", response.SlackResponse)
+	})
+	return err
+}
+
+func (c *Client) getConversations(ctx context.Context, token string, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 	type result struct {
 		channels   []slack.Channel
 		nextCursor string
 	}
 	res, err := retry(ctx, c.sleep, 3, func() (result, error) {
-		channels, nextCursor, err := client.GetConversationsContext(ctx, params)
-		return result{channels: channels, nextCursor: nextCursor}, err
+		values := url.Values{}
+		if params.Cursor != "" {
+			values.Set("cursor", params.Cursor)
+		}
+		if params.Limit != 0 {
+			values.Set("limit", strconv.Itoa(params.Limit))
+		}
+		if params.Types != nil {
+			values.Set("types", strings.Join(params.Types, ","))
+		}
+		if params.ExcludeArchived {
+			values.Set("exclude_archived", "true")
+		}
+		if params.TeamID != "" {
+			values.Set("team_id", params.TeamID)
+		}
+		var response struct {
+			slack.SlackResponse
+			Channels []slack.Channel `json:"channels"`
+			Metadata struct {
+				NextCursor string `json:"next_cursor"`
+			} `json:"response_metadata"`
+		}
+		if _, err := c.postSlackForm(ctx, token, "conversations.list", values, &response); err != nil {
+			return result{}, err
+		}
+		if err := nativePageSuccess("conversations.list", response.SlackResponse, response.Channels != nil); err != nil {
+			return result{}, err
+		}
+		return result{channels: response.Channels, nextCursor: response.Metadata.NextCursor}, nil
 	})
 	return res.channels, res.nextCursor, err
 }
@@ -69,10 +163,10 @@ func (c *Client) getConversationHistory(ctx context.Context, token string, param
 	return retry(ctx, c.sleep, 3, func() (*conversationHistoryPage, error) {
 		values := conversationHistoryValues(params)
 		resp := rawConversationHistoryResponse{}
-		if err := c.postSlackForm(ctx, token, "conversations.history", values, &resp); err != nil {
+		if _, err := c.postSlackForm(ctx, token, "conversations.history", values, &resp); err != nil {
 			return nil, err
 		}
-		if err := resp.Err(); err != nil {
+		if err := nativePageSuccess("conversations.history", resp.SlackResponse, resp.Messages != nil); err != nil {
 			return nil, err
 		}
 		messages, err := rawConversationMessages(resp.Messages)
@@ -92,10 +186,10 @@ func (c *Client) getConversationReplies(ctx context.Context, params *slack.GetCo
 	return retry(ctx, c.sleep, 3, func() (*conversationRepliesPage, error) {
 		values := conversationRepliesValues(params)
 		resp := rawConversationRepliesResponse{}
-		if err := c.postSlackForm(ctx, c.tokens.User, "conversations.replies", values, &resp); err != nil {
+		if _, err := c.postSlackForm(ctx, c.tokens.User, "conversations.replies", values, &resp); err != nil {
 			return nil, err
 		}
-		if err := resp.Err(); err != nil {
+		if err := nativePageSuccess("conversations.replies", resp.SlackResponse, resp.Messages != nil); err != nil {
 			return nil, err
 		}
 		messages, err := rawConversationMessages(resp.Messages)
@@ -110,37 +204,61 @@ func (c *Client) getConversationReplies(ctx context.Context, params *slack.GetCo
 	})
 }
 
-func (c *Client) postSlackForm(ctx context.Context, token string, method string, values url.Values, target any) error {
+func nativePageSuccess(method string, response slack.SlackResponse, collectionPresent bool) error {
+	if err := nativeResponseSuccess(method, response); err != nil {
+		return err
+	}
+	// Freshly decoded slices distinguish an explicit empty array from missing
+	// or null data, which cannot certify an empty archive page.
+	if !collectionPresent {
+		return fmt.Errorf("%s response did not provide a collection array; page remains uncertified", method)
+	}
+	return nil
+}
+
+func nativeResponseSuccess(method string, response slack.SlackResponse) error {
+	if err := response.Err(); err != nil {
+		return err
+	}
+	// Slack's Err permits blank-error responses from non-JSON methods. Native
+	// API responses must affirm success before callers can use their payloads.
+	if !response.Ok {
+		return fmt.Errorf("%s response did not report success", method)
+	}
+	return nil
+}
+
+func (c *Client) postSlackForm(ctx context.Context, token string, method string, values url.Values, target any) (http.Header, error) {
 	values.Set("token", token)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL+method, strings.NewReader(values.Encode()))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusTooManyRequests && resp.Header.Get("Retry-After") != "" {
 		seconds, err := strconv.ParseInt(resp.Header.Get("Retry-After"), 10, 64)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return &slack.RateLimitedError{RetryAfter: time.Duration(seconds) * time.Second}
+		return nil, &slack.RateLimitedError{RetryAfter: time.Duration(seconds) * time.Second}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("slack %s: %s", method, resp.Status)
+		return nil, slack.StatusCodeError{Code: resp.StatusCode, Status: resp.Status}
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := json.Unmarshal(body, target); err != nil {
-		return fmt.Errorf("slack %s response: %w", method, err)
+		return nil, fmt.Errorf("slack %s response: %w", method, err)
 	}
-	return nil
+	return resp.Header, nil
 }
 
 func conversationHistoryValues(params *slack.GetConversationHistoryParameters) url.Values {
@@ -223,7 +341,7 @@ func rawPayloadFromMessageJSON(rawMessage json.RawMessage) any {
 	return rawMessageFieldsPayload(raw)
 }
 
-func (c *Client) getUsers(ctx context.Context, client *slack.Client) ([]slack.User, error) {
+func (c *Client) getUsers(ctx context.Context, token string) ([]slack.User, error) {
 	var (
 		cursor string
 		users  []slack.User
@@ -235,12 +353,22 @@ func (c *Client) getUsers(ctx context.Context, client *slack.Client) ([]slack.Us
 			nextCursor string
 		}
 		page, err := retry(ctx, c.sleep, 3, func() (result, error) {
-			pager := client.GetUsersPaginated(slack.GetUsersOptionLimit(200), slack.GetUsersOptionCursor(cursor))
-			next, callErr := pager.Next(ctx)
-			if callErr != nil {
-				return result{}, callErr
+			values := url.Values{
+				"limit": {"200"}, "presence": {"false"}, "cursor": {cursor},
+				"team_id": {""}, "include_locale": {"true"},
 			}
-			return result{users: next.Users, nextCursor: next.Cursor}, nil
+			var response struct {
+				slack.SlackResponse
+				Members  []slack.User           `json:"members"`
+				Metadata slack.ResponseMetadata `json:"response_metadata"`
+			}
+			if _, err := c.postSlackForm(ctx, token, "users.list", values, &response); err != nil {
+				return result{}, err
+			}
+			if err := nativePageSuccess("users.list", response.SlackResponse, response.Members != nil); err != nil {
+				return result{}, err
+			}
+			return result{users: response.Members, nextCursor: response.Metadata.Cursor}, nil
 		})
 		if err != nil {
 			return nil, err
