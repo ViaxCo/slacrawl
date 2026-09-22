@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update CrawlKit to 0.16.3, SQLite to 1.59.0, and terminal support dependencies while retaining the Go 1.27.0 minimum and SQLite's required libc 1.75.7.
+
 - Add internal capture of exact independently verified projection bytes, so later consumers can use immutable manifest/message contents without reopening changed files. Return no usable snapshot on failure; retain the receipt-only verifier path and existing content/publication limits.
 
 - Add offline `export prepare`, `export build` and `export verify` commands with explicit archive and private selection/plan paths. Bind preparation/building to a clean embedded Git revision, recheck current source bindings before building or verifying, and emit only counts or observed-byte receipts. Keep private plans separate from the two-file artifact; no config loading, automatic imports, release checks, Slack or Git publishing runs on this path.
