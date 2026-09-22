@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.10.0 - 2026-09-21
 
 **Highlights:** Enforce configured DM and draft exclusions, preserve incomplete API/MCP sync work, and add offline export preparation and verification. Byte verification does not authorize publication.
