@@ -1,12 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 - 2026-09-21
+
+**Highlights:** Enforce configured DM and draft exclusions, preserve incomplete API/MCP sync work, and add offline export preparation and verification. Byte verification does not authorize publication.
+
+- Add offline `export prepare`, `export build` and `export verify` commands with explicit archive and private selection/plan paths. Bind preparation/building to a clean embedded Git revision, recheck current source bindings before building or verifying, and emit only counts or observed-byte receipts. Keep private plans separate from the two-file artifact; no config loading, automatic imports, release checks, Slack or Git publishing runs on this path.
+
+- Enforce `sync.include_dms = false` before API sync persists conversation metadata or messages; reject unknown conversation types under this policy and mismatched channel identities under every policy. Previously archived rows are unchanged.
+
+- Allow desktop/wiretap sync, watch, and all/hybrid sync to exclude unsent drafts with `[slack.desktop].include_drafts = false`; preserve the default and leave already archived drafts unchanged.
+
+- Support user-only API sync across discovery, profiles, history and source-specific completion state; preserve configured-bot precedence, user-token replies and bot/app Tail requirements. Doctor now authenticates user-only credentials, keeps global coverage separate from named-workspace aggregation, and reports one ordered list of bot/user channel skips without changing stored status. Thanks @vincentkoc! (#215, #218)
+
+- Track MCP channel-history completion separately from stored messages and replies. Keep failed or incomplete intervals pending, preserve completed empty scans, and retry with current retention bounds. Prevent newer replies or API/Desktop rows from skipping unread history; reject non-finite history timestamps before filtering. Keep checkpoints local to the archive and out of freshness timestamps. First intake after upgrade, fresh import or whole-snapshot restore establishes its own history checkpoint; native server window limits remain unchanged.
 
 - Update CrawlKit to 0.16.3, SQLite to 1.59.0, and terminal support dependencies while retaining the Go 1.27.0 minimum and SQLite's required libc 1.75.7.
 
 - Add internal capture of exact independently verified projection bytes, so later consumers can use immutable manifest/message contents without reopening changed files. Return no usable snapshot on failure; retain the receipt-only verifier path and existing content/publication limits.
-
-- Add offline `export prepare`, `export build` and `export verify` commands with explicit archive and private selection/plan paths. Bind preparation/building to a clean embedded Git revision, recheck current source bindings before building or verifying, and emit only counts or observed-byte receipts. Keep private plans separate from the two-file artifact; no config loading, automatic imports, release checks, Slack or Git publishing runs on this path.
 
 - Preserve exact native MCP channel objects when inserting new archive channels, so later selection can inspect the delivered type and identity evidence. Keep missing and conflicting fields intact without retaining the whole catalog. Existing channels, human-text records and direct-ID stubs stay unchanged; routine sync does not repair older lossy metadata or certify DM origin/content safety.
 
@@ -18,7 +28,6 @@
 
 - Verify and document importing Slackdump-converted ZIP and directory exports from database and chunk archives. Preserve real synthetic converter fixtures for thread identity, DM exclusion, source/FTS consistency and repeat-import coverage; no importer behavior or upstream dependency changes.
 
-- Track MCP channel-history completion separately from stored messages and replies. Keep failed or incomplete intervals pending, preserve completed empty scans, and retry with current retention bounds. Prevent newer replies or API/Desktop rows from skipping unread history; reject non-finite history timestamps before filtering. Keep checkpoints local to the archive and out of freshness timestamps. First intake after upgrade, fresh import or whole-snapshot restore establishes its own history checkpoint; native server window limits remain unchanged.
 - Explain recovery when text MCP history exceeds the page limit: use a temporary larger positive budget for the same channel and scope, then restore the normal limit after completion. Large first scans require this operator-managed bootstrap; repeated capped attempts do not resume across invocations.
 
 - Preserve unvisited API thread-skip diagnostics during restricted or incomplete Full syncs, and explain retained thread work in Doctor's partial-coverage output. Require unrestricted traversal before bulk cleanup, retain generation guards, and keep observed omissions visible despite later success. Thanks @vincentkoc! (#229, #230)
@@ -36,8 +45,6 @@
 - Preserve unfinished MCP reply work across history-hint loss, failed batches, and restarts; guard ordinary replies by generation and reconcile committed tombstones. Keep explicit `--since` and `--full --since` restricted to returned roots without consuming older backlog. Thanks @vincentkoc! (#217, #220)
 
 - Persist retained API thread work across lost reply hints, failures, restarts, and token changes; isolate unavailable roots so healthy threads and later channels continue. Keep pending work generation-guarded, local to the archive, excluded from freshness, and removed atomically by deletion or purge. Thanks @vincentkoc! (#217, #219)
-
-- Support user-only API sync across discovery, profiles, history and source-specific completion state; preserve configured-bot precedence, user-token replies and bot/app Tail requirements. Doctor now authenticates user-only credentials, keeps global coverage separate from named-workspace aggregation, and reports one ordered list of bot/user channel skips without changing stored status. Thanks @vincentkoc! (#215, #218)
 
 - Reject external provider v1 sync when `sync.include_dms = false`, before checkpoint access or adapter launch. Use API sync or a supported Slack workspace JSON export for DM exclusion. Omitted/true retain provider requests and scoped cursors; existing archive rows and CLI initialization remain unchanged.
 
@@ -59,14 +66,16 @@
 
 - Honor explicit `sync.include_dms = false` in Socket Mode tailing before message, deletion, or channel metadata writes. Untyped events require conversation read access; lookup failures stop tailing without acknowledging the event. Keep omitted/true DM defaults and restrict channel metadata updates to their owning workspace.
 
-- Enforce `sync.include_dms = false` before API sync persists conversation metadata or messages; reject unknown conversation types under this policy and mismatched channel identities under every policy. Previously archived rows are unchanged.
-
 - Report canceled concurrent API syncs as failures while preserving completed writes and the original worker error when it cancels sibling requests.
+
 - Reject successfully authenticated user tokens from another workspace before API sync or tail repair writes; report the mismatch in doctor while preserving bot-only coverage for missing or invalid user tokens.
-- Allow desktop/wiretap sync, watch, and all/hybrid sync to exclude unsent drafts with `[slack.desktop].include_drafts = false`; preserve the default and leave already archived drafts unchanged.
+
 - Confine directory-export imports to the selected root so symlinks cannot import unrelated files. Compatibility: links outside the root now fail; contained links and a linked export root remain supported.
+
 - Keep digest, quiet-channel and weekly-trend reports within their timestamp windows, and count thread roots independently across channels, including roots identified only by reply metadata.
+
 - Make nested analytics help succeed without a valid configuration and reject non-finite `sync --since` values before opening the archive or starting ingestion.
+
 - Update SQLite's libc runtime to 1.75.7; verify Linux with the race detector and macOS on the minimum Go 1.27.0, provision Node for decoder tests, and pin snapshot packaging to GoReleaser 2.18.1.
 
 - Fix SQL statement validation for comments, quoted identifiers, and named parameters, preventing extra statements hidden by comment-like text. Accept leading comments and reject duplicate result column names with an alias error instead of silently discarding values.
