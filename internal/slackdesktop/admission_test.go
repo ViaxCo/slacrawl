@@ -211,6 +211,27 @@ func TestDesktopAdmissionRejectsRetainedIdentityBeforeWrites(t *testing.T) {
 	}
 }
 
+func TestDesktopAdmissionDoesNotTreatAttachmentsAsMessages(t *testing.T) {
+	requireNode(t)
+	root := t.TempDir()
+	state := admissionState("CPUB", map[string]any{"is_channel": true})
+	message := state["messages"].(map[string]any)["CPUB"].(map[string]any)["1710000001.000001"].(map[string]any)
+	message["attachments"] = []any{map[string]any{
+		"ts":         "1710000002.000001",
+		"channel_id": "DOTHER",
+		"text":       "attached message",
+	}}
+	writeAdmissionBlob(t, root, "state", state)
+	st := admissionStore(t)
+	source, err := Ingest(context.Background(), st, root, IngestOptions{})
+	require.NoError(t, err)
+	require.Equal(t, 1, source.Admission.Messages)
+	rows, err := st.QueryReadOnly(context.Background(), "select ts from messages")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "1710000001.000001", rows[0]["ts"])
+}
+
 func TestDesktopAdmissionSupportedShapesAndReplay(t *testing.T) {
 	root := t.TempDir()
 	state := admissionState("CPUB", map[string]any{"is_channel": true})
